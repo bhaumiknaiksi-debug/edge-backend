@@ -1,46 +1,39 @@
-// src/engine/strikeEngine.js
-// Ranks strikes by OI conviction strength
-// Alpha Strike = highest OI + highest OI buildup (oiChange) near ATM
+// src/engine/pcrEngine.js
 
-function rankAlphaStrikes(chain) {
-  const spot = chain.spot;
+function calcPCR(chain) {
+  let totalCeOI = 0;
+  let totalPeOI = 0;
+  let totalCeVol = 0;
+  let totalPeVol = 0;
 
-  const scored = chain.strikes.map(row => {
-    const distFromSpot = Math.abs(row.strike - spot);
-    const proximity    = 1 / (1 + distFromSpot / 100); // closer = higher score
+  const strikesPCR = chain.strikes.map(row => {
+    totalCeOI  += row.ce.oi;
+    totalPeOI  += row.pe.oi;
+    totalCeVol += row.ce.volume;
+    totalPeVol += row.pe.volume;
 
-    // CE side score (resistance strength)
-    const ceScore = (row.ce.oi * 0.6 + Math.max(row.ce.oiChange, 0) * 0.4) * proximity;
-
-    // PE side score (support strength)
-    const peScore = (row.pe.oi * 0.6 + Math.max(row.pe.oiChange, 0) * 0.4) * proximity;
-
-    // Combined conviction
-    const totalScore = ceScore + peScore;
-
-    // Dominant side
-    const dominant = row.ce.oi > row.pe.oi ? "CE" : "PE";
+    const oiPCR  = row.pe.oi     / (row.ce.oi    || 1);
+    const volPCR = row.pe.volume / (row.ce.volume || 1);
 
     return {
-      strike:     row.strike,
-      ceScore:    Math.round(ceScore),
-      peScore:    Math.round(peScore),
-      totalScore: Math.round(totalScore),
-      dominant,
-      ceOI:       row.ce.oi,
-      peOI:       row.pe.oi,
-      ceOIChange: row.ce.oiChange,
-      peOIChange: row.pe.oiChange
+      strike: row.strike,
+      oiPCR:  parseFloat(oiPCR.toFixed(2)),
+      volPCR: parseFloat(volPCR.toFixed(2))
     };
   });
 
-  // Sort by total score descending, return top 3
-  const ranked = scored
-    .sort((a, b) => b.totalScore - a.totalScore)
-    .slice(0, 3)
-    .map((row, i) => ({ rank: i + 1, ...row }));
+  const overallOIPCR  = parseFloat((totalPeOI  / (totalCeOI  || 1)).toFixed(2));
+  const overallVolPCR = parseFloat((totalPeVol / (totalCeVol || 1)).toFixed(2));
 
-  return ranked;
+  return {
+    overall: {
+      oiPCR:  overallOIPCR,
+      volPCR: overallVolPCR,
+      totalCeOI,
+      totalPeOI
+    },
+    strikes: strikesPCR
+  };
 }
 
-module.exports = { rankAlphaStrikes };
+module.exports = { calcPCR };
