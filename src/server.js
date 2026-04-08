@@ -28,6 +28,8 @@ var sessionOwner = null;
 var sessionValidationInFlight = false;
 var sessionValidationOwner = null;
 var pollTimer = null;
+var TIMEOUT_MS = parseInt(process.env.SESSION_TIMEOUT_MS || "900000", 10); // 15m default
+var lastActivity = Date.now();
 var lastLiveSpot = null;
 var dailyClose = { date: null, spot: null };
 
@@ -48,6 +50,22 @@ function getLTP(chain, strike, side) {
     }
   }
   return 0;
+}
+
+function markActivity() {
+  lastActivity = Date.now();
+}
+
+function clearActiveSession(reason) {
+  session = { jwt: null, clientId: null, apiKey: null };
+  sessionOwner = null;
+  sessionValidationInFlight = false;
+  sessionValidationOwner = null;
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+  if (reason) console.log("Session cleared:", reason);
 }
 
 function computeTradePnL(chain) {
@@ -363,6 +381,15 @@ function wsSend(socket, obj) {
   } catch (e) {}
 }
 
+function pruneSocket(socket) {
+  clients = clients.filter(function (s) {
+    return s !== socket;
+  });
+  if (clients.length === 0) {
+    clearActiveSession("all websocket clients disconnected");
+  }
+}
+
 function broadcast(obj) {
   clients.forEach(function (s) {
     wsSend(s, obj);
@@ -378,20 +405,17 @@ server.on("upgrade", function (req, socket) {
     socket.destroy();
     return;
   }
+  markActivity();
   clients.push(socket);
   console.log("WS connected, clients:", clients.length);
   runAnalysis().then(function (r) {
     wsSend(socket, { type: "analysis", ...r });
   });
   socket.on("close", function () {
-    clients = clients.filter(function (s) {
-      return s !== socket;
-    });
+    pruneSocket(socket);
   });
   socket.on("error", function () {
-    clients = clients.filter(function (s) {
-      return s !== socket;
-    });
+    pruneSocket(socket);
   });
 });
 
@@ -425,6 +449,7 @@ function startPolling() {
 
 // Session endpoint (frontend sends JWT)
 app.post("/session", function (req, res) {
+  markActivity();
   var jwt = req.body.jwt;
   var apiKey = req.body.apiKey;
   var clientId = req.body.clientId;
@@ -482,8 +507,25 @@ app.post("/session", function (req, res) {
     });
 });
 
+app.delete("/session", function (req, res) {
+  markActivity();
+  var clientId = (req.body && req.body.clientId) || req.query.clientId;
+  if (!clientId) {
+    return res.status(400).json({ success: false, message: "clientId required" });
+  }
+  if (!sessionOwner || sessionOwner !== clientId) {
+    return res.status(403).json({
+      success: false,
+      message: "Forbidden: only active session owner can clear the session",
+    });
+  }
+  clearActiveSession("deleted by session owner");
+  res.json({ success: true, message: "Session cleared" });
+});
+
 // FEATURE 3: Strike Analysis endpoint
 app.post("/analyse-strike", function (req, res) {
+  markActivity();
   var strikePrice = parseFloat(req.body.strike);
   if (!strikePrice || isNaN(strikePrice))
     return res.status(400).json({ error: "Valid strike price required" });
@@ -498,6 +540,7 @@ app.post("/analyse-strike", function (req, res) {
 
 // Option Intelligence endpoint
 app.get("/option-intel", function (req, res) {
+  markActivity();
   var chain = lastKnownChain || getMockChain();
   var pcr = calcPCR(chain);
   res.json(calcOptionIntel(chain, pcr));
@@ -507,6 +550,7 @@ app.get("/option-intel", function (req, res) {
 
 // Open a new paper trade
 app.post("/trade/open", function (req, res) {
+  markActivity();
   var strike = parseFloat(req.body.strike);
   var side = (req.body.side || "").toUpperCase();
   var entryPrice = parseFloat(req.body.entryPrice);
@@ -545,6 +589,7 @@ app.post("/trade/open", function (req, res) {
 
 // Close an open paper trade
 app.post("/trade/close", function (req, res) {
+  markActivity();
   var tradeId = parseInt(req.body.tradeId);
   if (!tradeId) return res.status(400).json({ error: "tradeId required" });
 
@@ -581,11 +626,13 @@ app.post("/trade/close", function (req, res) {
 
 // Get all trades
 app.get("/trades", function (req, res) {
+  markActivity();
   var chain = lastKnownChain || getMockChain();
   res.json(getTradesSummary(chain));
 });
 
 app.get("/", function (req, res) {
+  markActivity();
   res.json({
     status: "EDGE Engine online",
     phase: 4,
@@ -596,6 +643,7 @@ app.get("/", function (req, res) {
 });
 
 app.get("/analysis", function (req, res) {
+  markActivity();
   runAnalysis()
     .then(function (r) {
       res.json(r);
@@ -609,3 +657,11 @@ server.listen(PORT, function () {
   console.log("EDGE Engine v5 on port " + PORT);
   startPolling();
 });
+
+setInterval(function () {
+  if (!sessionOwner) return;
+  var idleMs = Date.now() - lastActivity;
+  if (idleMs > TIMEOUT_MS) {
+    clearActiveSession("inactivity timeout (" + idleMs + "ms)");
+  }
+}, 60000);
