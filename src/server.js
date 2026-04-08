@@ -25,6 +25,8 @@ app.use(function (req, res, next) {
 var clients = [];
 var session = { jwt: null, clientId: null, apiKey: null };
 var sessionOwner = null;
+var sessionValidationInFlight = false;
+var sessionValidationOwner = null;
 var pollTimer = null;
 var lastLiveSpot = null;
 var dailyClose = { date: null, spot: null };
@@ -431,6 +433,13 @@ app.post("/session", function (req, res) {
       .status(400)
       .json({ success: false, message: "jwt and apiKey required" });
   var incomingClientId = clientId || "unknown";
+  if (sessionValidationInFlight && sessionValidationOwner !== incomingClientId) {
+    return res.status(409).json({
+      success: false,
+      message:
+        "Session validation is in progress for another client. Retry after it completes.",
+    });
+  }
   if (sessionOwner && sessionOwner !== incomingClientId) {
     return res.status(409).json({
       success: false,
@@ -440,6 +449,8 @@ app.post("/session", function (req, res) {
   }
 
   // Validate credentials immediately to avoid false-success + mock fallback.
+  sessionValidationInFlight = true;
+  sessionValidationOwner = incomingClientId;
   fetchLiveChain(jwt, apiKey)
     .then(function (chain) {
       session.clientId = incomingClientId;
@@ -462,6 +473,12 @@ app.post("/session", function (req, res) {
         message: "Broker authentication failed. Check API key/JWT/TOTP setup.",
         details: e.message,
       });
+    })
+    .finally(function () {
+      if (sessionValidationOwner === incomingClientId) {
+        sessionValidationInFlight = false;
+        sessionValidationOwner = null;
+      }
     });
 });
 
