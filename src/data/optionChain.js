@@ -22,6 +22,7 @@ async function angelLogin() {
         "X-ClientLocalIP": "127.0.0.1",
         "X-ClientPublicIP": "127.0.0.1",
         "X-MACAddress":  "00:00:00:00:00:00",
+        "X-SourceID": "WEB",
         "X-PrivateKey":  process.env.ANGEL_API_KEY,
         "Content-Length": Buffer.byteLength(body)
       }
