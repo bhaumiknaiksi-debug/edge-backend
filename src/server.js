@@ -25,7 +25,11 @@ app.use(function (req, res, next) {
 var clients = [];
 var session = { jwt: null, clientId: null, apiKey: null };
 var sessionOwner = null;
+var sessionValidationInFlight = false;
+var sessionValidationOwner = null;
 var pollTimer = null;
+var TIMEOUT_MS = parseInt(process.env.SESSION_TIMEOUT_MS || "900000", 10); // 15m default
+var lastActivity = Date.now();
 var lastLiveSpot = null;
 var dailyClose = { date: null, spot: null };
 
@@ -46,6 +50,22 @@ function getLTP(chain, strike, side) {
     }
   }
   return 0;
+}
+
+function markActivity() {
+  lastActivity = Date.now();
+}
+
+function clearActiveSession(reason) {
+  session = { jwt: null, clientId: null, apiKey: null };
+  sessionOwner = null;
+  sessionValidationInFlight = false;
+  sessionValidationOwner = null;
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+  if (reason) console.log("Session cleared:", reason);
 }
 
 function computeTradePnL(chain) {
@@ -133,6 +153,18 @@ function fetchGreekSide(jwt, apiKey, optionType) {
           try {
             var parsed = JSON.parse(data);
             if (!parsed || !parsed.data || !Array.isArray(parsed.data)) {
+              var brokerMessage =
+                (parsed && (parsed.message || parsed.errorcode || parsed.status)) ||
+                "Unknown upstream error";
+              return reject(
+                new Error(
+                  "Live " +
+                    optionType +
+                    " fetch failed: " +
+                    brokerMessage +
+                    " | " +
+                    data.slice(0, 100)
+                )
               return reject(
                 new Error("Empty " + optionType + " chain: " + data.slice(0, 100))
               );
@@ -199,15 +231,17 @@ function runAnalysis() {
       })
       .catch(function (e) {
         console.log("Live failed:", e.message);
-        // FEATURE 1: Use last known data instead of mock
+        // Prefer last known live data. Do not switch to mock while authenticated.
         if (lastKnownChain) {
           console.log("Using last known data (spot:" + lastKnownChain.spot + ")");
           isLive = false;
           return lastKnownChain;
         }
-        console.log("No last known data, using mock");
-        isLive = false;
-        return getMockChain();
+        throw new Error(
+          "Live session active but no valid chain available. " +
+            "Please re-authenticate. Root cause: " +
+            e.message
+        );
       });
   } else {
     // No session — use last known if available, else mock
@@ -349,6 +383,15 @@ function wsSend(socket, obj) {
   } catch (e) {}
 }
 
+function pruneSocket(socket) {
+  clients = clients.filter(function (s) {
+    return s !== socket;
+  });
+  if (clients.length === 0) {
+    clearActiveSession("all websocket clients disconnected");
+  }
+}
+
 function broadcast(obj) {
   clients.forEach(function (s) {
     wsSend(s, obj);
@@ -364,20 +407,17 @@ server.on("upgrade", function (req, socket) {
     socket.destroy();
     return;
   }
+  markActivity();
   clients.push(socket);
   console.log("WS connected, clients:", clients.length);
   runAnalysis().then(function (r) {
     wsSend(socket, { type: "analysis", ...r });
   });
   socket.on("close", function () {
-    clients = clients.filter(function (s) {
-      return s !== socket;
-    });
+    pruneSocket(socket);
   });
   socket.on("error", function () {
-    clients = clients.filter(function (s) {
-      return s !== socket;
-    });
+    pruneSocket(socket);
   });
 });
 
@@ -411,6 +451,7 @@ function startPolling() {
 
 // Session endpoint (frontend sends JWT)
 app.post("/session", function (req, res) {
+  markActivity();
   var jwt = req.body.jwt;
   var apiKey = req.body.apiKey;
   var clientId = req.body.clientId;
@@ -418,24 +459,75 @@ app.post("/session", function (req, res) {
     return res
       .status(400)
       .json({ success: false, message: "jwt and apiKey required" });
-  session.clientId = clientId || "unknown";
-  if (sessionOwner && sessionOwner !== session.clientId) {
+  var incomingClientId = clientId || "unknown";
+  if (sessionValidationInFlight && sessionValidationOwner !== incomingClientId) {
+    return res.status(409).json({
+      success: false,
+      message:
+        "Session validation is in progress for another client. Retry after it completes.",
+    });
+  }
+  if (sessionOwner && sessionOwner !== incomingClientId) {
     return res.status(409).json({
       success: false,
       message:
         "A session is already active for another client. Reuse the same clientId to rotate credentials.",
     });
   }
-  sessionOwner = session.clientId;
-  session.jwt = jwt;
-  session.apiKey = apiKey;
-  console.log("Session set for:", session.clientId);
-  startPolling();
-  res.json({ success: true, message: "Session active. Live data starting." });
+
+  // Validate credentials immediately to avoid false-success + mock fallback.
+  sessionValidationInFlight = true;
+  sessionValidationOwner = incomingClientId;
+  fetchLiveChain(jwt, apiKey)
+    .then(function (chain) {
+      session.clientId = incomingClientId;
+      sessionOwner = incomingClientId;
+      session.jwt = jwt;
+      session.apiKey = apiKey;
+      lastKnownChain = chain;
+      lastLiveSpot = chain.spot;
+      console.log("Session validated for:", session.clientId);
+      startPolling();
+      res.json({
+        success: true,
+        message: "Session active. Live data connected.",
+        spot: chain.spot,
+      });
+    })
+    .catch(function (e) {
+      res.status(401).json({
+        success: false,
+        message: "Broker authentication failed. Check API key/JWT/TOTP setup.",
+        details: e.message,
+      });
+    })
+    .finally(function () {
+      if (sessionValidationOwner === incomingClientId) {
+        sessionValidationInFlight = false;
+        sessionValidationOwner = null;
+      }
+    });
+});
+
+app.delete("/session", function (req, res) {
+  markActivity();
+  var clientId = (req.body && req.body.clientId) || req.query.clientId;
+  if (!clientId) {
+    return res.status(400).json({ success: false, message: "clientId required" });
+  }
+  if (!sessionOwner || sessionOwner !== clientId) {
+    return res.status(403).json({
+      success: false,
+      message: "Forbidden: only active session owner can clear the session",
+    });
+  }
+  clearActiveSession("deleted by session owner");
+  res.json({ success: true, message: "Session cleared" });
 });
 
 // FEATURE 3: Strike Analysis endpoint
 app.post("/analyse-strike", function (req, res) {
+  markActivity();
   var strikePrice = parseFloat(req.body.strike);
   if (!strikePrice || isNaN(strikePrice))
     return res.status(400).json({ error: "Valid strike price required" });
@@ -450,6 +542,7 @@ app.post("/analyse-strike", function (req, res) {
 
 // Option Intelligence endpoint
 app.get("/option-intel", function (req, res) {
+  markActivity();
   var chain = lastKnownChain || getMockChain();
   var pcr = calcPCR(chain);
   res.json(calcOptionIntel(chain, pcr));
@@ -459,6 +552,7 @@ app.get("/option-intel", function (req, res) {
 
 // Open a new paper trade
 app.post("/trade/open", function (req, res) {
+  markActivity();
   var strike = parseFloat(req.body.strike);
   var side = (req.body.side || "").toUpperCase();
   var entryPrice = parseFloat(req.body.entryPrice);
@@ -497,6 +591,7 @@ app.post("/trade/open", function (req, res) {
 
 // Close an open paper trade
 app.post("/trade/close", function (req, res) {
+  markActivity();
   var tradeId = parseInt(req.body.tradeId);
   if (!tradeId) return res.status(400).json({ error: "tradeId required" });
 
@@ -533,11 +628,13 @@ app.post("/trade/close", function (req, res) {
 
 // Get all trades
 app.get("/trades", function (req, res) {
+  markActivity();
   var chain = lastKnownChain || getMockChain();
   res.json(getTradesSummary(chain));
 });
 
 app.get("/", function (req, res) {
+  markActivity();
   res.json({
     status: "EDGE Engine online",
     phase: 4,
@@ -548,6 +645,7 @@ app.get("/", function (req, res) {
 });
 
 app.get("/analysis", function (req, res) {
+  markActivity();
   runAnalysis()
     .then(function (r) {
       res.json(r);
@@ -561,3 +659,11 @@ server.listen(PORT, function () {
   console.log("EDGE Engine v5 on port " + PORT);
   startPolling();
 });
+
+setInterval(function () {
+  if (!sessionOwner) return;
+  var idleMs = Date.now() - lastActivity;
+  if (idleMs > TIMEOUT_MS) {
+    clearActiveSession("inactivity timeout (" + idleMs + "ms)");
+  }
+}, 60000);
