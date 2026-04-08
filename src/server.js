@@ -24,6 +24,7 @@ app.use(function (req, res, next) {
 
 var clients = [];
 var session = { jwt: null, clientId: null, apiKey: null };
+var sessionOwner = null;
 var pollTimer = null;
 
 // ── FEATURE 1: Last-known-data store ──
@@ -100,7 +101,7 @@ function getMockChain() {
 }
 
 // Fetch option chain using JWT
-function fetchLiveChain(jwt, apiKey) {
+function fetchGreekSide(jwt, apiKey, optionType) {
   return new Promise(function (resolve, reject) {
     var headers = {
       Authorization: "Bearer " + jwt,
@@ -115,7 +116,9 @@ function fetchLiveChain(jwt, apiKey) {
     var req = https.request(
       {
         hostname: "apiconnect.angelone.in",
-        path: "/rest/secure/angelbroking/market/v1/optionGreek?exchange=NFO&symboltoken=99926000&expiry=&strike=-1&optiontype=CE",
+        path:
+          "/rest/secure/angelbroking/market/v1/optionGreek?exchange=NFO&symboltoken=99926000&expiry=&strike=-1&optiontype=" +
+          optionType,
         method: "GET",
         headers: headers,
       },
@@ -128,45 +131,55 @@ function fetchLiveChain(jwt, apiKey) {
           try {
             var parsed = JSON.parse(data);
             if (!parsed || !parsed.data || !Array.isArray(parsed.data)) {
-              return reject(new Error("Empty chain: " + data.slice(0, 100)));
+              return reject(
+                new Error("Empty " + optionType + " chain: " + data.slice(0, 100))
+              );
             }
-            var strikeMap = {},
-              spot = 0;
-            parsed.data.forEach(function (row) {
-              var s = row.strikePrice;
-              if (!strikeMap[s])
-                strikeMap[s] = { strike: s, ce: null, pe: null };
-              spot = row.underlyingValue || spot;
-              var side = {
-                ltp: row.ltp || 0,
-                oi: row.openInterest || 0,
-                oiChange: row.changeinOpenInterest || 0,
-                volume: row.tradedVolume || 0,
-              };
-              if (row.optionType === "CE") strikeMap[s].ce = side;
-              else if (row.optionType === "PE") strikeMap[s].pe = side;
-            });
-            var strikes = Object.values(strikeMap)
-              .filter(function (r) {
-                return r.ce && r.pe;
-              })
-              .sort(function (a, b) {
-                return a.strike - b.strike;
-              })
-              .filter(function (r) {
-                return Math.abs(r.strike - spot) <= 350;
-              });
-            if (strikes.length < 3)
-              return reject(new Error("Not enough strikes"));
-            resolve({ spot: spot, expiry: "live", strikes: strikes });
+            resolve(parsed.data);
           } catch (e) {
-            reject(new Error("Bad JSON: " + data.slice(0, 80)));
+            reject(new Error("Bad " + optionType + " JSON: " + data.slice(0, 80)));
           }
         });
       }
     );
     req.on("error", reject);
     req.end();
+  });
+}
+
+function fetchLiveChain(jwt, apiKey) {
+  return Promise.all([
+    fetchGreekSide(jwt, apiKey, "CE"),
+    fetchGreekSide(jwt, apiKey, "PE"),
+  ]).then(function (parts) {
+    var allRows = parts[0].concat(parts[1]);
+    var strikeMap = {},
+      spot = 0;
+    allRows.forEach(function (row) {
+      var s = row.strikePrice;
+      if (!strikeMap[s]) strikeMap[s] = { strike: s, ce: null, pe: null };
+      spot = row.underlyingValue || spot;
+      var side = {
+        ltp: row.ltp || 0,
+        oi: row.openInterest || 0,
+        oiChange: row.changeinOpenInterest || 0,
+        volume: row.tradedVolume || 0,
+      };
+      if (row.optionType === "CE") strikeMap[s].ce = side;
+      else if (row.optionType === "PE") strikeMap[s].pe = side;
+    });
+    var strikes = Object.values(strikeMap)
+      .filter(function (r) {
+        return r.ce && r.pe;
+      })
+      .sort(function (a, b) {
+        return a.strike - b.strike;
+      })
+      .filter(function (r) {
+        return Math.abs(r.strike - spot) <= 350;
+      });
+    if (strikes.length < 3) throw new Error("Not enough strikes");
+    return { spot: spot, expiry: "live", strikes: strikes };
   });
 }
 
@@ -228,6 +241,7 @@ function runAnalysis() {
 // ── WebSocket ──
 function wsHandshake(req, socket) {
   var key = req.headers["sec-websocket-key"];
+  if (!key) return false;
   var accept = crypto
     .createHash("sha1")
     .update(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11")
@@ -237,6 +251,7 @@ function wsHandshake(req, socket) {
       accept +
       "\r\n\r\n"
   );
+  return true;
 }
 
 function wsEncode(data) {
@@ -275,7 +290,10 @@ server.on("upgrade", function (req, socket) {
     socket.destroy();
     return;
   }
-  wsHandshake(req, socket);
+  if (!wsHandshake(req, socket)) {
+    socket.destroy();
+    return;
+  }
   clients.push(socket);
   console.log("WS connected, clients:", clients.length);
   runAnalysis().then(function (r) {
@@ -330,9 +348,17 @@ app.post("/session", function (req, res) {
     return res
       .status(400)
       .json({ success: false, message: "jwt and apiKey required" });
+  session.clientId = clientId || "unknown";
+  if (sessionOwner && sessionOwner !== session.clientId) {
+    return res.status(409).json({
+      success: false,
+      message:
+        "A session is already active for another client. Reuse the same clientId to rotate credentials.",
+    });
+  }
+  sessionOwner = session.clientId;
   session.jwt = jwt;
   session.apiKey = apiKey;
-  session.clientId = clientId || "unknown";
   console.log("Session set for:", session.clientId);
   startPolling();
   res.json({ success: true, message: "Session active. Live data starting." });
