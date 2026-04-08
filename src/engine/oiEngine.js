@@ -1,41 +1,10 @@
-// src/engine/oiEngine.js
-// Finds Support (max PE OI below spot) and Resistance (max CE OI above spot)
-
-const { getATMStrike, fmt } = require("../utils/helpers");
-
 function findSupportResistance(chain) {
-  let support    = null;
-  let resistance = null;
-
+  let support = null, resistance = null;
   for (const row of chain.strikes) {
-    // Support = highest PE OI at or below spot (bulls defending)
-    if (row.strike <= chain.spot) {
-      if (!support || row.pe.oi > support.pe.oi) {
-        support = row;
-      }
-    }
-
-    // Resistance = highest CE OI at or above spot (bears defending)
-    if (row.strike >= chain.spot) {
-      if (!resistance || row.ce.oi > resistance.ce.oi) {
-        resistance = row;
-      }
-    }
+    if (row.strike <= chain.spot && (!support || row.pe.oi > support.pe.oi)) support = row;
+    if (row.strike >= chain.spot && (!resistance || row.ce.oi > resistance.ce.oi)) resistance = row;
   }
-
-  return {
-    support: {
-      strike: support?.strike ?? null,
-      peOI:   support?.pe.oi ?? 0,
-      peOIChange: support?.pe.oiChange ?? 0
-    },
-    resistance: {
-      strike: resistance?.strike ?? null,
-      ceOI:   resistance?.ce.oi ?? 0,
-      ceOIChange: resistance?.ce.oiChange ?? 0
-    },
-    atmStrike: getATMStrike(chain.strikes, chain.spot)?.strike ?? null
-  };
+  const atm = chain.strikes.reduce((c, r) => Math.abs(r.strike - chain.spot) < Math.abs(c.strike - chain.spot) ? r : c);
+  return { support: { strike: support?.strike, peOI: support?.pe.oi }, resistance: { strike: resistance?.strike, ceOI: resistance?.ce.oi }, atmStrike: atm.strike };
 }
-
 module.exports = { findSupportResistance };
