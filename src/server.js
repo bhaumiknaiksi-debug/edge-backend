@@ -165,6 +165,8 @@ function fetchGreekSide(jwt, apiKey, optionType) {
                     " | " +
                     data.slice(0, 100)
                 )
+              return reject(
+                new Error("Empty " + optionType + " chain: " + data.slice(0, 100))
               );
             }
             resolve(parsed.data);
