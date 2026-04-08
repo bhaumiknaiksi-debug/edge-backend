@@ -26,6 +26,8 @@ var clients = [];
 var session = { jwt: null, clientId: null, apiKey: null };
 var sessionOwner = null;
 var pollTimer = null;
+var lastLiveSpot = null;
+var dailyClose = { date: null, spot: null };
 
 // ── FEATURE 1: Last-known-data store ──
 var lastKnownChain = null;   // last successful chain snapshot
@@ -219,12 +221,44 @@ function runAnalysis() {
   }
 
   return p.then(function (chain) {
+    if (isLive && chain && typeof chain.spot === "number") {
+      lastLiveSpot = chain.spot;
+    }
+
+    var marketState = getMarketStateIST();
+    if (marketState.isClosed) {
+      if (
+        marketState.isAfterClose &&
+        dailyClose.date !== marketState.tradingDate &&
+        typeof lastLiveSpot === "number"
+      ) {
+        dailyClose = { date: marketState.tradingDate, spot: lastLiveSpot };
+      }
+    } else if (dailyClose.date !== marketState.tradingDate) {
+      // New trading day opened; reset stored close.
+      dailyClose = { date: marketState.tradingDate, spot: null };
+    }
+
+    var marketClosePoint =
+      typeof dailyClose.spot === "number"
+        ? dailyClose.spot
+        : (lastKnownResult && lastKnownResult.marketClosePoint) || chain.spot;
+
     var pcr = calcPCR(chain);
     var result = {
       timestamp: new Date().toISOString(),
       spot: chain.spot,
       expiry: chain.expiry,
       isLive: isLive,
+      market: {
+        isOpen: marketState.isOpen,
+        isClosed: marketState.isClosed,
+        session: marketState.session,
+        tradingDate: marketState.tradingDate,
+      },
+      marketClosePoint: marketClosePoint,
+      closePoint: marketClosePoint,
+      closingPoint: marketClosePoint,
       sr: findSupportResistance(chain),
       pcr: pcr,
       sentiment: calcSentiment(pcr),
@@ -236,6 +270,42 @@ function runAnalysis() {
     lastKnownResult = result;
     return result;
   });
+}
+
+function getMarketStateIST(nowUtc) {
+  var now = nowUtc ? new Date(nowUtc) : new Date();
+  var istNow = new Date(
+    now.toLocaleString("en-US", {
+      timeZone: "Asia/Kolkata",
+    })
+  );
+  var day = istNow.getDay(); // 0 Sun, 6 Sat
+  var hour = istNow.getHours();
+  var min = istNow.getMinutes();
+  var totalMin = hour * 60 + min;
+  var openMin = 9 * 60 + 15;
+  var closeMin = 15 * 60 + 30;
+  var isWeekend = day === 0 || day === 6;
+  var isOpen = !isWeekend && totalMin >= openMin && totalMin <= closeMin;
+  var isAfterClose = !isWeekend && totalMin > closeMin;
+  var session = isWeekend
+    ? "WEEKEND"
+    : isOpen
+      ? "OPEN"
+      : isAfterClose
+        ? "POST_CLOSE"
+        : "PRE_OPEN";
+
+  var yyyy = istNow.getFullYear();
+  var mm = String(istNow.getMonth() + 1).padStart(2, "0");
+  var dd = String(istNow.getDate()).padStart(2, "0");
+  return {
+    isOpen: isOpen,
+    isClosed: !isOpen,
+    isAfterClose: isAfterClose,
+    session: session,
+    tradingDate: yyyy + "-" + mm + "-" + dd,
+  };
 }
 
 // ── WebSocket ──
