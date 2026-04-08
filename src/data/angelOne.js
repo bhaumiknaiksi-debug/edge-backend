@@ -3,6 +3,7 @@
 // Replaces mock optionChain.js in Phase 3
 
 const axios = require("axios");
+const crypto = require("crypto");
 
 // ── Angel One SmartAPI endpoints ──
 const BASE_URL   = "https://apiconnect.angelone.in";
