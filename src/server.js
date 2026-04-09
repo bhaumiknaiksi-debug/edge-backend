@@ -102,9 +102,18 @@ function getMockChain() {
   };
 }
 
+var REQUEST_TIMEOUT_MS = 10000;
+
 // Fetch option chain using JWT
 function fetchGreekSide(jwt, apiKey, optionType) {
   return new Promise(function (resolve, reject) {
+    var settled = false;
+    function done(err, data) {
+      if (settled) return;
+      settled = true;
+      if (err) reject(err); else resolve(data);
+    }
+
     var headers = {
       Authorization: "Bearer " + jwt,
       "Content-Type": "application/json",
@@ -136,7 +145,7 @@ function fetchGreekSide(jwt, apiKey, optionType) {
               var brokerMessage =
                 (parsed && (parsed.message || parsed.errorcode || parsed.status)) ||
                 "Unknown upstream error";
-              return reject(
+              return done(
                 new Error(
                   "Live " +
                     optionType +
@@ -147,14 +156,17 @@ function fetchGreekSide(jwt, apiKey, optionType) {
                 )
               );
             }
-            resolve(parsed.data);
+            done(null, parsed.data);
           } catch (e) {
-            reject(new Error("Bad " + optionType + " JSON: " + data.slice(0, 80)));
+            done(new Error("Bad " + optionType + " JSON: " + data.slice(0, 80)));
           }
         });
       }
     );
-    req.on("error", reject);
+    req.setTimeout(REQUEST_TIMEOUT_MS, function () {
+      req.destroy(new Error("Timeout fetching " + optionType));
+    });
+    req.on("error", function (e) { done(e); });
     req.end();
   });
 }
