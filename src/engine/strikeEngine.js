@@ -21,20 +21,19 @@ function rankAlphaStrikes(chain) {
     });
 }
 
+var STRIKE_STEP = 50; // NIFTY strike step; nearest-match tolerance
+
 // FEATURE 3: Deep strike analysis
 function analyseStrike(chain, strikePrice, pcr, sentiment) {
-  // Find the exact or nearest strike row
+  // Prefer exact match; fall back to nearest only within one step size
   var row = null;
   var minDist = Infinity;
   chain.strikes.forEach(function (r) {
     var d = Math.abs(r.strike - strikePrice);
-    if (d < minDist) {
-      minDist = d;
-      row = r;
-    }
+    if (d < minDist) { minDist = d; row = r; }
   });
 
-  if (!row) {
+  if (!row || (row.strike !== strikePrice && minDist > STRIKE_STEP)) {
     return {
       strike: strikePrice,
       confidence: 0,

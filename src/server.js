@@ -48,10 +48,11 @@ function getLTP(chain, strike, side) {
   return 0;
 }
 
-function computeTradePnL(chain) {
-  // Compute live P&L for all open trades using current chain
+
+function getTradesSummary(chain, owner) {
+  var owned = owner ? trades.filter(function(t) { return t.owner === owner; }) : trades;
   var openPnL = 0;
-  trades.forEach(function(t) {
+  owned.forEach(function(t) {
     if (t.status === "OPEN") {
       var currentLTP = getLTP(chain, t.strike, t.side);
       t.currentLTP = currentLTP;
@@ -60,26 +61,21 @@ function computeTradePnL(chain) {
       openPnL += t.pnl;
     }
   });
-  return parseFloat(openPnL.toFixed(2));
-}
-
-function getTradesSummary(chain) {
-  var openPnL = computeTradePnL(chain);
   var closedPnL = 0;
   var wins = 0, losses = 0;
-  trades.forEach(function(t) {
+  owned.forEach(function(t) {
     if (t.status === "CLOSED") {
       closedPnL += t.pnl;
       if (t.pnl >= 0) wins++; else losses++;
     }
   });
   return {
-    openTrades: trades.filter(function(t){ return t.status === "OPEN"; }),
-    closedTrades: trades.filter(function(t){ return t.status === "CLOSED"; }).slice(-20).reverse(),
+    openTrades: owned.filter(function(t){ return t.status === "OPEN"; }),
+    closedTrades: owned.filter(function(t){ return t.status === "CLOSED"; }).slice(-20).reverse(),
     openPnL: parseFloat(openPnL.toFixed(2)),
     closedPnL: parseFloat(closedPnL.toFixed(2)),
     totalPnL: parseFloat((openPnL + closedPnL).toFixed(2)),
-    totalTrades: trades.length,
+    totalTrades: owned.length,
     wins: wins,
     losses: losses,
     winRate: (wins + losses) > 0 ? parseFloat(((wins / (wins + losses)) * 100).toFixed(1)) : 0
@@ -172,9 +168,11 @@ function fetchGreekSide(jwt, apiKey, optionType) {
 }
 
 async function fetchLiveChain(jwt, apiKey) {
-  var ceRows = await fetchGreekSide(jwt, apiKey, "CE");
-  var peRows = await fetchGreekSide(jwt, apiKey, "PE");
-  var allRows = ceRows.concat(peRows);
+  var results = await Promise.all([
+    fetchGreekSide(jwt, apiKey, "CE"),
+    fetchGreekSide(jwt, apiKey, "PE"),
+  ]);
+  var allRows = results[0].concat(results[1]);
   var strikeMap = {},
     spot = 0;
   allRows.forEach(function (row) {
@@ -285,7 +283,7 @@ function runAnalysis() {
       sentiment: calcSentiment(pcr),
       alphas: rankAlphaStrikes(chain),
       optionIntel: calcOptionIntel(chain, pcr),
-      trades: getTradesSummary(chain),
+      trades: getTradesSummary(chain, sessionOwner),
     };
     // Cache the result
     lastKnownResult = result;
@@ -389,6 +387,10 @@ server.on("upgrade", function (req, socket) {
   console.log("WS connected, clients:", clients.length);
   runAnalysis().then(function (r) {
     wsSend(socket, { type: "analysis", ...r });
+  }).catch(function (e) {
+    console.error("WS bootstrap analysis error:", e.message);
+    wsSend(socket, { type: "analysis_error", error: e.message });
+    socket.destroy();
   });
   socket.on("close", function () {
     clients = clients.filter(function (s) {
@@ -499,6 +501,7 @@ app.get("/option-intel", function (req, res) {
 
 // Open a new paper trade
 app.post("/trade/open", function (req, res) {
+  var owner = sessionOwner || "unknown";
   var strike = parseFloat(req.body.strike);
   var side = (req.body.side || "").toUpperCase();
   var entryPrice = parseFloat(req.body.entryPrice);
@@ -512,6 +515,7 @@ app.post("/trade/open", function (req, res) {
 
   var trade = {
     id: tradeIdCounter++,
+    owner: owner,
     strike: strike,
     side: side,
     entryPrice: entryPrice,
@@ -525,24 +529,25 @@ app.post("/trade/open", function (req, res) {
     holdDuration: null,
   };
   trades.push(trade);
-  console.log("TRADE OPENED: #" + trade.id + " " + side + " " + strike + " @ " + entryPrice);
+  console.log("TRADE OPENED: #" + trade.id + " " + side + " " + strike + " @ " + entryPrice + " (owner:" + owner + ")");
 
-  // Immediately broadcast updated trades
+  // Broadcast only this owner's trades
   var chain = lastKnownChain || getMockChain();
-  var summary = getTradesSummary(chain);
-  broadcast({ type: "trades-update", trades: summary });
+  var summary = getTradesSummary(chain, owner);
+  broadcast({ type: "trades-update", owner: owner, trades: summary });
 
   res.json({ success: true, trade: trade });
 });
 
 // Close an open paper trade
 app.post("/trade/close", function (req, res) {
+  var owner = sessionOwner || "unknown";
   var tradeId = parseInt(req.body.tradeId);
   if (!tradeId) return res.status(400).json({ error: "tradeId required" });
 
   var trade = null;
   for (var i = 0; i < trades.length; i++) {
-    if (trades[i].id === tradeId && trades[i].status === "OPEN") {
+    if (trades[i].id === tradeId && trades[i].owner === owner && trades[i].status === "OPEN") {
       trade = trades[i];
       break;
     }
@@ -565,16 +570,17 @@ app.post("/trade/close", function (req, res) {
 
   console.log("TRADE CLOSED: #" + trade.id + " P&L: " + trade.pnl + " (" + trade.holdDuration + ")");
 
-  var summary = getTradesSummary(chain);
-  broadcast({ type: "trades-update", trades: summary });
+  var summary = getTradesSummary(chain, owner);
+  broadcast({ type: "trades-update", owner: owner, trades: summary });
 
   res.json({ success: true, trade: trade, summary: summary });
 });
 
 // Get all trades
 app.get("/trades", function (req, res) {
+  var owner = sessionOwner || "unknown";
   var chain = lastKnownChain || getMockChain();
-  res.json(getTradesSummary(chain));
+  res.json(getTradesSummary(chain, owner));
 });
 
 app.get("/", function (req, res) {
