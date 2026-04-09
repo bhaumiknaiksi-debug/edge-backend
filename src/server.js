@@ -122,24 +122,50 @@ function getMockChain() {
   };
 }
 
+function getNearestExpiry() {
+  // Angel One expects expiry in DDMMMYYYY format (e.g. 10APR2026)
+  var now = new Date();
+  var istNow = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+  var day = istNow.getDay(); // 0=Sun, 4=Thu
+  var diff = (4 - day + 7) % 7;
+  if (diff === 0) {
+    var totalMin = istNow.getHours() * 60 + istNow.getMinutes();
+    if (totalMin >= 15 * 60 + 30) diff = 7;
+  }
+
+  var exp = new Date(now);
+  exp.setDate(now.getDate() + diff);
+  var dd = String(exp.getDate()).padStart(2, "0");
+  var mm = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"][exp.getMonth()];
+  var yyyy = exp.getFullYear();
+  return dd + mm + yyyy;
+}
+
+function buildBrokerHeaders(jwt, apiKey) {
+  return {
+    Authorization: "Bearer " + String(jwt || "").trim(),
+    "Content-Type": "application/json",
+    "X-ClientLocalIP": process.env.ANGEL_CLIENT_LOCAL_IP || "127.0.0.1",
+    "X-ClientPublicIP": process.env.ANGEL_CLIENT_PUBLIC_IP || "127.0.0.1",
+    "X-MACAddress": process.env.ANGEL_MAC_ADDRESS || "02:00:00:00:00:01",
+    "X-PrivateKey": String(apiKey || "").trim(),
+    "X-SourceID": "WEB",
+    Accept: "application/json",
+  };
+}
+
 // Fetch option chain using JWT
 function fetchGreekSide(jwt, apiKey, optionType) {
   return new Promise(function (resolve, reject) {
-    var headers = {
-      Authorization: "Bearer " + jwt,
-      "Content-Type": "application/json",
-      "X-ClientLocalIP": "127.0.0.1",
-      "X-ClientPublicIP": "127.0.0.1",
-      "X-MACAddress": "00:00:00:00:00:00",
-      "X-PrivateKey": apiKey,
-      "X-SourceID": "WEB",
-      Accept: "application/json",
-    };
+    var headers = buildBrokerHeaders(jwt, apiKey);
+    var expiry = getNearestExpiry();
     var req = https.request(
       {
         hostname: "apiconnect.angelone.in",
         path:
-          "/rest/secure/angelbroking/market/v1/optionGreek?exchange=NFO&symboltoken=99926000&expiry=&strike=-1&optiontype=" +
+          "/rest/secure/angelbroking/market/v1/optionGreek?exchange=NFO&symboltoken=99926000&expiry=" +
+          encodeURIComponent(expiry) +
+          "&strike=-1&optiontype=" +
           optionType,
         method: "GET",
         headers: headers,
@@ -448,8 +474,8 @@ function startPolling() {
 // Session endpoint (frontend sends JWT)
 app.post("/session", function (req, res) {
   markActivity();
-  var jwt = req.body.jwt;
-  var apiKey = req.body.apiKey;
+  var jwt = String(req.body.jwt || "").trim();
+  var apiKey = String(req.body.apiKey || "").trim();
   var clientId = req.body.clientId;
   if (!jwt || !apiKey)
     return res
