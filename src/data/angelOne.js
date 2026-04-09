@@ -4,6 +4,7 @@
 
 const axios = require("axios");
 const crypto = require("crypto");
+const subtle = (crypto.webcrypto && crypto.webcrypto.subtle) || crypto.subtle;
 
 // ── Angel One SmartAPI endpoints ──
 const BASE_URL   = "https://apiconnect.angelone.in";
@@ -49,6 +50,9 @@ async function getAuthToken() {
 
 // ── Simple TOTP generator (RFC 6238) ──
 async function generateTOTP(secret) {
+  if (!subtle) {
+    throw new Error("WebCrypto API not available in this Node runtime");
+  }
   // Using a minimal TOTP implementation without extra deps
   const base32Chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
   const cleanSecret = secret.toUpperCase().replace(/\s/g, "");
@@ -75,10 +79,10 @@ async function generateTOTP(secret) {
   }
 
   // HMAC-SHA1
-  const cryptoKey = await crypto.subtle.importKey(
+  const cryptoKey = await subtle.importKey(
     "raw", key, { name: "HMAC", hash: "SHA-1" }, false, ["sign"]
   );
-  const sig    = await crypto.subtle.sign("HMAC", cryptoKey, counterBytes);
+  const sig = await subtle.sign("HMAC", cryptoKey, counterBytes);
   const hash   = new Uint8Array(sig);
   const offset = hash[19] & 0xf;
   const code   = (
@@ -156,7 +160,7 @@ function transformChain(data) {
 function getNearestExpiry() {
   const now  = new Date();
   const day  = now.getDay(); // 0=Sun, 4=Thu
-  const diff = (4 - day + 7) % 7 || 7; // days until next Thursday
+  const diff = (4 - day + 7) % 7; // days until Thursday; 0 means "today"
   const exp  = new Date(now);
   exp.setDate(now.getDate() + diff);
 
