@@ -24,7 +24,10 @@ app.use(function (req, res, next) {
 
 var clients = [];
 var session = { jwt: null, clientId: null, apiKey: null };
+var sessionOwner = null;
 var pollTimer = null;
+var lastLiveSpot = null;
+var dailyClose = { date: null, spot: null };
 
 // ── FEATURE 1: Last-known-data store ──
 var lastKnownChain = null;   // last successful chain snapshot
@@ -45,10 +48,11 @@ function getLTP(chain, strike, side) {
   return 0;
 }
 
-function computeTradePnL(chain) {
-  // Compute live P&L for all open trades using current chain
+
+function getTradesSummary(chain, owner) {
+  var owned = owner ? trades.filter(function(t) { return t.owner === owner; }) : trades;
   var openPnL = 0;
-  trades.forEach(function(t) {
+  owned.forEach(function(t) {
     if (t.status === "OPEN") {
       var currentLTP = getLTP(chain, t.strike, t.side);
       t.currentLTP = currentLTP;
@@ -57,26 +61,21 @@ function computeTradePnL(chain) {
       openPnL += t.pnl;
     }
   });
-  return parseFloat(openPnL.toFixed(2));
-}
-
-function getTradesSummary(chain) {
-  var openPnL = computeTradePnL(chain);
   var closedPnL = 0;
   var wins = 0, losses = 0;
-  trades.forEach(function(t) {
+  owned.forEach(function(t) {
     if (t.status === "CLOSED") {
       closedPnL += t.pnl;
       if (t.pnl >= 0) wins++; else losses++;
     }
   });
   return {
-    openTrades: trades.filter(function(t){ return t.status === "OPEN"; }),
-    closedTrades: trades.filter(function(t){ return t.status === "CLOSED"; }).slice(-20).reverse(),
+    openTrades: owned.filter(function(t){ return t.status === "OPEN"; }),
+    closedTrades: owned.filter(function(t){ return t.status === "CLOSED"; }).slice(-20).reverse(),
     openPnL: parseFloat(openPnL.toFixed(2)),
     closedPnL: parseFloat(closedPnL.toFixed(2)),
     totalPnL: parseFloat((openPnL + closedPnL).toFixed(2)),
-    totalTrades: trades.length,
+    totalTrades: owned.length,
     wins: wins,
     losses: losses,
     winRate: (wins + losses) > 0 ? parseFloat(((wins / (wins + losses)) * 100).toFixed(1)) : 0
@@ -99,9 +98,18 @@ function getMockChain() {
   };
 }
 
+var REQUEST_TIMEOUT_MS = 10000;
+
 // Fetch option chain using JWT
-function fetchLiveChain(jwt, apiKey) {
+function fetchGreekSide(jwt, apiKey, optionType) {
   return new Promise(function (resolve, reject) {
+    var settled = false;
+    function done(err, data) {
+      if (settled) return;
+      settled = true;
+      if (err) reject(err); else resolve(data);
+    }
+
     var headers = {
       Authorization: "Bearer " + jwt,
       "Content-Type": "application/json",
@@ -115,7 +123,9 @@ function fetchLiveChain(jwt, apiKey) {
     var req = https.request(
       {
         hostname: "apiconnect.angelone.in",
-        path: "/rest/secure/angelbroking/market/v1/optionGreek?exchange=NFO&symboltoken=99926000&expiry=&strike=-1&optiontype=CE",
+        path:
+          "/rest/secure/angelbroking/market/v1/optionGreek?exchange=NFO&symboltoken=99926000&expiry=&strike=-1&optiontype=" +
+          optionType,
         method: "GET",
         headers: headers,
       },
@@ -128,46 +138,68 @@ function fetchLiveChain(jwt, apiKey) {
           try {
             var parsed = JSON.parse(data);
             if (!parsed || !parsed.data || !Array.isArray(parsed.data)) {
-              return reject(new Error("Empty chain: " + data.slice(0, 100)));
+              var brokerMessage =
+                (parsed && (parsed.message || parsed.errorcode || parsed.status)) ||
+                "Unknown upstream error";
+              return done(
+                new Error(
+                  "Live " +
+                    optionType +
+                    " fetch failed: " +
+                    brokerMessage +
+                    " | " +
+                    data.slice(0, 100)
+                )
+              );
             }
-            var strikeMap = {},
-              spot = 0;
-            parsed.data.forEach(function (row) {
-              var s = row.strikePrice;
-              if (!strikeMap[s])
-                strikeMap[s] = { strike: s, ce: null, pe: null };
-              spot = row.underlyingValue || spot;
-              var side = {
-                ltp: row.ltp || 0,
-                oi: row.openInterest || 0,
-                oiChange: row.changeinOpenInterest || 0,
-                volume: row.tradedVolume || 0,
-              };
-              if (row.optionType === "CE") strikeMap[s].ce = side;
-              else if (row.optionType === "PE") strikeMap[s].pe = side;
-            });
-            var strikes = Object.values(strikeMap)
-              .filter(function (r) {
-                return r.ce && r.pe;
-              })
-              .sort(function (a, b) {
-                return a.strike - b.strike;
-              })
-              .filter(function (r) {
-                return Math.abs(r.strike - spot) <= 350;
-              });
-            if (strikes.length < 3)
-              return reject(new Error("Not enough strikes"));
-            resolve({ spot: spot, expiry: "live", strikes: strikes });
+            done(null, parsed.data);
           } catch (e) {
-            reject(new Error("Bad JSON: " + data.slice(0, 80)));
+            done(new Error("Bad " + optionType + " JSON: " + data.slice(0, 80)));
           }
         });
       }
     );
-    req.on("error", reject);
+    req.setTimeout(REQUEST_TIMEOUT_MS, function () {
+      req.destroy(new Error("Timeout fetching " + optionType));
+    });
+    req.on("error", function (e) { done(e); });
     req.end();
   });
+}
+
+async function fetchLiveChain(jwt, apiKey) {
+  var results = await Promise.all([
+    fetchGreekSide(jwt, apiKey, "CE"),
+    fetchGreekSide(jwt, apiKey, "PE"),
+  ]);
+  var allRows = results[0].concat(results[1]);
+  var strikeMap = {},
+    spot = 0;
+  allRows.forEach(function (row) {
+    var s = row.strikePrice;
+    if (!strikeMap[s]) strikeMap[s] = { strike: s, ce: null, pe: null };
+    spot = row.underlyingValue || spot;
+    var side = {
+      ltp: row.ltp || 0,
+      oi: row.openInterest || 0,
+      oiChange: row.changeinOpenInterest || 0,
+      volume: row.tradedVolume || 0,
+    };
+    if (row.optionType === "CE") strikeMap[s].ce = side;
+    else if (row.optionType === "PE") strikeMap[s].pe = side;
+  });
+  var strikes = Object.values(strikeMap)
+    .filter(function (r) {
+      return r.ce && r.pe;
+    })
+    .sort(function (a, b) {
+      return a.strike - b.strike;
+    })
+    .filter(function (r) {
+      return Math.abs(r.strike - spot) <= 350;
+    });
+  if (strikes.length < 3) throw new Error("Not enough strikes");
+  return { spot: spot, expiry: "live", strikes: strikes };
 }
 
 function runAnalysis() {
@@ -184,15 +216,17 @@ function runAnalysis() {
       })
       .catch(function (e) {
         console.log("Live failed:", e.message);
-        // FEATURE 1: Use last known data instead of mock
+        // Prefer last known live data. Do not switch to mock while authenticated.
         if (lastKnownChain) {
           console.log("Using last known data (spot:" + lastKnownChain.spot + ")");
           isLive = false;
           return lastKnownChain;
         }
-        console.log("No last known data, using mock");
-        isLive = false;
-        return getMockChain();
+        throw new Error(
+          "Live session active but no valid chain available. " +
+            "Please re-authenticate. Root cause: " +
+            e.message
+        );
       });
   } else {
     // No session — use last known if available, else mock
@@ -206,18 +240,50 @@ function runAnalysis() {
   }
 
   return p.then(function (chain) {
+    if (isLive && chain && typeof chain.spot === "number") {
+      lastLiveSpot = chain.spot;
+    }
+
+    var marketState = getMarketStateIST();
+    if (marketState.isClosed) {
+      if (
+        marketState.isAfterClose &&
+        dailyClose.date !== marketState.tradingDate &&
+        typeof lastLiveSpot === "number"
+      ) {
+        dailyClose = { date: marketState.tradingDate, spot: lastLiveSpot };
+      }
+    } else if (dailyClose.date !== marketState.tradingDate) {
+      // New trading day opened; reset stored close.
+      dailyClose = { date: marketState.tradingDate, spot: null };
+    }
+
+    var marketClosePoint =
+      typeof dailyClose.spot === "number"
+        ? dailyClose.spot
+        : (lastKnownResult && lastKnownResult.marketClosePoint) || chain.spot;
+
     var pcr = calcPCR(chain);
     var result = {
       timestamp: new Date().toISOString(),
       spot: chain.spot,
       expiry: chain.expiry,
       isLive: isLive,
+      market: {
+        isOpen: marketState.isOpen,
+        isClosed: marketState.isClosed,
+        session: marketState.session,
+        tradingDate: marketState.tradingDate,
+      },
+      marketClosePoint: marketClosePoint,
+      closePoint: marketClosePoint,
+      closingPoint: marketClosePoint,
       sr: findSupportResistance(chain),
       pcr: pcr,
       sentiment: calcSentiment(pcr),
       alphas: rankAlphaStrikes(chain),
       optionIntel: calcOptionIntel(chain, pcr),
-      trades: getTradesSummary(chain),
+      trades: getTradesSummary(chain, sessionOwner),
     };
     // Cache the result
     lastKnownResult = result;
@@ -225,9 +291,46 @@ function runAnalysis() {
   });
 }
 
+function getMarketStateIST(nowUtc) {
+  var now = nowUtc ? new Date(nowUtc) : new Date();
+  var istNow = new Date(
+    now.toLocaleString("en-US", {
+      timeZone: "Asia/Kolkata",
+    })
+  );
+  var day = istNow.getDay(); // 0 Sun, 6 Sat
+  var hour = istNow.getHours();
+  var min = istNow.getMinutes();
+  var totalMin = hour * 60 + min;
+  var openMin = 9 * 60 + 15;
+  var closeMin = 15 * 60 + 30;
+  var isWeekend = day === 0 || day === 6;
+  var isOpen = !isWeekend && totalMin >= openMin && totalMin <= closeMin;
+  var isAfterClose = !isWeekend && totalMin > closeMin;
+  var session = isWeekend
+    ? "WEEKEND"
+    : isOpen
+      ? "OPEN"
+      : isAfterClose
+        ? "POST_CLOSE"
+        : "PRE_OPEN";
+
+  var yyyy = istNow.getFullYear();
+  var mm = String(istNow.getMonth() + 1).padStart(2, "0");
+  var dd = String(istNow.getDate()).padStart(2, "0");
+  return {
+    isOpen: isOpen,
+    isClosed: !isOpen,
+    isAfterClose: isAfterClose,
+    session: session,
+    tradingDate: yyyy + "-" + mm + "-" + dd,
+  };
+}
+
 // ── WebSocket ──
 function wsHandshake(req, socket) {
   var key = req.headers["sec-websocket-key"];
+  if (!key) return false;
   var accept = crypto
     .createHash("sha1")
     .update(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11")
@@ -237,6 +340,7 @@ function wsHandshake(req, socket) {
       accept +
       "\r\n\r\n"
   );
+  return true;
 }
 
 function wsEncode(data) {
@@ -275,11 +379,18 @@ server.on("upgrade", function (req, socket) {
     socket.destroy();
     return;
   }
-  wsHandshake(req, socket);
+  if (!wsHandshake(req, socket)) {
+    socket.destroy();
+    return;
+  }
   clients.push(socket);
   console.log("WS connected, clients:", clients.length);
   runAnalysis().then(function (r) {
     wsSend(socket, { type: "analysis", ...r });
+  }).catch(function (e) {
+    console.error("WS bootstrap analysis error:", e.message);
+    wsSend(socket, { type: "analysis_error", error: e.message });
+    socket.destroy();
   });
   socket.on("close", function () {
     clients = clients.filter(function (s) {
@@ -330,12 +441,39 @@ app.post("/session", function (req, res) {
     return res
       .status(400)
       .json({ success: false, message: "jwt and apiKey required" });
-  session.jwt = jwt;
-  session.apiKey = apiKey;
-  session.clientId = clientId || "unknown";
-  console.log("Session set for:", session.clientId);
-  startPolling();
-  res.json({ success: true, message: "Session active. Live data starting." });
+  var incomingClientId = clientId || "unknown";
+  if (sessionOwner && sessionOwner !== incomingClientId) {
+    return res.status(409).json({
+      success: false,
+      message:
+        "A session is already active for another client. Reuse the same clientId to rotate credentials.",
+    });
+  }
+
+  // Validate credentials immediately to avoid false-success + mock fallback.
+  fetchLiveChain(jwt, apiKey)
+    .then(function (chain) {
+      session.clientId = incomingClientId;
+      sessionOwner = incomingClientId;
+      session.jwt = jwt;
+      session.apiKey = apiKey;
+      lastKnownChain = chain;
+      lastLiveSpot = chain.spot;
+      console.log("Session validated for:", session.clientId);
+      startPolling();
+      res.json({
+        success: true,
+        message: "Session active. Live data connected.",
+        spot: chain.spot,
+      });
+    })
+    .catch(function (e) {
+      res.status(401).json({
+        success: false,
+        message: "Broker authentication failed. Check API key/JWT/TOTP setup.",
+        details: e.message,
+      });
+    });
 });
 
 // FEATURE 3: Strike Analysis endpoint
@@ -363,6 +501,7 @@ app.get("/option-intel", function (req, res) {
 
 // Open a new paper trade
 app.post("/trade/open", function (req, res) {
+  var owner = sessionOwner || "unknown";
   var strike = parseFloat(req.body.strike);
   var side = (req.body.side || "").toUpperCase();
   var entryPrice = parseFloat(req.body.entryPrice);
@@ -376,6 +515,7 @@ app.post("/trade/open", function (req, res) {
 
   var trade = {
     id: tradeIdCounter++,
+    owner: owner,
     strike: strike,
     side: side,
     entryPrice: entryPrice,
@@ -389,24 +529,25 @@ app.post("/trade/open", function (req, res) {
     holdDuration: null,
   };
   trades.push(trade);
-  console.log("TRADE OPENED: #" + trade.id + " " + side + " " + strike + " @ " + entryPrice);
+  console.log("TRADE OPENED: #" + trade.id + " " + side + " " + strike + " @ " + entryPrice + " (owner:" + owner + ")");
 
-  // Immediately broadcast updated trades
+  // Broadcast only this owner's trades
   var chain = lastKnownChain || getMockChain();
-  var summary = getTradesSummary(chain);
-  broadcast({ type: "trades-update", trades: summary });
+  var summary = getTradesSummary(chain, owner);
+  broadcast({ type: "trades-update", owner: owner, trades: summary });
 
   res.json({ success: true, trade: trade });
 });
 
 // Close an open paper trade
 app.post("/trade/close", function (req, res) {
+  var owner = sessionOwner || "unknown";
   var tradeId = parseInt(req.body.tradeId);
   if (!tradeId) return res.status(400).json({ error: "tradeId required" });
 
   var trade = null;
   for (var i = 0; i < trades.length; i++) {
-    if (trades[i].id === tradeId && trades[i].status === "OPEN") {
+    if (trades[i].id === tradeId && trades[i].owner === owner && trades[i].status === "OPEN") {
       trade = trades[i];
       break;
     }
@@ -429,16 +570,17 @@ app.post("/trade/close", function (req, res) {
 
   console.log("TRADE CLOSED: #" + trade.id + " P&L: " + trade.pnl + " (" + trade.holdDuration + ")");
 
-  var summary = getTradesSummary(chain);
-  broadcast({ type: "trades-update", trades: summary });
+  var summary = getTradesSummary(chain, owner);
+  broadcast({ type: "trades-update", owner: owner, trades: summary });
 
   res.json({ success: true, trade: trade, summary: summary });
 });
 
 // Get all trades
 app.get("/trades", function (req, res) {
+  var owner = sessionOwner || "unknown";
   var chain = lastKnownChain || getMockChain();
-  res.json(getTradesSummary(chain));
+  res.json(getTradesSummary(chain, owner));
 });
 
 app.get("/", function (req, res) {

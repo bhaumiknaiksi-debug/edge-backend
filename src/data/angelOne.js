@@ -158,10 +158,17 @@ function transformChain(data) {
 
 // ── Get nearest weekly expiry (Thursday) ──
 function getNearestExpiry() {
-  const now  = new Date();
-  const day  = now.getDay(); // 0=Sun, 4=Thu
-  const diff = (4 - day + 7) % 7; // days until Thursday; 0 means "today"
-  const exp  = new Date(now);
+  // Use IST for expiry logic so Thursday-evening calls don't return the expired series
+  const now    = new Date();
+  const istNow = new Date(now.toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+  const day    = istNow.getDay(); // 0=Sun, 4=Thu
+  let diff     = (4 - day + 7) % 7; // days until Thursday; 0 means "today"
+  // If it's already Thursday and market has closed (after 15:30 IST), advance to next Thursday
+  if (diff === 0) {
+    const totalMin = istNow.getHours() * 60 + istNow.getMinutes();
+    if (totalMin >= 15 * 60 + 30) diff = 7;
+  }
+  const exp = new Date(now);
   exp.setDate(now.getDate() + diff);
 
   const dd  = String(exp.getDate()).padStart(2, "0");
