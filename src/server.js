@@ -42,51 +42,58 @@ function getMockChain() {
 
 // Fetch option chain using JWT (called from backend after receiving JWT from frontend)
 function fetchLiveChain(jwt, apiKey) {
-  return new Promise(function(resolve, reject) {
-    var headers = {
-      "Authorization": "Bearer " + jwt,
-      "Content-Type": "application/json",
-      "X-ClientLocalIP": "127.0.0.1",
-      "X-ClientPublicIP": "127.0.0.1",
-      "X-MACAddress": "00:00:00:00:00:00",
-      "X-PrivateKey": apiKey,
-      "X-SourceID": "WEB",
-      "Accept": "application/json"
-    };
-    var req = https.request({
-      hostname: "apiconnect.angelone.in",
-      path: "/rest/secure/angelbroking/market/v1/optionGreek?exchange=NFO&symboltoken=99926000&expiry=&strike=-1&optiontype=CE",
-      method: "GET",
-      headers: headers
-    }, function(res) {
-      var data = "";
-      res.on("data", function(c) { data += c; });
-      res.on("end", function() {
-        try {
-          var parsed = JSON.parse(data);
-          if (!parsed || !parsed.data || !Array.isArray(parsed.data)) {
-            return reject(new Error("Empty chain: " + data.slice(0, 100)));
-          }
-          var strikeMap = {}, spot = 0;
-          parsed.data.forEach(function(row) {
-            var s = row.strikePrice;
-            if (!strikeMap[s]) strikeMap[s] = { strike: s, ce: null, pe: null };
-            spot = row.underlyingValue || spot;
-            var side = { ltp: row.ltp||0, oi: row.openInterest||0, oiChange: row.changeinOpenInterest||0, volume: row.tradedVolume||0 };
-            if (row.optionType === "CE") strikeMap[s].ce = side;
-            else if (row.optionType === "PE") strikeMap[s].pe = side;
-          });
-          var strikes = Object.values(strikeMap)
-            .filter(function(r) { return r.ce && r.pe; })
-            .sort(function(a,b) { return a.strike - b.strike; })
-            .filter(function(r) { return Math.abs(r.strike - spot) <= 350; });
-          if (strikes.length < 3) return reject(new Error("Not enough strikes"));
-          resolve({ spot: spot, expiry: "live", strikes: strikes });
-        } catch(e) { reject(new Error("Bad JSON: " + data.slice(0, 80))); }
+  var headers = {
+    "Authorization": "Bearer " + jwt,
+    "Content-Type": "application/json",
+    "X-ClientLocalIP": "127.0.0.1",
+    "X-ClientPublicIP": "127.0.0.1",
+    "X-MACAddress": "00:00:00:00:00:00",
+    "X-PrivateKey": apiKey,
+    "X-SourceID": "WEB",
+    "Accept": "application/json"
+  };
+
+  function fetchType(optionType) {
+    return new Promise(function(resolve, reject) {
+      var req = https.request({
+        hostname: "apiconnect.angelone.in",
+        path: "/rest/secure/angelbroking/market/v1/optionGreek?exchange=NFO&symboltoken=99926000&expiry=&strike=-1&optiontype=" + optionType,
+        method: "GET",
+        headers: headers
+      }, function(res) {
+        var data = "";
+        res.on("data", function(c) { data += c; });
+        res.on("end", function() {
+          try {
+            var parsed = JSON.parse(data);
+            if (!parsed || !parsed.data || !Array.isArray(parsed.data)) {
+              return reject(new Error("Empty " + optionType + ": " + data.slice(0, 100)));
+            }
+            resolve(parsed.data);
+          } catch(e) { reject(new Error("Bad JSON (" + optionType + "): " + data.slice(0, 80))); }
+        });
       });
+      req.on("error", reject);
+      req.end();
     });
-    req.on("error", reject);
-    req.end();
+  }
+
+  return Promise.all([fetchType("CE"), fetchType("PE")]).then(function(results) {
+    var strikeMap = {}, spot = 0;
+    results[0].concat(results[1]).forEach(function(row) {
+      var s = row.strikePrice;
+      if (!strikeMap[s]) strikeMap[s] = { strike: s, ce: null, pe: null };
+      spot = row.underlyingValue || spot;
+      var side = { ltp: row.ltp||0, oi: row.openInterest||0, oiChange: row.changeinOpenInterest||0, volume: row.tradedVolume||0 };
+      if (row.optionType === "CE") strikeMap[s].ce = side;
+      else if (row.optionType === "PE") strikeMap[s].pe = side;
+    });
+    var strikes = Object.values(strikeMap)
+      .filter(function(r) { return r.ce && r.pe; })
+      .sort(function(a,b) { return a.strike - b.strike; })
+      .filter(function(r) { return Math.abs(r.strike - spot) <= 350; });
+    if (strikes.length < 3) throw new Error("Not enough strikes");
+    return { spot: spot, expiry: "live", strikes: strikes };
   });
 }
 
