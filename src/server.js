@@ -384,11 +384,11 @@ let backoffMs = 30000;
 async function poll() {
   try {
     const phase = getMarketPhase();
-    if (phase === 'CLOSED') {
-      backoffMs = 60000;
-      pollTimer = setTimeout(poll, backoffMs);
-      return;
-    }
+    if (phase === 'CLOSED' && lastResult !== null) {
+  backoffMs = 60000;
+  pollTimer = setTimeout(poll, backoffMs);
+  return;
+}
     const expiries = await fetchUpstoxExpiries();
     if (!expiries.length) throw new Error('No expiries returned');
     const nearestExpiry = expiries[0];
