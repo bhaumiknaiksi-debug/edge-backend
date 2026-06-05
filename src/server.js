@@ -79,7 +79,8 @@ function fetchUpstoxExpiries() {
           const parsed = JSON.parse(data);
           if (parsed.status === 'error') return reject(new Error(JSON.stringify(parsed.errors)));
           tokenExpired = false;
-          const expiries = parsed.data || [];
+          const contracts = parsed.data || [];
+          const expiries = [...new Set(contracts.map(c => c.expiry).filter(Boolean))];
           expiries.sort();
           resolve(expiries);
         } catch (e) { reject(e); }
@@ -415,7 +416,8 @@ async function poll() {
     }
     const expiries = await fetchUpstoxExpiries();
     if (!expiries.length) throw new Error('No expiries returned');
-    const nearestExpiry = String(expiries[0]).slice(0, 10);
+    console.log('[upstox] expiries returned:', JSON.stringify(expiries.slice(0, 3)));
+    const nearestExpiry = expiries[0];
     const chain = await fetchUpstoxChain(nearestExpiry);
     const result = analyse(chain, nearestExpiry);
     if (result) {
