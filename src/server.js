@@ -415,7 +415,7 @@ async function poll() {
     }
     const expiries = await fetchUpstoxExpiries();
     if (!expiries.length) throw new Error('No expiries returned');
-    const nearestExpiry = expiries[0];
+    const nearestExpiry = String(expiries[0]).slice(0, 10);
     const chain = await fetchUpstoxChain(nearestExpiry);
     const result = analyse(chain, nearestExpiry);
     if (result) {
