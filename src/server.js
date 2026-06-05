@@ -32,9 +32,6 @@ let lastFetchTime = null;
 let fetchErrorCount = 0;
 let lastError = null;
 
-// --- Instrument key (encoded once) ---
-const INSTRUMENT_KEY = encodeURIComponent('NSE_INDEX|Nifty 50');
-
 // --- Market hours ---
 function getMarketPhase() {
   const now = new Date();
@@ -65,16 +62,15 @@ function getNextOpenIST() {
 // --- Upstox: get nearest expiry ---
 function fetchUpstoxExpiries() {
   return new Promise((resolve, reject) => {
-    const opts = {
-      hostname: 'api.upstox.com',
-      path: '/v2/option/contract?instrument_key=' + INSTRUMENT_KEY,
+    const url = new URL('https://api.upstox.com/v2/option/contract');
+    url.searchParams.set('instrument_key', 'NSE_INDEX|Nifty 50');
+    const req = https.request(url, {
       method: 'GET',
       headers: {
         'Authorization': 'Bearer ' + UPSTOX_TOKEN,
         'Accept': 'application/json'
       }
-    };
-    const req = https.request(opts, (res) => {
+    }, (res) => {
       let data = '';
       res.on('data', d => data += d);
       res.on('end', () => {
@@ -98,17 +94,16 @@ function fetchUpstoxExpiries() {
 // --- Upstox: fetch option chain ---
 function fetchUpstoxChain(expiryDate) {
   return new Promise((resolve, reject) => {
-    const reqPath = '/v2/option/chain?instrument_key=' + INSTRUMENT_KEY + '&expiry_date=' + expiryDate;
-    const opts = {
-      hostname: 'api.upstox.com',
-      path: reqPath,
+    const url = new URL('https://api.upstox.com/v2/option/chain');
+    url.searchParams.set('instrument_key', 'NSE_INDEX|Nifty 50');
+    url.searchParams.set('expiry_date', expiryDate);
+    const req = https.request(url, {
       method: 'GET',
       headers: {
         'Authorization': 'Bearer ' + UPSTOX_TOKEN,
         'Accept': 'application/json'
       }
-    };
-    const req = https.request(opts, (res) => {
+    }, (res) => {
       let data = '';
       res.on('data', d => data += d);
       res.on('end', () => {
@@ -459,5 +454,8 @@ const server = http.createServer(app);
 
 server.listen(PORT, () => {
   console.log('EDGE backend on port', PORT);
+  const probeUrl = new URL('https://api.upstox.com/v2/option/contract');
+  probeUrl.searchParams.set('instrument_key', 'NSE_INDEX|Nifty 50');
+  console.log('[upstox] expiry URL constructed:', probeUrl.toString());
   poll();
 });
