@@ -63,7 +63,7 @@ function fetchUpstoxExpiries() {
   return new Promise((resolve, reject) => {
     const opts = {
       hostname: 'api.upstox.com',
-      path: '/v2/option/contract?instrument_key=NSE_INDEX%7CNifty+50',
+      path: '/v2/option/contract?instrument_key=NSE_INDEX%7CNifty%2050',
       method: 'GET',
       headers: {
         'Authorization': 'Bearer ' + UPSTOX_TOKEN,
@@ -94,7 +94,7 @@ function fetchUpstoxExpiries() {
 // --- Upstox: fetch option chain ---
 function fetchUpstoxChain(expiryDate) {
   return new Promise((resolve, reject) => {
-    const path = '/v2/option/chain?instrument_key=NSE_INDEX%7CNifty+50&expiry_date=' + expiryDate;
+    const path = '/v2/option/chain?instrument_key=NSE_INDEX%7CNifty%2050&expiry_date=' + expiryDate;
     const opts = {
       hostname: 'api.upstox.com',
       path,
