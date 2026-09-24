@@ -6,6 +6,7 @@ const { classifyRegime } = require('./regimeEngine');
 const { selectStrategy } = require('./strategyEngine');
 const { qualifySetup } = require('./setupEngine');
 const { classifyOptionChainFlow } = require('./optionFlowEngine');
+const { buildEntryPlan } = require('./entryEngine');
 
 const strikes = [
   { strike: 22900, ceOI: 100, peOI: 300, cePrevOI: 80, pePrevOI: 260, ceLTP: 100, peLTP: 70 },
@@ -41,5 +42,48 @@ const strategy = selectStrategy(regime, 'HIGH');
 assert(strategy && strategy.name);
 const setup = qualifySetup({ regime, strategy: strategy.name, tradeLegs: {}, marketPhase: 'OPEN' });
 assert.strictEqual(setup.action, 'WAIT_FOR_ENTRY');
+
+const entry = buildEntryPlan({
+  strategy: 'BEAR_CALL_SPREAD',
+  spot: 23000,
+  support: 22900,
+  resistance: 23100,
+  ceWall: 23150,
+  peWall: 22900,
+  expectedMove: { low: 22900, high: 23100 },
+  tradeLegs: {
+    sellLeg: { strike: 23100, premium: '50', bid: 49, ask: 51 },
+    buyLeg: { strike: 23200, premium: '25', bid: 24, ask: 26 },
+    netCredit: '25'
+  },
+  regime,
+  features,
+  marketPhase: 'OPEN',
+  dte: 2
+});
+assert.strictEqual(entry.status, 'READY_TO_ENTER');
+assert.strictEqual(entry.type, 'NET_CREDIT_ZONE');
+assert(entry.premium.available);
+assert(entry.timing.validForMinutes > 0);
+
+const blockedEntry = buildEntryPlan({
+  strategy: 'BEAR_CALL_SPREAD',
+  spot: 23120,
+  support: 22900,
+  resistance: 23100,
+  ceWall: 23150,
+  peWall: 22900,
+  expectedMove: { low: 23020, high: 23220 },
+  tradeLegs: {
+    sellLeg: { strike: 23100, premium: '50', bid: 49, ask: 51 },
+    buyLeg: { strike: 23200, premium: '25', bid: 24, ask: 26 },
+    netCredit: '25'
+  },
+  regime,
+  features,
+  marketPhase: 'OPEN',
+  dte: 2
+});
+assert.strictEqual(blockedEntry.status, 'WAIT_FOR_TRIGGER');
 
 console.log('EDGE vNext engine tests passed');
