@@ -1,0 +1,56 @@
+'use strict';
+
+/**
+ * EDGE market feature engine.
+ * Pure transformation layer: no strategy selection and no trade recommendation.
+ * Missing inputs stay null rather than being invented.
+ */
+function buildMarketFeatures(input) {
+  const { spot, strikes, maxPain, avgIV, ivRegime, atmIndex, windowSize = 7 } = input;
+  if (!spot || !Array.isArray(strikes) || !strikes.length) throw new Error('Invalid market feature input');
+
+  const lo = Math.max(0, atmIndex - windowSize);
+  const hi = Math.min(strikes.length - 1, atmIndex + windowSize);
+  const window = strikes.slice(lo, hi + 1);
+
+  const sum = (arr, key) => arr.reduce((n, x) => n + (Number(x[key]) || 0), 0);
+  const ceOI = sum(window, 'ceOI');
+  const peOI = sum(window, 'peOI');
+  const ceOIChange = window.reduce((n, x) => n + ((Number(x.ceOI) || 0) - (Number(x.cePrevOI) || 0)), 0);
+  const peOIChange = window.reduce((n, x) => n + ((Number(x.peOI) || 0) - (Number(x.pePrevOI) || 0)), 0);
+
+  const pcr = peOI / (ceOI || 1);
+  const pcrChangeRatio = peOIChange / (Math.abs(ceOIChange) || 1);
+  const priceVsMaxPainPct = maxPain ? ((spot - maxPain) / maxPain) * 100 : null;
+
+  const ceWallRow = window.filter(x => x.strike >= spot).sort((a,b) => b.ceOI - a.ceOI)[0] || null;
+  const peWallRow = window.filter(x => x.strike <= spot).sort((a,b) => b.peOI - a.peOI)[0] || null;
+
+  return {
+    spot,
+    sessionChangePct: null,       // requires an independent spot/open feed
+    trend30mPct: null,            // requires intraday candles
+    futuresPriceChangePct: null,  // requires NIFTY futures feed
+    futuresOIChangePct: null,     // requires NIFTY futures feed
+    futuresBuildUp: 'UNAVAILABLE',
+    pcr,
+    pcrChangeRatio,
+    ceOI,
+    peOI,
+    ceOIChange,
+    peOIChange,
+    priceVsMaxPainPct,
+    maxPain,
+    avgIV,
+    ivRegime,
+    ceWall: ceWallRow ? ceWallRow.strike : null,
+    peWall: peWallRow ? peWallRow.strike : null,
+    dataCompleteness: {
+      optionChain: true,
+      priceTrend: false,
+      futures: false
+    }
+  };
+}
+
+module.exports = { buildMarketFeatures };
