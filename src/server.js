@@ -1,5 +1,10 @@
 'use strict';
 
+const { buildMarketFeatures } = require('./engine/marketFeatureEngine');
+const { classifyRegime } = require('./engine/regimeEngine');
+const { selectStrategy } = require('./engine/strategyEngine');
+const { qualifySetup } = require('./engine/setupEngine');
+
 const http = require('http');
 const https = require('https');
 const express = require('express');
@@ -319,31 +324,29 @@ function analyse(chain, expiryDate) {
   else if (totalScore > -30) { bias = 'MILD_BEARISH'; biasLabel = 'Mild Bearish'; }
   else { bias = 'BEARISH'; biasLabel = 'Bearish'; }
 
-  // --- Strategy mapping (IV-aware, signal-consistent) ---
-  let strategy, strategyReason;
-  const isBullish = bias === 'BULLISH' || bias === 'MILD_BULLISH';
-  const isBearish = bias === 'BEARISH' || bias === 'MILD_BEARISH';
-  const isNeutral = bias === 'NEUTRAL';
+  // --- vNext regime → strategy pipeline ---
+  // Keep the legacy factor calculations above for explainability/backward compatibility,
+  // but make the new regime engine authoritative for direction and strategy expression.
+  const marketFeatures = buildMarketFeatures({
+    spot, strikes, maxPain, avgIV, ivRegime, atmIndex, windowSize: WINDOW
+  });
+  const regime = classifyRegime(marketFeatures);
+  const strategyPick = selectStrategy(regime, ivRegime);
+  let strategy = strategyPick.name;
+  let strategyReason = strategyPick.reason;
 
-  if (isBullish && ivRegime === 'HIGH') {
-    strategy = 'BULL_PUT_SPREAD';
-    strategyReason = 'Bullish bias + High IV favours selling premium via Bull Put Spread';
-  } else if (isBullish && ivRegime !== 'HIGH') {
-    strategy = 'LONG_CALL';
-    strategyReason = 'Bullish bias + Low/Normal IV favours directional Long Call';
-  } else if (isBearish && ivRegime === 'HIGH') {
-    strategy = 'BEAR_CALL_SPREAD';
-    strategyReason = 'Bearish bias + High IV favours selling premium via Bear Call Spread';
-  } else if (isBearish && ivRegime !== 'HIGH') {
-    strategy = 'LONG_PUT';
-    strategyReason = 'Bearish bias + Low/Normal IV favours directional Long Put';
-  } else if (isNeutral && ivRegime === 'HIGH') {
-    strategy = 'IRON_CONDOR';
-    strategyReason = 'Neutral market + High IV - ideal for Iron Condor premium collection';
-  } else {
-    strategy = 'WAIT';
-    strategyReason = 'No clear edge - low IV + neutral bias, wait for setup';
-  }
+  const biasMap = {
+    STRONG_BULLISH: 'BULLISH',
+    BULLISH: 'BULLISH',
+    MILD_BULLISH: 'MILD_BULLISH',
+    NEUTRAL: 'NEUTRAL',
+    MILD_BEARISH: 'MILD_BEARISH',
+    BEARISH: 'BEARISH',
+    STRONG_BEARISH: 'BEARISH'
+  };
+  const bias = biasMap[regime.direction] || 'NEUTRAL';
+  const biasLabel = regime.label;
+  const confidence = regime.confidence;
 
   // --- Delta-based strike selection (with tiered fallback for low liquidity / high IV) ---
   // SELL leg: near-OTM, delta 0.20-0.35 (collects meaningful premium)
@@ -497,6 +500,14 @@ function analyse(chain, expiryDate) {
       };
     }
   }
+
+  // Setup is deliberately evaluated after the real legs exist.
+  const setup = qualifySetup({
+    regime,
+    strategy,
+    tradeLegs,
+    marketPhase: getMarketPhase()
+  });
 
   // --- Smart warnings ---
   const warnings = [];
@@ -719,14 +730,34 @@ function analyse(chain, expiryDate) {
       ceDelta: s.ceDelta, ceIV: s.ceIV,
       ceTheta: s.ceTheta, ceVega: s.ceVega
     })),
-    decision: { strategy, reason: strategyReason, tradeLegs },
+    decision: {
+      strategy,
+      reason: strategyReason,
+      tradeLegs,
+      action: setup.action,
+      setupQualified: setup.qualified,
+      blockers: setup.blockers,
+      regime: {
+        direction: regime.direction,
+        label: regime.label,
+        score: regime.score,
+        confidence: regime.confidence,
+        evidenceCoverage: regime.evidenceCoverage,
+        missing: regime.missing,
+        factors: regime.factors
+      }
+    },
     intel: { maxPain, ceWritingZone, peWritingZone, ceBuildup: ceBuildup.length, peBuildup: peBuildup.length,
       oiClusters: alphas.map(s => s.strike) },
     warnings,
     explain: { factors, signalGrade, thesis, counterarguments, invalidation },
     expectedMove: { points: expectedMovePts, low: emLow, high: emHigh, strikeSafety },
     structure: { writerDominance, peWall, ceWall, rangeWidth, rangePct, compression, breakoutRisk, premiumSelling },
-    market: { phase: getMarketPhase() }
+    market: {
+      phase: getMarketPhase(),
+      features: marketFeatures,
+      regime
+    }
   };
 }
 
