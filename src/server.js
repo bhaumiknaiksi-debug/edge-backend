@@ -6,6 +6,7 @@ const { selectStrategy } = require('./engine/strategyEngine');
 const { qualifySetup } = require('./engine/setupEngine');
 const { fetchMarketContext } = require('./data/marketContext');
 const { classifyOptionChainFlow } = require('./engine/optionFlowEngine');
+const { buildEntryPlan } = require('./engine/entryEngine');
 
 const http = require('http');
 const https = require('https');
@@ -429,8 +430,8 @@ function analyse(chain, expiryDate, marketContext = null) {
       const rrr = maxLoss > 0 ? (maxProfit / maxLoss).toFixed(2) : 'N/A';
       const pop = Math.round((1 - sellLeg.ceDelta) * 100);
       tradeLegs = {
-        sellLeg: { contractId: buildContractId(expiryDate, sellLeg.strike, 'CE'), strike: sellLeg.strike, premium: sellLeg.ceLTP.toFixed(2), type: 'CE' },
-        buyLeg:  { contractId: buildContractId(expiryDate, buyLeg.strike,  'CE'), strike: buyLeg.strike,  premium: buyLeg.ceLTP.toFixed(2),  type: 'CE' },
+        sellLeg: { contractId: buildContractId(expiryDate, sellLeg.strike, 'CE'), strike: sellLeg.strike, premium: sellLeg.ceLTP.toFixed(2), bid: sellLeg.ceBid, ask: sellLeg.ceAsk, type: 'CE' },
+        buyLeg:  { contractId: buildContractId(expiryDate, buyLeg.strike,  'CE'), strike: buyLeg.strike,  premium: buyLeg.ceLTP.toFixed(2), bid: buyLeg.ceBid, ask: buyLeg.ceAsk, type: 'CE' },
         netCredit: netCredit.toFixed(2),     netCreditRupees: pointsToRupees(netCredit),
         maxProfit: maxProfit.toFixed(2),     maxProfitRupees: pointsToRupees(maxProfit),
         maxLoss:   maxLoss.toFixed(2),       maxLossRupees:   pointsToRupees(maxLoss),
@@ -452,8 +453,8 @@ function analyse(chain, expiryDate, marketContext = null) {
       const rrr = maxLoss > 0 ? (maxProfit / maxLoss).toFixed(2) : 'N/A';
       const pop = Math.round((1 - Math.abs(sellLeg.peDelta)) * 100);
       tradeLegs = {
-        sellLeg: { contractId: buildContractId(expiryDate, sellLeg.strike, 'PE'), strike: sellLeg.strike, premium: sellLeg.peLTP.toFixed(2), type: 'PE' },
-        buyLeg:  { contractId: buildContractId(expiryDate, buyLeg.strike,  'PE'), strike: buyLeg.strike,  premium: buyLeg.peLTP.toFixed(2),  type: 'PE' },
+        sellLeg: { contractId: buildContractId(expiryDate, sellLeg.strike, 'PE'), strike: sellLeg.strike, premium: sellLeg.peLTP.toFixed(2), bid: sellLeg.peBid, ask: sellLeg.peAsk, type: 'PE' },
+        buyLeg:  { contractId: buildContractId(expiryDate, buyLeg.strike,  'PE'), strike: buyLeg.strike,  premium: buyLeg.peLTP.toFixed(2),  bid: buyLeg.peBid, ask: buyLeg.peAsk, type: 'PE' },
         netCredit: netCredit.toFixed(2),     netCreditRupees: pointsToRupees(netCredit),
         maxProfit: maxProfit.toFixed(2),     maxProfitRupees: pointsToRupees(maxProfit),
         maxLoss:   maxLoss.toFixed(2),       maxLossRupees:   pointsToRupees(maxLoss),
@@ -466,7 +467,7 @@ function analyse(chain, expiryDate, marketContext = null) {
   } else if (strategy === 'LONG_CALL' && buyCEStrikes.length) {
     const leg = buyCEStrikes.sort((a, b) => Math.abs(a.ceDelta - 0.50) - Math.abs(b.ceDelta - 0.50))[0];
     tradeLegs = {
-      buyLeg: { contractId: buildContractId(expiryDate, leg.strike, 'CE'), strike: leg.strike, premium: leg.ceLTP.toFixed(2), type: 'CE' },
+      buyLeg: { contractId: buildContractId(expiryDate, leg.strike, 'CE'), strike: leg.strike, premium: leg.ceLTP.toFixed(2), bid: leg.ceBid, ask: leg.ceAsk, type: 'CE' },
       legDelta: leg.ceDelta,
       maxProfit: 'Unlimited',  maxProfitRupees: 'Unlimited',
       maxLoss: leg.ceLTP.toFixed(2),  maxLossRupees: pointsToRupees(leg.ceLTP),
@@ -478,7 +479,7 @@ function analyse(chain, expiryDate, marketContext = null) {
   } else if (strategy === 'LONG_PUT' && buyPEStrikes.length) {
     const leg = buyPEStrikes.sort((a, b) => Math.abs(Math.abs(a.peDelta) - 0.50) - Math.abs(Math.abs(b.peDelta) - 0.50))[0];
     tradeLegs = {
-      buyLeg: { contractId: buildContractId(expiryDate, leg.strike, 'PE'), strike: leg.strike, premium: leg.peLTP.toFixed(2), type: 'PE' },
+      buyLeg: { contractId: buildContractId(expiryDate, leg.strike, 'PE'), strike: leg.strike, premium: leg.peLTP.toFixed(2), bid: leg.peBid, ask: leg.peAsk, type: 'PE' },
       legDelta: Math.abs(leg.peDelta),
       maxProfit: (leg.strike - leg.peLTP).toFixed(2),  maxProfitRupees: pointsToRupees(leg.strike - leg.peLTP),
       maxLoss: leg.peLTP.toFixed(2),                   maxLossRupees: pointsToRupees(leg.peLTP),
@@ -504,10 +505,10 @@ function analyse(chain, expiryDate, marketContext = null) {
       const rrr = maxLoss > 0 ? (netCredit / maxLoss).toFixed(2) : 'N/A';
       const pop = Math.round(Math.max(0, Math.min(100, (1 - ceShort.ceDelta - Math.abs(peShort.peDelta)) * 100)));
       tradeLegs = {
-        ceShort: { contractId: buildContractId(expiryDate, ceShort.strike, 'CE'), strike: ceShort.strike, premium: ceShort.ceLTP.toFixed(2), type: 'CE' },
-        ceLong:  { contractId: buildContractId(expiryDate, ceLong.strike,  'CE'), strike: ceLong.strike,  premium: ceLong.ceLTP.toFixed(2),  type: 'CE' },
-        peShort: { contractId: buildContractId(expiryDate, peShort.strike, 'PE'), strike: peShort.strike, premium: peShort.peLTP.toFixed(2), type: 'PE' },
-        peLong:  { contractId: buildContractId(expiryDate, peLong.strike,  'PE'), strike: peLong.strike,  premium: peLong.peLTP.toFixed(2),  type: 'PE' },
+        ceShort: { contractId: buildContractId(expiryDate, ceShort.strike, 'CE'), strike: ceShort.strike, premium: ceShort.ceLTP.toFixed(2), bid: ceShort.ceBid, ask: ceShort.ceAsk, type: 'CE' },
+        ceLong:  { contractId: buildContractId(expiryDate, ceLong.strike,  'CE'), strike: ceLong.strike,  premium: ceLong.ceLTP.toFixed(2), bid: ceLong.ceBid, ask: ceLong.ceAsk, type: 'CE' },
+        peShort: { contractId: buildContractId(expiryDate, peShort.strike, 'PE'), strike: peShort.strike, premium: peShort.peLTP.toFixed(2), bid: peShort.peBid, ask: peShort.peAsk, type: 'PE' },
+        peLong:  { contractId: buildContractId(expiryDate, peLong.strike,  'PE'), strike: peLong.strike,  premium: peLong.peLTP.toFixed(2), bid: peLong.peBid, ask: peLong.peAsk, type: 'PE' },
         netCredit: netCredit.toFixed(2),  netCreditRupees: pointsToRupees(netCredit),
         maxProfit: netCredit.toFixed(2),  maxProfitRupees: pointsToRupees(netCredit),
         maxLoss:   maxLoss.toFixed(2),    maxLossRupees:   pointsToRupees(maxLoss),
@@ -569,7 +570,25 @@ function analyse(chain, expiryDate, marketContext = null) {
     }
   }
 
-  // --- Writer dominance (windowed OI ratio - replaces raw buildup counts) ---
+  // --- Entry engine ---
+// Converts the qualified structure into a conditional execution plan.
+// The top-level setup action remains backward-compatible; entry status lives under decision.entry.
+const entryPlan = buildEntryPlan({
+  strategy,
+  spot,
+  support: support.strike,
+  resistance: resistance.strike,
+  ceWall,
+  peWall,
+  expectedMove: { points: expectedMovePts, low: emLow, high: emHigh },
+  tradeLegs,
+  regime,
+  features: marketFeatures,
+  marketPhase: getMarketPhase(),
+  dte
+});
+
+// --- Writer dominance (windowed OI ratio - replaces raw buildup counts) ---
   const domRatio = windowPEOI / (windowCEOI || 1);
   const writerDominance =
     domRatio > 1.5  ? { label: 'PUT WRITERS LEADING',  strength: 'STRONG',   lean: 'BULLISH' } :
@@ -756,6 +775,7 @@ function analyse(chain, expiryDate, marketContext = null) {
       action: setup.action,
       setupQualified: setup.qualified,
       blockers: setup.blockers,
+      entry: entryPlan,
       regime: {
         direction: regime.direction,
         label: regime.label,
