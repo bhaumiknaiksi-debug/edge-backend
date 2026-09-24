@@ -43,7 +43,7 @@
     "dte": 2,
     "features": {
       "trend30mPct": 0.2,
-      "sessionChangePct": -0.3,
+      "sessionChangePct": 0.3,
       "optionFlow": { "aggregate": { "label": "MIXED_FLOW" } }
     },
     "tradeLegs": {
