@@ -6,7 +6,10 @@
  * Missing inputs stay null rather than being invented.
  */
 function buildMarketFeatures(input) {
-  const { spot, strikes, maxPain, avgIV, ivRegime, atmIndex, windowSize = 7 } = input;
+  const {
+    spot, strikes, maxPain, avgIV, ivRegime, atmIndex, windowSize = 7,
+    sessionChangePct = null, trend30mPct = null, futures = null
+  } = input;
   if (!spot || !Array.isArray(strikes) || !strikes.length) throw new Error('Invalid market feature input');
 
   const lo = Math.max(0, atmIndex - windowSize);
@@ -16,8 +19,8 @@ function buildMarketFeatures(input) {
   const sum = (arr, key) => arr.reduce((n, x) => n + (Number(x[key]) || 0), 0);
   const ceOI = sum(window, 'ceOI');
   const peOI = sum(window, 'peOI');
-  const ceOIChange = window.reduce((n, x) => n + ((Number(x.ceOI) || 0) - (Number(x.cePrevOI) || 0)), 0);
-  const peOIChange = window.reduce((n, x) => n + ((Number(x.peOI) || 0) - (Number(x.pePrevOI) || 0)), 0);
+  const ceOIChange = window.reduce((n, x) => n + (Number(x.ceOIChange) || 0), 0);
+  const peOIChange = window.reduce((n, x) => n + (Number(x.peOIChange) || 0), 0);
 
   const pcr = peOI / (ceOI || 1);
   const pcrChangeRatio = peOIChange / (Math.abs(ceOIChange) || 1);
@@ -28,11 +31,11 @@ function buildMarketFeatures(input) {
 
   return {
     spot,
-    sessionChangePct: null,       // requires an independent spot/open feed
-    trend30mPct: null,            // requires intraday candles
-    futuresPriceChangePct: null,  // requires NIFTY futures feed
-    futuresOIChangePct: null,     // requires NIFTY futures feed
-    futuresBuildUp: 'UNAVAILABLE',
+    sessionChangePct,
+    trend30mPct,
+    futuresPriceChangePct: futures?.priceChangePct ?? null,
+    futuresOIChangePct: futures?.oiChangePct ?? null,
+    futuresBuildUp: futures?.buildup || 'UNAVAILABLE',
     pcr,
     pcrChangeRatio,
     ceOI,
@@ -48,7 +51,7 @@ function buildMarketFeatures(input) {
     dataCompleteness: {
       optionChain: true,
       priceTrend: false,
-      futures: false
+      futures: !!futures
     }
   };
 }
