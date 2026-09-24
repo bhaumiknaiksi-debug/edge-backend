@@ -51,8 +51,8 @@ function buildMarketFeatures(input) {
     peWall: peWallRow ? peWallRow.strike : null,
     dataCompleteness: {
       optionChain: true,
-      priceTrend: false,
-      futures: !!futures
+      priceTrend: Number.isFinite(sessionChangePct) || Number.isFinite(trend30mPct),
+      futures: !!futures && Number.isFinite(futures.priceChangePct) && Number.isFinite(futures.oiChangePct)
     }
   };
 }
