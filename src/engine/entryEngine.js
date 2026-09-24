@@ -176,7 +176,7 @@ function buildPremiumZone(strategy, tradeLegs) {
         type: 'NET_CREDIT',
         low: q.executable,
         high: q.indicative,
-        doNotChaseBelow: round(Math.max(0, q.executable * 0.95)),
+        doNotChaseBelow: q.executable,
         basis: 'Current executable credit from short-leg bid minus long-leg ask; indicative credit uses current LTPs.'
       };
     }
@@ -186,7 +186,7 @@ function buildPremiumZone(strategy, tradeLegs) {
         type: 'NET_CREDIT',
         low: round(current * 0.97),
         high: round(current),
-        doNotChaseBelow: round(current * 0.92),
+        doNotChaseBelow: round(current * 0.97),
         basis: 'Current net credit; bid/ask unavailable, so zone is indicative only.'
       };
     }
