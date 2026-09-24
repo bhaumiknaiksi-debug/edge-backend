@@ -305,9 +305,9 @@ function analyse(chain, expiryDate) {
 
   // Confidence (0..100): magnitude + coherence bonus + IV alignment bonus
   let legacyConfidence = Math.abs(directionalScore);
-  if (allAligned && activeSubs.length >= 2) confidence += 15;
-  if (allAligned && activeSubs.length === 3) confidence += 10;
-  if (ivState === 'CONFIRMS') confidence += 15;
+  if (allAligned && activeSubs.length >= 2) legacyConfidence += 15;
+  if (allAligned && activeSubs.length === 3) legacyConfidence += 10;
+  if (ivState === 'CONFIRMS') legacyConfidence += 15;
   if (ivState === 'CONTRADICTS') confidence -= 15;
   legacyConfidence = Math.round(Math.max(0, Math.min(100, legacyConfidence)));
 
