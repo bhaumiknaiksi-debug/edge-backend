@@ -38,6 +38,16 @@ function classifyRegime(features) {
     factors.push({ key: 'TREND_30M', label: '30m price trend', score: t, available: true });
   } else factors.push({ key: 'TREND_30M', label: '30m price trend', score: 0, available: false });
 
+  // Option flow is an inferred positioning input: OI + premium movement, not OI alone.
+  const flowScore = Number(features.optionFlow?.aggregate?.score);
+  const flowAvailable = Number.isFinite(flowScore) && (features.optionFlow?.aggregate?.classifiedContracts || 0) > 0;
+  factors.push({
+    key: 'OPTION_FLOW',
+    label: features.optionFlow?.aggregate?.label || 'Option flow',
+    score: flowAvailable ? Math.max(-25, Math.min(25, flowScore)) : 0,
+    available: flowAvailable
+  });
+
   // Futures price/OI relationship is a first-class positioning regime input.
   if (Number.isFinite(features.futuresPriceChangePct) && Number.isFinite(features.futuresOIChangePct)) {
     const p = features.futuresPriceChangePct;
