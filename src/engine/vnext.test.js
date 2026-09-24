@@ -15,11 +15,17 @@ const strikes = [
 ];
 
 const features = buildMarketFeatures({
-  spot: 23000, strikes, maxPain: 23100, avgIV: 22, ivRegime: 'HIGH', atmIndex: 2
+  spot: 23000, strikes, maxPain: 23100, avgIV: 22, ivRegime: 'HIGH', atmIndex: 2,
+  sessionChangePct: -1.2,
+  trend30mPct: -0.6,
+  futures: { priceChangePct: -1.1, oiChangePct: 2.4, buildup: 'SHORT_BUILDUP' }
 });
 assert(features.pcr > 0);
 const regime = classifyRegime(features);
 assert(regime && regime.direction);
+assert(regime.factors.some(f => f.key === 'FUTURES_BUILDUP' && f.available));
+assert(regime.factors.some(f => f.key === 'TREND_30M' && f.available));
+assert.strictEqual(regime.direction, 'STRONG_BEARISH');
 const strategy = selectStrategy(regime, 'HIGH');
 assert(strategy && strategy.name);
 const setup = qualifySetup({ regime, strategy: strategy.name, tradeLegs: {}, marketPhase: 'OPEN' });
