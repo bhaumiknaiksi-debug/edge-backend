@@ -27,6 +27,17 @@ function validQuote(leg) {
 }
 
 function creditQuote(tradeLegs) {
+  if (tradeLegs.ceShort && tradeLegs.ceLong && tradeLegs.peShort && tradeLegs.peLong &&
+      validQuote(tradeLegs.ceShort) && validQuote(tradeLegs.ceLong) &&
+      validQuote(tradeLegs.peShort) && validQuote(tradeLegs.peLong)) {
+    const executable = n(tradeLegs.ceShort.bid) - n(tradeLegs.ceLong.ask) +
+      n(tradeLegs.peShort.bid) - n(tradeLegs.peLong.ask);
+    const indicative = n(tradeLegs.netCredit);
+    if (executable > 0 && indicative !== null && indicative > 0) {
+      return { executable: round(executable), indicative: round(indicative), spreadCost: round(Math.max(0, indicative - executable)) };
+    }
+  }
+
   const shortLeg = tradeLegs.sellLeg;
   const longLeg = tradeLegs.buyLeg;
   if (!validQuote(shortLeg) || !validQuote(longLeg)) return null;
@@ -57,7 +68,7 @@ function flowLabel(features) {
   return features?.optionFlow?.aggregate?.label || 'UNAVAILABLE';
 }
 
-function buildTrigger({ strategy, spot, support, resistance, ceWall, peWall, regime, features }) {
+function buildTrigger({ strategy, spot, support, resistance, ceWall, peWall, regime, features, tradeLegs }) {
   const s = n(spot);
   const sup = n(support);
   const res = n(resistance);
@@ -75,7 +86,8 @@ function buildTrigger({ strategy, spot, support, resistance, ceWall, peWall, reg
   }
 
   if (strategy === 'BEAR_CALL_SPREAD') {
-    const belowShort = tradeShortCondition(s, ce);
+    const shortStrike = n(tradeLegs?.sellLeg?.strike);
+    const belowShort = tradeShortCondition(s, shortStrike);
     const bearishConfirmation = (trend !== null && trend <= 0) || (session !== null && session <= 0) || bearishFlow;
     const rejectionZone = ce !== null && s <= ce && s >= res;
     const ready = belowShort && bearishConfirmation;
@@ -92,7 +104,8 @@ function buildTrigger({ strategy, spot, support, resistance, ceWall, peWall, reg
   }
 
   if (strategy === 'BULL_PUT_SPREAD') {
-    const aboveShort = pe !== null ? s > pe : s > sup;
+    const shortStrike = n(tradeLegs?.sellLeg?.strike);
+    const aboveShort = shortStrike !== null ? s > shortStrike : (pe !== null ? s > pe : s > sup);
     const bullishConfirmation = (trend !== null && trend >= 0) || (session !== null && session >= 0) || bullishFlow;
     const supportHold = s >= sup;
     const ready = aboveShort && supportHold && bullishConfirmation;
