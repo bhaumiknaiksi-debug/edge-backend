@@ -117,6 +117,7 @@ async function fetchExpiredOptionWindow({
 }
 
 module.exports = {
+  normalizeCandle,
   getExpiredContracts,
   getExpiredCandle,
   fetchExpiredOptionWindow
