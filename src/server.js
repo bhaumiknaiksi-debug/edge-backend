@@ -7,6 +7,8 @@ const { qualifySetup } = require('./engine/setupEngine');
 const { fetchMarketContext } = require('./data/marketContext');
 const { classifyOptionChainFlow } = require('./engine/optionFlowEngine');
 const { buildEntryPlan } = require('./engine/entryEngine');
+const { buildRiskPlan } = require('./engine/riskEngine');
+const { buildManagementPlan } = require('./engine/managementEngine');
 
 const http = require('http');
 const https = require('https');
@@ -570,25 +572,7 @@ function analyse(chain, expiryDate, marketContext = null) {
     }
   }
 
-  // --- Entry engine ---
-// Converts the qualified structure into a conditional execution plan.
-// The top-level setup action remains backward-compatible; entry status lives under decision.entry.
-const entryPlan = buildEntryPlan({
-  strategy,
-  spot,
-  support: support.strike,
-  resistance: resistance.strike,
-  ceWall,
-  peWall,
-  expectedMove: { points: expectedMovePts, low: emLow, high: emHigh },
-  tradeLegs,
-  regime,
-  features: marketFeatures,
-  marketPhase: getMarketPhase(),
-  dte
-});
-
-// --- Writer dominance (windowed OI ratio - replaces raw buildup counts) ---
+  // --- Writer dominance (windowed OI ratio - replaces raw buildup counts) ---
   const domRatio = windowPEOI / (windowCEOI || 1);
   const writerDominance =
     domRatio > 1.5  ? { label: 'PUT WRITERS LEADING',  strength: 'STRONG',   lean: 'BULLISH' } :
@@ -608,6 +592,44 @@ const entryPlan = buildEntryPlan({
   const breakoutRisk = compression === 'COMPRESSED' ? (ivRegime === 'HIGH' ? 'ELEVATED' : 'MODERATE')
                      : nearWall ? 'MODERATE' : 'LOW';
   const premiumSelling = ivRegime === 'HIGH' ? 'FAVOURABLE' : ivRegime === 'NORMAL' ? 'NEUTRAL' : 'UNFAVOURABLE';
+
+  // --- Phase 5/6 execution pipeline ---
+  // Entry is evaluated only after real market-structure walls are known.
+  const entryPlan = buildEntryPlan({
+    strategy,
+    spot,
+    support: support.strike,
+    resistance: resistance.strike,
+    ceWall,
+    peWall,
+    expectedMove: { points: expectedMovePts, low: emLow, high: emHigh },
+    tradeLegs,
+    regime,
+    features: marketFeatures,
+    marketPhase: getMarketPhase(),
+    dte
+  });
+
+  const riskPlan = buildRiskPlan({
+    strategy,
+    tradeLegs,
+    spot,
+    support: support.strike,
+    resistance: resistance.strike,
+    peWall,
+    ceWall,
+    expectedMove: { points: expectedMovePts, low: emLow, high: emHigh },
+    marketPhase: getMarketPhase(),
+    dte
+  });
+
+  const managementPlan = buildManagementPlan({
+    strategy,
+    risk: riskPlan,
+    entry: entryPlan,
+    regime,
+    spot
+  });
 
   // --- Single-leg trade plan (entry / stop-loss / target in premium points, delta approximation) ---
   if (tradeLegs && (strategy === 'LONG_CALL' || strategy === 'LONG_PUT') && tradeLegs.buyLeg) {
@@ -776,6 +798,8 @@ const entryPlan = buildEntryPlan({
       setupQualified: setup.qualified,
       blockers: setup.blockers,
       entry: entryPlan,
+      risk: riskPlan,
+      management: managementPlan,
       regime: {
         direction: regime.direction,
         label: regime.label,
