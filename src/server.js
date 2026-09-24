@@ -19,10 +19,8 @@ const express = require('express');
 const app = express();
 app.use(express.json());
 
-const ALLOWED_ORIGINS = [
-  'https://edge-backend-mbcs.vercel.app',
-  'http://localhost:3000'
-];
+const ALLOWED_ORIGINS = (process.env.EDGE_ALLOWED_ORIGINS || 'https://edge-backend-mbcs.vercel.app,http://localhost:3000')
+  .split(',').map(s => s.trim()).filter(Boolean);
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (ALLOWED_ORIGINS.indexOf(origin) >= 0) {
@@ -82,6 +80,14 @@ const HISTORY_LIMIT = 500;
 const history = [];
 
 // --- Market hours ---
+// NSE F&O regular market: 09:15-15:40 IST; F&O pre-open: 09:00-09:15 IST.
+// Holiday list is for the 2026 F&O calendar published by NSE.
+const NSE_FO_HOLIDAYS_2026 = new Set([
+  '2026-01-26','2026-03-03','2026-03-26','2026-03-31','2026-04-03',
+  '2026-04-14','2026-05-01','2026-05-28','2026-06-26','2026-09-14',
+  '2026-10-02','2026-10-20','2026-11-10','2026-11-24','2026-12-25'
+]);
+
 function getMarketPhase() {
   const now = new Date();
   const ist = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
@@ -89,9 +95,10 @@ function getMarketPhase() {
   const h = ist.getHours();
   const m = ist.getMinutes();
   const mins = h * 60 + m;
-  if (day === 0 || day === 6) return 'CLOSED';
-  if (mins >= 555 && mins < 570) return 'PRE_OPEN';
-  if (mins >= 570 && mins < 930) return 'OPEN';
+  const iso = ist.getFullYear() + '-' + String(ist.getMonth() + 1).padStart(2, '0') + '-' + String(ist.getDate()).padStart(2, '0');
+  if (day === 0 || day === 6 || NSE_FO_HOLIDAYS_2026.has(iso)) return 'CLOSED';
+  if (mins >= 540 && mins < 555) return 'PRE_OPEN';
+  if (mins >= 555 && mins < 940) return 'OPEN';
   return 'CLOSED';
 }
 
@@ -235,6 +242,8 @@ function analyse(chain, expiryDate, marketContext = null) {
       ceSpread, peSpread,
       cePrevOI: ce?.market_data?.prev_oi || 0,
       pePrevOI: pe?.market_data?.prev_oi || 0,
+      ceOIChange: ceOI - (ce?.market_data?.prev_oi || 0),
+      peOIChange: peOI - (pe?.market_data?.prev_oi || 0),
       ceClosePrice: ce?.market_data?.close_price || 0,
       peClosePrice: pe?.market_data?.close_price || 0,
       ceVolume: ce?.market_data?.volume || 0,
