@@ -789,10 +789,13 @@ async function poll() {
     if (!expiries.length) throw new Error('No expiries returned');
     console.log('[upstox] expiries returned:', JSON.stringify(expiries.slice(0, 3)));
     const nearestExpiry = expiries[0];
-    const [chain, marketContext] = await Promise.all([
-      fetchUpstoxChain(nearestExpiry),
-      fetchMarketContext()
-    ]);
+    const chain = await fetchUpstoxChain(nearestExpiry);
+    let marketContext = null;
+    try {
+      marketContext = await fetchMarketContext();
+    } catch (contextErr) {
+      console.error('[market context]', contextErr.message);
+    }
     const result = analyse(chain, nearestExpiry, marketContext);
     if (result) {
       lastResult = result;
