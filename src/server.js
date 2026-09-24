@@ -5,6 +5,7 @@ const { classifyRegime } = require('./engine/regimeEngine');
 const { selectStrategy } = require('./engine/strategyEngine');
 const { qualifySetup } = require('./engine/setupEngine');
 const { fetchMarketContext } = require('./data/marketContext');
+const { classifyOptionChainFlow } = require('./engine/optionFlowEngine');
 
 const http = require('http');
 const https = require('https');
@@ -229,6 +230,8 @@ function analyse(chain, expiryDate, marketContext = null) {
       ceSpread, peSpread,
       cePrevOI: ce?.market_data?.prev_oi || 0,
       pePrevOI: pe?.market_data?.prev_oi || 0,
+      ceClosePrice: ce?.market_data?.close_price || 0,
+      peClosePrice: pe?.market_data?.close_price || 0,
       ceVolume: ce?.market_data?.volume || 0,
       peVolume: pe?.market_data?.volume || 0,
     });
@@ -309,7 +312,7 @@ function analyse(chain, expiryDate, marketContext = null) {
   if (allAligned && activeSubs.length >= 2) legacyConfidence += 15;
   if (allAligned && activeSubs.length === 3) legacyConfidence += 10;
   if (ivState === 'CONFIRMS') legacyConfidence += 15;
-  if (ivState === 'CONTRADICTS') confidence -= 15;
+  if (ivState === 'CONTRADICTS') legacyConfidence -= 15;
   legacyConfidence = Math.round(Math.max(0, Math.min(100, legacyConfidence)));
 
   // Bias direction: directionalScore scaled by IV state (confirm boosts, contradict dampens)
@@ -325,6 +328,11 @@ function analyse(chain, expiryDate, marketContext = null) {
   else if (totalScore > -30) { legacyBias = 'MILD_BEARISH'; legacyBiasLabel = 'Mild Bearish'; }
   else { legacyBias = 'BEARISH'; legacyBiasLabel = 'Bearish'; }
 
+  // --- Inferred option flow ---
+  // Upstox exposes previous-session close and previous OI for each option contract.
+  // The classifier deliberately labels this as inferred/probable flow, not participant intent.
+  const optionFlow = classifyOptionChainFlow(strikes, marketContext?.sessionChangePct ?? null);
+
   // --- vNext regime → strategy pipeline ---
   // Keep the legacy factor calculations above for explainability/backward compatibility,
   // but make the new regime engine authoritative for direction and strategy expression.
@@ -338,7 +346,8 @@ function analyse(chain, expiryDate, marketContext = null) {
     windowSize: WINDOW,
     sessionChangePct: marketContext?.sessionChangePct ?? null,
     trend30mPct: marketContext?.trend30mPct ?? null,
-    futures: marketContext?.futures ?? null
+    futures: marketContext?.futures ?? null,
+    optionFlow
   });
   const regime = classifyRegime(marketFeatures);
   const strategyPick = selectStrategy(regime, ivRegime);
@@ -758,7 +767,7 @@ function analyse(chain, expiryDate, marketContext = null) {
       }
     },
     intel: { maxPain, ceWritingZone, peWritingZone, ceBuildup: ceBuildup.length, peBuildup: peBuildup.length,
-      oiClusters: alphas.map(s => s.strike) },
+      oiClusters: alphas.map(s => s.strike), optionFlow },
     warnings,
     explain: { factors, signalGrade, thesis, counterarguments, invalidation },
     expectedMove: { points: expectedMovePts, low: emLow, high: emHigh, strikeSafety },
