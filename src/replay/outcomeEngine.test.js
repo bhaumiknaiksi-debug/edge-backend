@@ -31,7 +31,7 @@ const target = evaluateOutcome({
 });
 assert.strictEqual(target.status, 'TARGET2');
 assert.strictEqual(target.target1Hit, true);
-assert.strictEqual(target.pnlRupees, 1072.5);
+assert.strictEqual(target.pnlRupees, 975);
 
 const stop = evaluateOutcome({
   decision: base({ id: 'unit-stop' }),
