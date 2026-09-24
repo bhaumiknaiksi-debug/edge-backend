@@ -4,7 +4,9 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "test": "node src/engine/vnext.test.js"
+    "test": "node src/engine/vnext.test.js",
+    "test:replay": "node src/replay/replayEngine.test.js",
+    "test:all": "node src/engine/vnext.test.js && node src/replay/replayEngine.test.js"
   },
   "dependencies": {
     "express": "^4.18.0",
