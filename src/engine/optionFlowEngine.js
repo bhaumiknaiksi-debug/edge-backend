@@ -47,11 +47,12 @@ function classifyOptionFlow(option, type, underlyingChangePct = null) {
     ? signBucket(premiumChange, MIN_PREMIUM_CHANGE_PCT)
     : 0;
 
+  const optionName = type === 'CE' ? 'CALL' : 'PUT';
   let state = 'MIXED';
-  if (oiDir > 0 && premiumDir < 0) state = type + '_WRITING';
-  else if (oiDir > 0 && premiumDir > 0) state = type + '_BUYING';
-  else if (oiDir < 0 && premiumDir > 0) state = type + '_SHORT_COVERING';
-  else if (oiDir < 0 && premiumDir < 0) state = type + '_LONG_UNWINDING';
+  if (oiDir > 0 && premiumDir < 0) state = optionName + '_WRITING';
+  else if (oiDir > 0 && premiumDir > 0) state = optionName + '_BUYING';
+  else if (oiDir < 0 && premiumDir > 0) state = optionName + '_SHORT_COVERING';
+  else if (oiDir < 0 && premiumDir < 0) state = optionName + '_LONG_UNWINDING';
 
   const underlyingDir = signBucket(Number(underlyingChangePct), 0.10);
   const mechanicallyAligned =
