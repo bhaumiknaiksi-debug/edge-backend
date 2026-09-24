@@ -17,7 +17,7 @@ const strikes = [
 
 const optionFlow = classifyOptionChainFlow([
   { strike: 22900, ceOI: 120, cePrevOI: 100, ceLTP: 8, ceClosePrice: 10, peOI: 320, pePrevOI: 280, peLTP: 13, peClosePrice: 15 },
-  { strike: 23000, ceOI: 180, cePrevOI: 150, ceLTP: 12, ceClosePrice: 10, peOI: 320, pePrevOI: 270, peLTP: 9, peClosePrice: 12 }
+  { strike: 23000, ceOI: 180, cePrevOI: 150, ceLTP: 8, ceClosePrice: 10, peOI: 320, pePrevOI: 270, peLTP: 15, peClosePrice: 12 }
 ], -1.2);
 assert(optionFlow.aggregate.classifiedContracts >= 2);
 assert(optionFlow.aggregate.counts.CE_WRITING >= 1);
