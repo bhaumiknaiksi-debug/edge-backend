@@ -304,12 +304,12 @@ function analyse(chain, expiryDate) {
     activeSubs.every(s => Math.sign(s) === Math.sign(directionalScore));
 
   // Confidence (0..100): magnitude + coherence bonus + IV alignment bonus
-  let confidence = Math.abs(directionalScore);
+  let legacyConfidence = Math.abs(directionalScore);
   if (allAligned && activeSubs.length >= 2) confidence += 15;
   if (allAligned && activeSubs.length === 3) confidence += 10;
   if (ivState === 'CONFIRMS') confidence += 15;
   if (ivState === 'CONTRADICTS') confidence -= 15;
-  confidence = Math.round(Math.max(0, Math.min(100, confidence)));
+  legacyConfidence = Math.round(Math.max(0, Math.min(100, legacyConfidence)));
 
   // Bias direction: directionalScore scaled by IV state (confirm boosts, contradict dampens)
   const biasScore = ivState === 'CONFIRMS' ? directionalScore * 1.3
@@ -317,12 +317,12 @@ function analyse(chain, expiryDate) {
                   : directionalScore;
   const totalScore = biasScore;
 
-  let bias, biasLabel;
-  if (totalScore >= 30) { bias = 'BULLISH'; biasLabel = 'Bullish'; }
-  else if (totalScore >= 10) { bias = 'MILD_BULLISH'; biasLabel = 'Mild Bullish'; }
-  else if (totalScore > -10) { bias = 'NEUTRAL'; biasLabel = 'Neutral'; }
-  else if (totalScore > -30) { bias = 'MILD_BEARISH'; biasLabel = 'Mild Bearish'; }
-  else { bias = 'BEARISH'; biasLabel = 'Bearish'; }
+  let legacyBias, legacyBiasLabel;
+  if (totalScore >= 30) { legacyBias = 'BULLISH'; legacyBiasLabel = 'Bullish'; }
+  else if (totalScore >= 10) { legacyBias = 'MILD_BULLISH'; legacyBiasLabel = 'Mild Bullish'; }
+  else if (totalScore > -10) { legacyBias = 'NEUTRAL'; legacyBiasLabel = 'Neutral'; }
+  else if (totalScore > -30) { legacyBias = 'MILD_BEARISH'; legacyBiasLabel = 'Mild Bearish'; }
+  else { legacyBias = 'BEARISH'; legacyBiasLabel = 'Bearish'; }
 
   // --- vNext regime → strategy pipeline ---
   // Keep the legacy factor calculations above for explainability/backward compatibility,
