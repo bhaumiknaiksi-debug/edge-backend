@@ -10,6 +10,7 @@ const { buildEntryPlan } = require('./engine/entryEngine');
 const { buildRiskPlan } = require('./engine/riskEngine');
 const { buildManagementPlan } = require('./engine/managementEngine');
 const { buildPositionPlan } = require('./engine/positionSizingEngine');
+const { buildDecisionOrchestration } = require('./engine/decisionOrchestrator');
 
 const http = require('http');
 const https = require('https');
@@ -650,6 +651,17 @@ function analyse(chain, expiryDate, marketContext = null) {
     openRiskRupees: 0
   });
 
+  const orchestration = buildDecisionOrchestration({
+    strategy,
+    setup,
+    entry: entryPlan,
+    risk: riskPlan,
+    management: managementPlan,
+    position: positionPlan,
+    marketPhase: getMarketPhase(),
+    regime
+  });
+
   // --- Single-leg trade plan (entry / stop-loss / target in premium points, delta approximation) ---
   if (tradeLegs && (strategy === 'LONG_CALL' || strategy === 'LONG_PUT') && tradeLegs.buyLeg) {
     const entryPrem = parseFloat(tradeLegs.buyLeg.premium);
@@ -820,6 +832,7 @@ function analyse(chain, expiryDate, marketContext = null) {
       risk: riskPlan,
       management: managementPlan,
       position: positionPlan,
+      orchestration,
       regime: {
         direction: regime.direction,
         label: regime.label,
