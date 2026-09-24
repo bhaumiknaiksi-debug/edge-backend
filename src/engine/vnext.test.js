@@ -9,6 +9,7 @@ const { classifyOptionChainFlow } = require('./optionFlowEngine');
 const { buildEntryPlan } = require('./entryEngine');
 const { buildRiskPlan } = require('./riskEngine');
 const { buildManagementPlan } = require('./managementEngine');
+const { buildPositionPlan } = require('./positionSizingEngine');
 
 const strikes = [
   { strike: 22900, ceOI: 100, peOI: 300, cePrevOI: 80, pePrevOI: 260, ceLTP: 100, peLTP: 70 },
@@ -123,6 +124,30 @@ assert.strictEqual(management.status, 'READY');
 assert.strictEqual(management.profitTaking.target1 !== undefined, true);
 assert.strictEqual(management.trailing.afterTarget1 !== undefined, true);
 assert.strictEqual(management.timeExit !== undefined, true);
+
+const position = buildPositionPlan({
+  strategy: 'BEAR_CALL_SPREAD',
+  tradeLegs: { lotSize: 65 },
+  risk,
+  account: { capital: 1000000, maxRiskPct: 1, dailyLossLimitRupees: 20000 },
+  marketPhase: 'OPEN',
+  dailyLossRupees: 0,
+  openRiskRupees: 0
+});
+assert.strictEqual(position.status, 'READY');
+assert.strictEqual(position.recommendedLots, 3);
+assert.strictEqual(position.riskPerLotRupees, 4875);
+assert.strictEqual(position.actualRiskRupees, 14625);
+
+const blockedPosition = buildPositionPlan({
+  strategy: 'BEAR_CALL_SPREAD',
+  tradeLegs: { lotSize: 65 },
+  risk,
+  account: { capital: 100000, maxRiskPct: 1 },
+  marketPhase: 'OPEN'
+});
+assert.strictEqual(blockedPosition.status, 'BLOCKED');
+assert.strictEqual(blockedPosition.recommendedLots, 0);
 
 
 console.log('EDGE vNext engine tests passed');
