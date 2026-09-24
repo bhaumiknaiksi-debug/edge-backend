@@ -4,6 +4,7 @@ const { buildMarketFeatures } = require('./engine/marketFeatureEngine');
 const { classifyRegime } = require('./engine/regimeEngine');
 const { selectStrategy } = require('./engine/strategyEngine');
 const { qualifySetup } = require('./engine/setupEngine');
+const { fetchMarketContext } = require('./data/marketContext');
 
 const http = require('http');
 const https = require('https');
@@ -173,7 +174,7 @@ function classifyIV(avgIV) {
 }
 
 // --- Decision engine ---
-function analyse(chain, expiryDate) {
+function analyse(chain, expiryDate, marketContext = null) {
   if (!chain || chain.length === 0) return null;
 
   // spot price: Upstox returns underlying_spot_price on each row; fallback to LTP-parity ATM
@@ -328,7 +329,16 @@ function analyse(chain, expiryDate) {
   // Keep the legacy factor calculations above for explainability/backward compatibility,
   // but make the new regime engine authoritative for direction and strategy expression.
   const marketFeatures = buildMarketFeatures({
-    spot, strikes, maxPain, avgIV, ivRegime, atmIndex, windowSize: WINDOW
+    spot,
+    strikes,
+    maxPain,
+    avgIV,
+    ivRegime,
+    atmIndex,
+    windowSize: WINDOW,
+    sessionChangePct: marketContext?.sessionChangePct ?? null,
+    trend30mPct: marketContext?.trend30mPct ?? null,
+    futures: marketContext?.futures ?? null
   });
   const regime = classifyRegime(marketFeatures);
   const strategyPick = selectStrategy(regime, ivRegime);
@@ -756,7 +766,8 @@ function analyse(chain, expiryDate) {
     market: {
       phase: getMarketPhase(),
       features: marketFeatures,
-      regime
+      regime,
+      context: marketContext
     }
   };
 }
@@ -778,8 +789,11 @@ async function poll() {
     if (!expiries.length) throw new Error('No expiries returned');
     console.log('[upstox] expiries returned:', JSON.stringify(expiries.slice(0, 3)));
     const nearestExpiry = expiries[0];
-    const chain = await fetchUpstoxChain(nearestExpiry);
-    const result = analyse(chain, nearestExpiry);
+    const [chain, marketContext] = await Promise.all([
+      fetchUpstoxChain(nearestExpiry),
+      fetchMarketContext()
+    ]);
+    const result = analyse(chain, nearestExpiry, marketContext);
     if (result) {
       lastResult = result;
       lastFetchTime = Date.now();
