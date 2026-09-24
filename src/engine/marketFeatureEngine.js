@@ -8,7 +8,7 @@
 function buildMarketFeatures(input) {
   const {
     spot, strikes, maxPain, avgIV, ivRegime, atmIndex, windowSize = 7,
-    sessionChangePct = null, trend30mPct = null, futures = null
+    sessionChangePct = null, trend30mPct = null, futures = null, optionFlow = null
   } = input;
   if (!spot || !Array.isArray(strikes) || !strikes.length) throw new Error('Invalid market feature input');
 
@@ -36,6 +36,7 @@ function buildMarketFeatures(input) {
     futuresPriceChangePct: futures?.priceChangePct ?? null,
     futuresOIChangePct: futures?.oiChangePct ?? null,
     futuresBuildUp: futures?.buildup || 'UNAVAILABLE',
+    optionFlow: optionFlow || { aggregate: { score: 0, label: 'UNAVAILABLE', classifiedContracts: 0 } },
     pcr,
     pcrChangeRatio,
     ceOI,
