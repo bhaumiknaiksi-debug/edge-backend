@@ -10,6 +10,7 @@ const { buildEntryPlan } = require('./entryEngine');
 const { buildRiskPlan } = require('./riskEngine');
 const { buildManagementPlan } = require('./managementEngine');
 const { buildPositionPlan } = require('./positionSizingEngine');
+const { buildDecisionOrchestration } = require('./decisionOrchestrator');
 
 const strikes = [
   { strike: 22900, ceOI: 100, peOI: 300, cePrevOI: 80, pePrevOI: 260, ceLTP: 100, peLTP: 70 },
@@ -148,6 +149,47 @@ const blockedPosition = buildPositionPlan({
 });
 assert.strictEqual(blockedPosition.status, 'BLOCKED');
 assert.strictEqual(blockedPosition.recommendedLots, 0);
+
+const orchestrationReady = buildDecisionOrchestration({
+  strategy: 'BEAR_CALL_SPREAD',
+  setup: { qualified: true, blockers: [] },
+  entry: { status: 'READY_TO_ENTER' },
+  risk: { status: 'READY' },
+  management: { status: 'READY' },
+  position: { status: 'READY' },
+  marketPhase: 'OPEN',
+  regime: { direction: 'BEARISH' }
+});
+assert.strictEqual(orchestrationReady.status, 'READY_TO_EXECUTE');
+assert.strictEqual(orchestrationReady.executionAllowed, true);
+assert.strictEqual(orchestrationReady.blockers.length, 0);
+
+const orchestrationWait = buildDecisionOrchestration({
+  strategy: 'BEAR_CALL_SPREAD',
+  setup: { qualified: true, blockers: [] },
+  entry: { status: 'WAIT_FOR_TRIGGER' },
+  risk: { status: 'READY' },
+  management: { status: 'READY' },
+  position: { status: 'READY' },
+  marketPhase: 'OPEN',
+  regime: { direction: 'BEARISH' }
+});
+assert.strictEqual(orchestrationWait.status, 'WAIT_FOR_TRIGGER');
+assert.strictEqual(orchestrationWait.executionAllowed, false);
+assert.strictEqual(orchestrationWait.blockers.includes('ENTRY_TRIGGER_NOT_CONFIRMED'), true);
+
+const orchestrationClosed = buildDecisionOrchestration({
+  strategy: 'BEAR_CALL_SPREAD',
+  setup: { qualified: false, blockers: ['MARKET_NOT_OPEN'] },
+  entry: { status: 'WAIT_FOR_TRIGGER' },
+  risk: { status: 'CONDITIONAL' },
+  management: { status: 'CONDITIONAL' },
+  position: { status: 'CONDITIONAL' },
+  marketPhase: 'CLOSED',
+  regime: { direction: 'BEARISH' }
+});
+assert.strictEqual(orchestrationClosed.status, 'MARKET_CLOSED');
+assert.strictEqual(orchestrationClosed.executionAllowed, false);
 
 
 console.log('EDGE vNext engine tests passed');
