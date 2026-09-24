@@ -39,6 +39,17 @@ function classifyRegime(features) {
   } else factors.push({ key: 'TREND_30M', label: '30m price trend', score: 0, available: false });
 
   // Futures price/OI relationship is a first-class positioning regime input.
+  if (Number.isFinite(features.futuresPriceChangePct) && Number.isFinite(features.futuresOIChangePct)) {
+    const p = features.futuresPriceChangePct;
+    const o = features.futuresOIChangePct;
+    let s = 0, build = 'MIXED';
+    if (p > 0 && o > 0) { s = 25; build = 'LONG_BUILDUP'; }
+    else if (p < 0 && o > 0) { s = -25; build = 'SHORT_BUILDUP'; }
+    else if (p < 0 && o < 0) { s = -12; build = 'LONG_UNWINDING'; }
+    else if (p > 0 && o < 0) { s = 12; build = 'SHORT_COVERING'; }
+    factors.push({ key: 'FUTURES_BUILDUP', label: 'Futures ' + build, score: s, available: true });
+  } else factors.push({ key: 'FUTURES_BUILDUP', label: 'Futures build-up', score: 0, available: false });
+
   const available = factors.filter(f => f.available);
   const rawScore = Math.round(available.reduce((n,f) => n + f.score, 0));
   const directional = available.filter(f => Math.abs(f.score) >= 3);
