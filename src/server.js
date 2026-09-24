@@ -9,6 +9,7 @@ const { classifyOptionChainFlow } = require('./engine/optionFlowEngine');
 const { buildEntryPlan } = require('./engine/entryEngine');
 const { buildRiskPlan } = require('./engine/riskEngine');
 const { buildManagementPlan } = require('./engine/managementEngine');
+const { buildPositionPlan } = require('./engine/positionSizingEngine');
 
 const http = require('http');
 const https = require('https');
@@ -631,6 +632,24 @@ function analyse(chain, expiryDate, marketContext = null) {
     spot
   });
 
+  // --- Phase 7 position sizing ---
+  // Account settings are supplied through environment variables so the
+  // frontend never receives or controls sizing policy.
+  const account = {
+    capital: parseFloat(process.env.EDGE_ACCOUNT_CAPITAL || ''),
+    maxRiskPct: parseFloat(process.env.EDGE_MAX_RISK_PCT || ''),
+    dailyLossLimitRupees: parseFloat(process.env.EDGE_DAILY_LOSS_LIMIT || '')
+  };
+  const positionPlan = buildPositionPlan({
+    strategy,
+    tradeLegs,
+    risk: riskPlan,
+    account,
+    marketPhase: getMarketPhase(),
+    dailyLossRupees: 0,
+    openRiskRupees: 0
+  });
+
   // --- Single-leg trade plan (entry / stop-loss / target in premium points, delta approximation) ---
   if (tradeLegs && (strategy === 'LONG_CALL' || strategy === 'LONG_PUT') && tradeLegs.buyLeg) {
     const entryPrem = parseFloat(tradeLegs.buyLeg.premium);
@@ -800,6 +819,7 @@ function analyse(chain, expiryDate, marketContext = null) {
       entry: entryPlan,
       risk: riskPlan,
       management: managementPlan,
+      position: positionPlan,
       regime: {
         direction: regime.direction,
         label: regime.label,
