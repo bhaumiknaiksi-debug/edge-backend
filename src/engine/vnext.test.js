@@ -7,6 +7,8 @@ const { selectStrategy } = require('./strategyEngine');
 const { qualifySetup } = require('./setupEngine');
 const { classifyOptionChainFlow } = require('./optionFlowEngine');
 const { buildEntryPlan } = require('./entryEngine');
+const { buildRiskPlan } = require('./riskEngine');
+const { buildManagementPlan } = require('./managementEngine');
 
 const strikes = [
   { strike: 22900, ceOI: 100, peOI: 300, cePrevOI: 80, pePrevOI: 260, ceLTP: 100, peLTP: 70 },
@@ -85,5 +87,42 @@ const blockedEntry = buildEntryPlan({
   dte: 2
 });
 assert.strictEqual(blockedEntry.status, 'WAIT_FOR_TRIGGER');
+
+const risk = buildRiskPlan({
+  strategy: 'BEAR_CALL_SPREAD',
+  tradeLegs: {
+    sellLeg: { strike: 23100, premium: '50', bid: 49, ask: 51, type: 'CE' },
+    buyLeg: { strike: 23200, premium: '25', bid: 24, ask: 26, type: 'CE' },
+    netCredit: '25',
+    breakeven: '23125'
+  },
+  spot: 23000,
+  support: 22900,
+  resistance: 23100,
+  peWall: 22900,
+  ceWall: 23100,
+  expectedMove: { low: 22900, high: 23100 },
+  marketPhase: 'OPEN',
+  dte: 2
+});
+assert.strictEqual(risk.status, 'READY');
+assert.strictEqual(risk.model, 'DEFINED_RISK_CREDIT');
+assert.strictEqual(risk.stop.type, 'SPREAD_DEBIT');
+assert.strictEqual(risk.target1.type, 'SPREAD_DEBIT');
+assert.strictEqual(risk.target2.type, 'SPREAD_DEBIT');
+assert(risk.maxLossPoints > 0);
+
+const management = buildManagementPlan({
+  strategy: 'BEAR_CALL_SPREAD',
+  risk,
+  entry,
+  regime,
+  spot: 23000
+});
+assert.strictEqual(management.status, 'READY');
+assert.strictEqual(management.profitTaking.target1 !== undefined, true);
+assert.strictEqual(management.trailing.afterTarget1 !== undefined, true);
+assert.strictEqual(management.timeExit !== undefined, true);
+
 
 console.log('EDGE vNext engine tests passed');
