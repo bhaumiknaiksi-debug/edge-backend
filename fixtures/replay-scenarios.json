@@ -1,0 +1,91 @@
+[
+  {
+    "id": "bullish-credit-ready",
+    "timestamp": "2026-01-01T10:00:00+05:30",
+    "marketPhase": "OPEN",
+    "strategy": "BULL_PUT_SPREAD",
+    "regime": { "direction": "BULLISH", "confidence": 72 },
+    "setup": { "qualified": true, "blockers": [] },
+    "spot": 23000,
+    "support": 22900,
+    "resistance": 23100,
+    "peWall": 22900,
+    "ceWall": 23150,
+    "expectedMove": { "low": 22850, "high": 23150 },
+    "dte": 2,
+    "features": {
+      "trend30mPct": 0.5,
+      "sessionChangePct": 0.7,
+      "optionFlow": { "aggregate": { "label": "BULLISH_FLOW" } }
+    },
+    "tradeLegs": {
+      "sellLeg": { "strike": 22900, "premium": "45", "bid": 44, "ask": 46, "type": "PE" },
+      "buyLeg": { "strike": 22800, "premium": "20", "bid": 19, "ask": 21, "type": "PE" },
+      "netCredit": "25",
+      "breakeven": "22875",
+      "lotSize": 65
+    },
+    "account": { "capital": 1000000, "maxRiskPct": 1, "dailyLossLimitRupees": 20000 }
+  },
+  {
+    "id": "bearish-credit-wait",
+    "timestamp": "2026-01-01T11:00:00+05:30",
+    "marketPhase": "OPEN",
+    "strategy": "BEAR_CALL_SPREAD",
+    "regime": { "direction": "BEARISH", "confidence": 78 },
+    "setup": { "qualified": true, "blockers": [] },
+    "spot": 23080,
+    "support": 22900,
+    "resistance": 23100,
+    "ceWall": 23100,
+    "peWall": 22900,
+    "expectedMove": { "low": 23000, "high": 23200 },
+    "dte": 2,
+    "features": {
+      "trend30mPct": 0.2,
+      "sessionChangePct": -0.3,
+      "optionFlow": { "aggregate": { "label": "MIXED_FLOW" } }
+    },
+    "tradeLegs": {
+      "sellLeg": { "strike": 23100, "premium": "50", "bid": 49, "ask": 51, "type": "CE" },
+      "buyLeg": { "strike": 23200, "premium": "25", "bid": 24, "ask": 26, "type": "CE" },
+      "netCredit": "25",
+      "breakeven": "23125",
+      "lotSize": 65
+    },
+    "account": { "capital": 1000000, "maxRiskPct": 1, "dailyLossLimitRupees": 20000 }
+  },
+  {
+    "id": "risk-budget-block",
+    "timestamp": "2026-01-01T12:00:00+05:30",
+    "marketPhase": "OPEN",
+    "strategy": "BEAR_CALL_SPREAD",
+    "regime": { "direction": "BEARISH", "confidence": 82 },
+    "setup": { "qualified": true, "blockers": [] },
+    "spot": 23000,
+    "support": 22900,
+    "resistance": 23100,
+    "ceWall": 23100,
+    "peWall": 22900,
+    "expectedMove": { "low": 22900, "high": 23100 },
+    "dte": 2,
+    "tradeLegs": {
+      "sellLeg": { "strike": 23100, "premium": "50", "bid": 49, "ask": 51, "type": "CE" },
+      "buyLeg": { "strike": 23200, "premium": "25", "bid": 24, "ask": 26, "type": "CE" },
+      "netCredit": "25",
+      "breakeven": "23125",
+      "lotSize": 65
+    },
+    "account": { "capital": 100000, "maxRiskPct": 1 }
+  },
+  {
+    "id": "market-closed",
+    "timestamp": "2026-01-01T16:00:00+05:30",
+    "marketPhase": "CLOSED",
+    "strategy": "BULL_PUT_SPREAD",
+    "regime": { "direction": "BULLISH", "confidence": 70 },
+    "setup": { "qualified": false, "blockers": ["MARKET_NOT_OPEN"] },
+    "spot": 23000,
+    "tradeLegs": null
+  }
+]
