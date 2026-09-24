@@ -1,0 +1,28 @@
+'use strict';
+
+const assert = require('assert');
+const { buildMarketFeatures } = require('./marketFeatureEngine');
+const { classifyRegime } = require('./regimeEngine');
+const { selectStrategy } = require('./strategyEngine');
+const { qualifySetup } = require('./setupEngine');
+
+const strikes = [
+  { strike: 22900, ceOI: 100, peOI: 300, cePrevOI: 80, pePrevOI: 260, ceLTP: 100, peLTP: 70 },
+  { strike: 22950, ceOI: 120, peOI: 280, cePrevOI: 100, pePrevOI: 250, ceLTP: 80, peLTP: 60 },
+  { strike: 23000, ceOI: 160, peOI: 250, cePrevOI: 140, pePrevOI: 230, ceLTP: 60, peLTP: 50 },
+  { strike: 23050, ceOI: 220, peOI: 180, cePrevOI: 200, pePrevOI: 190, ceLTP: 45, peLTP: 55 },
+  { strike: 23100, ceOI: 300, peOI: 140, cePrevOI: 260, pePrevOI: 160, ceLTP: 35, peLTP: 70 }
+];
+
+const features = buildMarketFeatures({
+  spot: 23000, strikes, maxPain: 23100, avgIV: 22, ivRegime: 'HIGH', atmIndex: 2
+});
+assert(features.pcr > 0);
+const regime = classifyRegime(features);
+assert(regime && regime.direction);
+const strategy = selectStrategy(regime, 'HIGH');
+assert(strategy && strategy.name);
+const setup = qualifySetup({ regime, strategy: strategy.name, tradeLegs: {}, marketPhase: 'OPEN' });
+assert.strictEqual(setup.action, 'WAIT_FOR_ENTRY');
+
+console.log('EDGE vNext engine tests passed');
