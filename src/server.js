@@ -1,5 +1,17 @@
 'use strict';
 
+const { buildMarketFeatures } = require('./engine/marketFeatureEngine');
+const { classifyRegime } = require('./engine/regimeEngine');
+const { selectStrategy } = require('./engine/strategyEngine');
+const { qualifySetup } = require('./engine/setupEngine');
+const { fetchMarketContext } = require('./data/marketContext');
+const { classifyOptionChainFlow } = require('./engine/optionFlowEngine');
+const { buildEntryPlan } = require('./engine/entryEngine');
+const { buildRiskPlan } = require('./engine/riskEngine');
+const { buildManagementPlan } = require('./engine/managementEngine');
+const { buildPositionPlan } = require('./engine/positionSizingEngine');
+const { buildDecisionOrchestration } = require('./engine/decisionOrchestrator');
+
 const http = require('http');
 const https = require('https');
 const express = require('express');
@@ -7,10 +19,8 @@ const express = require('express');
 const app = express();
 app.use(express.json());
 
-const ALLOWED_ORIGINS = [
-  'https://edge-backend-mbcs.vercel.app',
-  'http://localhost:3000'
-];
+const ALLOWED_ORIGINS = (process.env.EDGE_ALLOWED_ORIGINS || 'https://edge-backend-mbcs.vercel.app,http://localhost:3000')
+  .split(',').map(s => s.trim()).filter(Boolean);
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (ALLOWED_ORIGINS.indexOf(origin) >= 0) {
@@ -70,6 +80,14 @@ const HISTORY_LIMIT = 500;
 const history = [];
 
 // --- Market hours ---
+// NSE F&O regular market: 09:15-15:40 IST; F&O pre-open: 09:00-09:15 IST.
+// Holiday list is for the 2026 F&O calendar published by NSE.
+const NSE_FO_HOLIDAYS_2026 = new Set([
+  '2026-01-26','2026-03-03','2026-03-26','2026-03-31','2026-04-03',
+  '2026-04-14','2026-05-01','2026-05-28','2026-06-26','2026-09-14',
+  '2026-10-02','2026-10-20','2026-11-10','2026-11-24','2026-12-25'
+]);
+
 function getMarketPhase() {
   const now = new Date();
   const ist = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
@@ -77,9 +95,10 @@ function getMarketPhase() {
   const h = ist.getHours();
   const m = ist.getMinutes();
   const mins = h * 60 + m;
-  if (day === 0 || day === 6) return 'CLOSED';
-  if (mins >= 555 && mins < 570) return 'PRE_OPEN';
-  if (mins >= 570 && mins < 930) return 'OPEN';
+  const iso = ist.getFullYear() + '-' + String(ist.getMonth() + 1).padStart(2, '0') + '-' + String(ist.getDate()).padStart(2, '0');
+  if (day === 0 || day === 6 || NSE_FO_HOLIDAYS_2026.has(iso)) return 'CLOSED';
+  if (mins >= 540 && mins < 555) return 'PRE_OPEN';
+  if (mins >= 555 && mins < 940) return 'OPEN';
   return 'CLOSED';
 }
 
@@ -168,7 +187,7 @@ function classifyIV(avgIV) {
 }
 
 // --- Decision engine ---
-function analyse(chain, expiryDate) {
+function analyse(chain, expiryDate, marketContext = null) {
   if (!chain || chain.length === 0) return null;
 
   // spot price: Upstox returns underlying_spot_price on each row; fallback to LTP-parity ATM
@@ -223,6 +242,10 @@ function analyse(chain, expiryDate) {
       ceSpread, peSpread,
       cePrevOI: ce?.market_data?.prev_oi || 0,
       pePrevOI: pe?.market_data?.prev_oi || 0,
+      ceOIChange: ceOI - (ce?.market_data?.prev_oi || 0),
+      peOIChange: peOI - (pe?.market_data?.prev_oi || 0),
+      ceClosePrice: ce?.market_data?.close_price || 0,
+      peClosePrice: pe?.market_data?.close_price || 0,
       ceVolume: ce?.market_data?.volume || 0,
       peVolume: pe?.market_data?.volume || 0,
     });
@@ -299,12 +322,12 @@ function analyse(chain, expiryDate) {
     activeSubs.every(s => Math.sign(s) === Math.sign(directionalScore));
 
   // Confidence (0..100): magnitude + coherence bonus + IV alignment bonus
-  let confidence = Math.abs(directionalScore);
-  if (allAligned && activeSubs.length >= 2) confidence += 15;
-  if (allAligned && activeSubs.length === 3) confidence += 10;
-  if (ivState === 'CONFIRMS') confidence += 15;
-  if (ivState === 'CONTRADICTS') confidence -= 15;
-  confidence = Math.round(Math.max(0, Math.min(100, confidence)));
+  let legacyConfidence = Math.abs(directionalScore);
+  if (allAligned && activeSubs.length >= 2) legacyConfidence += 15;
+  if (allAligned && activeSubs.length === 3) legacyConfidence += 10;
+  if (ivState === 'CONFIRMS') legacyConfidence += 15;
+  if (ivState === 'CONTRADICTS') legacyConfidence -= 15;
+  legacyConfidence = Math.round(Math.max(0, Math.min(100, legacyConfidence)));
 
   // Bias direction: directionalScore scaled by IV state (confirm boosts, contradict dampens)
   const biasScore = ivState === 'CONFIRMS' ? directionalScore * 1.3
@@ -312,38 +335,51 @@ function analyse(chain, expiryDate) {
                   : directionalScore;
   const totalScore = biasScore;
 
-  let bias, biasLabel;
-  if (totalScore >= 30) { bias = 'BULLISH'; biasLabel = 'Bullish'; }
-  else if (totalScore >= 10) { bias = 'MILD_BULLISH'; biasLabel = 'Mild Bullish'; }
-  else if (totalScore > -10) { bias = 'NEUTRAL'; biasLabel = 'Neutral'; }
-  else if (totalScore > -30) { bias = 'MILD_BEARISH'; biasLabel = 'Mild Bearish'; }
-  else { bias = 'BEARISH'; biasLabel = 'Bearish'; }
+  let legacyBias, legacyBiasLabel;
+  if (totalScore >= 30) { legacyBias = 'BULLISH'; legacyBiasLabel = 'Bullish'; }
+  else if (totalScore >= 10) { legacyBias = 'MILD_BULLISH'; legacyBiasLabel = 'Mild Bullish'; }
+  else if (totalScore > -10) { legacyBias = 'NEUTRAL'; legacyBiasLabel = 'Neutral'; }
+  else if (totalScore > -30) { legacyBias = 'MILD_BEARISH'; legacyBiasLabel = 'Mild Bearish'; }
+  else { legacyBias = 'BEARISH'; legacyBiasLabel = 'Bearish'; }
 
-  // --- Strategy mapping (IV-aware, signal-consistent) ---
-  let strategy, strategyReason;
-  const isBullish = bias === 'BULLISH' || bias === 'MILD_BULLISH';
-  const isBearish = bias === 'BEARISH' || bias === 'MILD_BEARISH';
-  const isNeutral = bias === 'NEUTRAL';
+  // --- Inferred option flow ---
+  // Upstox exposes previous-session close and previous OI for each option contract.
+  // The classifier deliberately labels this as inferred/probable flow, not participant intent.
+  const optionFlow = classifyOptionChainFlow(strikes, marketContext?.sessionChangePct ?? null);
 
-  if (isBullish && ivRegime === 'HIGH') {
-    strategy = 'BULL_PUT_SPREAD';
-    strategyReason = 'Bullish bias + High IV favours selling premium via Bull Put Spread';
-  } else if (isBullish && ivRegime !== 'HIGH') {
-    strategy = 'LONG_CALL';
-    strategyReason = 'Bullish bias + Low/Normal IV favours directional Long Call';
-  } else if (isBearish && ivRegime === 'HIGH') {
-    strategy = 'BEAR_CALL_SPREAD';
-    strategyReason = 'Bearish bias + High IV favours selling premium via Bear Call Spread';
-  } else if (isBearish && ivRegime !== 'HIGH') {
-    strategy = 'LONG_PUT';
-    strategyReason = 'Bearish bias + Low/Normal IV favours directional Long Put';
-  } else if (isNeutral && ivRegime === 'HIGH') {
-    strategy = 'IRON_CONDOR';
-    strategyReason = 'Neutral market + High IV - ideal for Iron Condor premium collection';
-  } else {
-    strategy = 'WAIT';
-    strategyReason = 'No clear edge - low IV + neutral bias, wait for setup';
-  }
+  // --- vNext regime → strategy pipeline ---
+  // Keep the legacy factor calculations above for explainability/backward compatibility,
+  // but make the new regime engine authoritative for direction and strategy expression.
+  const marketFeatures = buildMarketFeatures({
+    spot,
+    strikes,
+    maxPain,
+    avgIV,
+    ivRegime,
+    atmIndex,
+    windowSize: WINDOW,
+    sessionChangePct: marketContext?.sessionChangePct ?? null,
+    trend30mPct: marketContext?.trend30mPct ?? null,
+    futures: marketContext?.futures ?? null,
+    optionFlow
+  });
+  const regime = classifyRegime(marketFeatures);
+  const strategyPick = selectStrategy(regime, ivRegime);
+  let strategy = strategyPick.name;
+  let strategyReason = strategyPick.reason;
+
+  const biasMap = {
+    STRONG_BULLISH: 'BULLISH',
+    BULLISH: 'BULLISH',
+    MILD_BULLISH: 'MILD_BULLISH',
+    NEUTRAL: 'NEUTRAL',
+    MILD_BEARISH: 'MILD_BEARISH',
+    BEARISH: 'BEARISH',
+    STRONG_BEARISH: 'BEARISH'
+  };
+  const bias = biasMap[regime.direction] || 'NEUTRAL';
+  const biasLabel = regime.label;
+  const confidence = regime.confidence;
 
   // --- Delta-based strike selection (with tiered fallback for low liquidity / high IV) ---
   // SELL leg: near-OTM, delta 0.20-0.35 (collects meaningful premium)
@@ -407,8 +443,8 @@ function analyse(chain, expiryDate) {
       const rrr = maxLoss > 0 ? (maxProfit / maxLoss).toFixed(2) : 'N/A';
       const pop = Math.round((1 - sellLeg.ceDelta) * 100);
       tradeLegs = {
-        sellLeg: { contractId: buildContractId(expiryDate, sellLeg.strike, 'CE'), strike: sellLeg.strike, premium: sellLeg.ceLTP.toFixed(2), type: 'CE' },
-        buyLeg:  { contractId: buildContractId(expiryDate, buyLeg.strike,  'CE'), strike: buyLeg.strike,  premium: buyLeg.ceLTP.toFixed(2),  type: 'CE' },
+        sellLeg: { contractId: buildContractId(expiryDate, sellLeg.strike, 'CE'), strike: sellLeg.strike, premium: sellLeg.ceLTP.toFixed(2), bid: sellLeg.ceBid, ask: sellLeg.ceAsk, type: 'CE' },
+        buyLeg:  { contractId: buildContractId(expiryDate, buyLeg.strike,  'CE'), strike: buyLeg.strike,  premium: buyLeg.ceLTP.toFixed(2), bid: buyLeg.ceBid, ask: buyLeg.ceAsk, type: 'CE' },
         netCredit: netCredit.toFixed(2),     netCreditRupees: pointsToRupees(netCredit),
         maxProfit: maxProfit.toFixed(2),     maxProfitRupees: pointsToRupees(maxProfit),
         maxLoss:   maxLoss.toFixed(2),       maxLossRupees:   pointsToRupees(maxLoss),
@@ -430,8 +466,8 @@ function analyse(chain, expiryDate) {
       const rrr = maxLoss > 0 ? (maxProfit / maxLoss).toFixed(2) : 'N/A';
       const pop = Math.round((1 - Math.abs(sellLeg.peDelta)) * 100);
       tradeLegs = {
-        sellLeg: { contractId: buildContractId(expiryDate, sellLeg.strike, 'PE'), strike: sellLeg.strike, premium: sellLeg.peLTP.toFixed(2), type: 'PE' },
-        buyLeg:  { contractId: buildContractId(expiryDate, buyLeg.strike,  'PE'), strike: buyLeg.strike,  premium: buyLeg.peLTP.toFixed(2),  type: 'PE' },
+        sellLeg: { contractId: buildContractId(expiryDate, sellLeg.strike, 'PE'), strike: sellLeg.strike, premium: sellLeg.peLTP.toFixed(2), bid: sellLeg.peBid, ask: sellLeg.peAsk, type: 'PE' },
+        buyLeg:  { contractId: buildContractId(expiryDate, buyLeg.strike,  'PE'), strike: buyLeg.strike,  premium: buyLeg.peLTP.toFixed(2),  bid: buyLeg.peBid, ask: buyLeg.peAsk, type: 'PE' },
         netCredit: netCredit.toFixed(2),     netCreditRupees: pointsToRupees(netCredit),
         maxProfit: maxProfit.toFixed(2),     maxProfitRupees: pointsToRupees(maxProfit),
         maxLoss:   maxLoss.toFixed(2),       maxLossRupees:   pointsToRupees(maxLoss),
@@ -444,7 +480,7 @@ function analyse(chain, expiryDate) {
   } else if (strategy === 'LONG_CALL' && buyCEStrikes.length) {
     const leg = buyCEStrikes.sort((a, b) => Math.abs(a.ceDelta - 0.50) - Math.abs(b.ceDelta - 0.50))[0];
     tradeLegs = {
-      buyLeg: { contractId: buildContractId(expiryDate, leg.strike, 'CE'), strike: leg.strike, premium: leg.ceLTP.toFixed(2), type: 'CE' },
+      buyLeg: { contractId: buildContractId(expiryDate, leg.strike, 'CE'), strike: leg.strike, premium: leg.ceLTP.toFixed(2), bid: leg.ceBid, ask: leg.ceAsk, type: 'CE' },
       legDelta: leg.ceDelta,
       maxProfit: 'Unlimited',  maxProfitRupees: 'Unlimited',
       maxLoss: leg.ceLTP.toFixed(2),  maxLossRupees: pointsToRupees(leg.ceLTP),
@@ -456,7 +492,7 @@ function analyse(chain, expiryDate) {
   } else if (strategy === 'LONG_PUT' && buyPEStrikes.length) {
     const leg = buyPEStrikes.sort((a, b) => Math.abs(Math.abs(a.peDelta) - 0.50) - Math.abs(Math.abs(b.peDelta) - 0.50))[0];
     tradeLegs = {
-      buyLeg: { contractId: buildContractId(expiryDate, leg.strike, 'PE'), strike: leg.strike, premium: leg.peLTP.toFixed(2), type: 'PE' },
+      buyLeg: { contractId: buildContractId(expiryDate, leg.strike, 'PE'), strike: leg.strike, premium: leg.peLTP.toFixed(2), bid: leg.peBid, ask: leg.peAsk, type: 'PE' },
       legDelta: Math.abs(leg.peDelta),
       maxProfit: (leg.strike - leg.peLTP).toFixed(2),  maxProfitRupees: pointsToRupees(leg.strike - leg.peLTP),
       maxLoss: leg.peLTP.toFixed(2),                   maxLossRupees: pointsToRupees(leg.peLTP),
@@ -482,10 +518,10 @@ function analyse(chain, expiryDate) {
       const rrr = maxLoss > 0 ? (netCredit / maxLoss).toFixed(2) : 'N/A';
       const pop = Math.round(Math.max(0, Math.min(100, (1 - ceShort.ceDelta - Math.abs(peShort.peDelta)) * 100)));
       tradeLegs = {
-        ceShort: { contractId: buildContractId(expiryDate, ceShort.strike, 'CE'), strike: ceShort.strike, premium: ceShort.ceLTP.toFixed(2), type: 'CE' },
-        ceLong:  { contractId: buildContractId(expiryDate, ceLong.strike,  'CE'), strike: ceLong.strike,  premium: ceLong.ceLTP.toFixed(2),  type: 'CE' },
-        peShort: { contractId: buildContractId(expiryDate, peShort.strike, 'PE'), strike: peShort.strike, premium: peShort.peLTP.toFixed(2), type: 'PE' },
-        peLong:  { contractId: buildContractId(expiryDate, peLong.strike,  'PE'), strike: peLong.strike,  premium: peLong.peLTP.toFixed(2),  type: 'PE' },
+        ceShort: { contractId: buildContractId(expiryDate, ceShort.strike, 'CE'), strike: ceShort.strike, premium: ceShort.ceLTP.toFixed(2), bid: ceShort.ceBid, ask: ceShort.ceAsk, type: 'CE' },
+        ceLong:  { contractId: buildContractId(expiryDate, ceLong.strike,  'CE'), strike: ceLong.strike,  premium: ceLong.ceLTP.toFixed(2), bid: ceLong.ceBid, ask: ceLong.ceAsk, type: 'CE' },
+        peShort: { contractId: buildContractId(expiryDate, peShort.strike, 'PE'), strike: peShort.strike, premium: peShort.peLTP.toFixed(2), bid: peShort.peBid, ask: peShort.peAsk, type: 'PE' },
+        peLong:  { contractId: buildContractId(expiryDate, peLong.strike,  'PE'), strike: peLong.strike,  premium: peLong.peLTP.toFixed(2), bid: peLong.peBid, ask: peLong.peAsk, type: 'PE' },
         netCredit: netCredit.toFixed(2),  netCreditRupees: pointsToRupees(netCredit),
         maxProfit: netCredit.toFixed(2),  maxProfitRupees: pointsToRupees(netCredit),
         maxLoss:   maxLoss.toFixed(2),    maxLossRupees:   pointsToRupees(maxLoss),
@@ -497,6 +533,14 @@ function analyse(chain, expiryDate) {
       };
     }
   }
+
+  // Setup is deliberately evaluated after the real legs exist.
+  const setup = qualifySetup({
+    regime,
+    strategy,
+    tradeLegs,
+    marketPhase: getMarketPhase()
+  });
 
   // --- Smart warnings ---
   const warnings = [];
@@ -559,6 +603,73 @@ function analyse(chain, expiryDate) {
   const breakoutRisk = compression === 'COMPRESSED' ? (ivRegime === 'HIGH' ? 'ELEVATED' : 'MODERATE')
                      : nearWall ? 'MODERATE' : 'LOW';
   const premiumSelling = ivRegime === 'HIGH' ? 'FAVOURABLE' : ivRegime === 'NORMAL' ? 'NEUTRAL' : 'UNFAVOURABLE';
+
+  // --- Phase 5/6 execution pipeline ---
+  // Entry is evaluated only after real market-structure walls are known.
+  const entryPlan = buildEntryPlan({
+    strategy,
+    spot,
+    support: support.strike,
+    resistance: resistance.strike,
+    ceWall,
+    peWall,
+    expectedMove: { points: expectedMovePts, low: emLow, high: emHigh },
+    tradeLegs,
+    regime,
+    features: marketFeatures,
+    marketPhase: getMarketPhase(),
+    dte
+  });
+
+  const riskPlan = buildRiskPlan({
+    strategy,
+    tradeLegs,
+    spot,
+    support: support.strike,
+    resistance: resistance.strike,
+    peWall,
+    ceWall,
+    expectedMove: { points: expectedMovePts, low: emLow, high: emHigh },
+    marketPhase: getMarketPhase(),
+    dte
+  });
+
+  const managementPlan = buildManagementPlan({
+    strategy,
+    risk: riskPlan,
+    entry: entryPlan,
+    regime,
+    spot
+  });
+
+  // --- Phase 7 position sizing ---
+  // Account settings are supplied through environment variables so the
+  // frontend never receives or controls sizing policy.
+  const account = {
+    capital: parseFloat(process.env.EDGE_ACCOUNT_CAPITAL || ''),
+    maxRiskPct: parseFloat(process.env.EDGE_MAX_RISK_PCT || ''),
+    dailyLossLimitRupees: parseFloat(process.env.EDGE_DAILY_LOSS_LIMIT || '')
+  };
+  const positionPlan = buildPositionPlan({
+    strategy,
+    tradeLegs,
+    risk: riskPlan,
+    account,
+    marketPhase: getMarketPhase(),
+    dailyLossRupees: 0,
+    openRiskRupees: 0
+  });
+
+  const orchestration = buildDecisionOrchestration({
+    strategy,
+    setup,
+    entry: entryPlan,
+    risk: riskPlan,
+    management: managementPlan,
+    position: positionPlan,
+    marketPhase: getMarketPhase(),
+    regime
+  });
 
   // --- Single-leg trade plan (entry / stop-loss / target in premium points, delta approximation) ---
   if (tradeLegs && (strategy === 'LONG_CALL' || strategy === 'LONG_PUT') && tradeLegs.buyLeg) {
@@ -719,14 +830,40 @@ function analyse(chain, expiryDate) {
       ceDelta: s.ceDelta, ceIV: s.ceIV,
       ceTheta: s.ceTheta, ceVega: s.ceVega
     })),
-    decision: { strategy, reason: strategyReason, tradeLegs },
+    decision: {
+      strategy,
+      reason: strategyReason,
+      tradeLegs,
+      action: setup.action,
+      setupQualified: setup.qualified,
+      blockers: setup.blockers,
+      entry: entryPlan,
+      risk: riskPlan,
+      management: managementPlan,
+      position: positionPlan,
+      orchestration,
+      regime: {
+        direction: regime.direction,
+        label: regime.label,
+        score: regime.score,
+        confidence: regime.confidence,
+        evidenceCoverage: regime.evidenceCoverage,
+        missing: regime.missing,
+        factors: regime.factors
+      }
+    },
     intel: { maxPain, ceWritingZone, peWritingZone, ceBuildup: ceBuildup.length, peBuildup: peBuildup.length,
-      oiClusters: alphas.map(s => s.strike) },
+      oiClusters: alphas.map(s => s.strike), optionFlow },
     warnings,
     explain: { factors, signalGrade, thesis, counterarguments, invalidation },
     expectedMove: { points: expectedMovePts, low: emLow, high: emHigh, strikeSafety },
     structure: { writerDominance, peWall, ceWall, rangeWidth, rangePct, compression, breakoutRisk, premiumSelling },
-    market: { phase: getMarketPhase() }
+    market: {
+      phase: getMarketPhase(),
+      features: marketFeatures,
+      regime,
+      context: marketContext
+    }
   };
 }
 
@@ -748,7 +885,13 @@ async function poll() {
     console.log('[upstox] expiries returned:', JSON.stringify(expiries.slice(0, 3)));
     const nearestExpiry = expiries[0];
     const chain = await fetchUpstoxChain(nearestExpiry);
-    const result = analyse(chain, nearestExpiry);
+    let marketContext = null;
+    try {
+      marketContext = await fetchMarketContext();
+    } catch (contextErr) {
+      console.error('[market context]', contextErr.message);
+    }
+    const result = analyse(chain, nearestExpiry, marketContext);
     if (result) {
       lastResult = result;
       lastFetchTime = Date.now();
