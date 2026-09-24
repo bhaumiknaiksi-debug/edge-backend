@@ -21,8 +21,8 @@ const optionFlow = classifyOptionChainFlow([
   { strike: 23000, ceOI: 180, cePrevOI: 150, ceLTP: 8, ceClosePrice: 10, peOI: 320, pePrevOI: 270, peLTP: 15, peClosePrice: 12 }
 ], -1.2);
 assert(optionFlow.aggregate.classifiedContracts >= 2);
-assert(optionFlow.aggregate.counts.CE_WRITING >= 1);
-assert(optionFlow.aggregate.counts.PE_WRITING >= 1);
+assert(optionFlow.aggregate.counts.CALL_WRITING >= 1);
+assert(optionFlow.aggregate.counts.PUT_WRITING >= 1);
 
 const features = buildMarketFeatures({
   spot: 23000, strikes, maxPain: 23100, avgIV: 22, ivRegime: 'HIGH', atmIndex: 2,
