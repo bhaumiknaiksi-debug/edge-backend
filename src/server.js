@@ -213,7 +213,6 @@ function analyse(chain, expiryDate, marketContext = null) {
 
   // totals
   let totalCEOI = 0, totalPEOI = 0;
-  let ivSum = 0, ivCount = 0;
   const strikes = [];
 
   for (const s of chain) {
@@ -240,8 +239,6 @@ function analyse(chain, expiryDate, marketContext = null) {
 
     totalCEOI += ceOI;
     totalPEOI += peOI;
-    if (ceIV > 0) { ivSum += ceIV; ivCount++; }
-    if (peIV > 0) { ivSum += peIV; ivCount++; }
 
     strikes.push({
       strike: s.strike_price,
@@ -262,9 +259,7 @@ function analyse(chain, expiryDate, marketContext = null) {
     });
   }
 
-  // Full-chain OI totals retained for display
-  const avgIV = ivCount > 0 ? ivSum / ivCount : 15;
-  const ivRegime = classifyIV(avgIV);
+  // Full-chain OI totals retained for display. Volatility regime is computed only after ATM is known.
 
   // ATM index
   const atmIndex = strikes.reduce((best, s, i) => {
@@ -281,6 +276,22 @@ function analyse(chain, expiryDate, marketContext = null) {
   const pcr = windowPEOI / (windowCEOI || 1);
 
   const atm = strikes[atmIndex];
+
+  // Robust near-ATM IV: full-chain means are easily distorted by illiquid/deep OTM strikes.
+  // Use ATM +/-2 strikes, discard implausible values, and take the median.
+  const ivWindow = strikes.slice(Math.max(0, atmIndex - 2), Math.min(strikes.length, atmIndex + 3));
+  const nearAtmIVs = [];
+  for (const row of ivWindow) {
+    if (Number.isFinite(row.ceIV) && row.ceIV >= 1 && row.ceIV <= 150) nearAtmIVs.push(row.ceIV);
+    if (Number.isFinite(row.peIV) && row.peIV >= 1 && row.peIV <= 150) nearAtmIVs.push(row.peIV);
+  }
+  nearAtmIVs.sort((a,b)=>a-b);
+  const mid = Math.floor(nearAtmIVs.length/2);
+  const nearAtmIV = nearAtmIVs.length
+    ? (nearAtmIVs.length % 2 ? nearAtmIVs[mid] : (nearAtmIVs[mid-1] + nearAtmIVs[mid]) / 2)
+    : ((atm.ceIV > 0 && atm.peIV > 0) ? (atm.ceIV + atm.peIV) / 2 : (atm.ceIV || atm.peIV || 15));
+  const avgIV = nearAtmIV;
+  const ivRegime = classifyIV(nearAtmIV);
   const support = strikes[Math.max(0, atmIndex - 3)];
   const resistance = strikes[Math.min(strikes.length - 1, atmIndex + 3)];
 
@@ -379,7 +390,7 @@ function analyse(chain, expiryDate, marketContext = null) {
   const regime = classifyRegime(marketFeatures);
   const preliminaryExpectedMove = atm.ceLTP + atm.peLTP;
   const volatility = buildVolatilityContext({
-    avgIV, atm, spot,
+    avgIV: nearAtmIV, atm, spot,
     dte: Math.max(1, Math.ceil((new Date(expiryDate) - new Date()) / (1000*60*60*24))),
     indiaVix: marketContext?.indiaVix ?? null,
     expectedMovePoints: preliminaryExpectedMove
@@ -768,22 +779,12 @@ function analyse(chain, expiryDate, marketContext = null) {
     { label: 'PCR momentum', value: Math.round(pcrScore) },
     { label: 'Price vs max pain', value: Math.round(priceScore) }
   ];
-  if (ivState === 'CONFIRMS') factors.push({ label: 'IV ' + ivRegime + ' confirms direction', value: 15 });
-  else if (ivState === 'CONTRADICTS') factors.push({ label: 'IV ' + ivRegime + ' contradicts direction', value: -15 });
-  else factors.push({ label: 'IV ' + ivRegime + ' (no directional weight)', value: 0 });
+  factors.push({ label: 'Volatility regime (' + ivRegime + ')', value: 0 });
   if (allAligned && activeSubs.length === 3) factors.push({ label: 'All signals aligned', value: 25 });
   else if (allAligned && activeSubs.length === 2) factors.push({ label: 'Signals aligned', value: 15 });
 
-  // --- Signal quality grade (factor agreement, not magnitude) ---
-  let signalGrade;
-  const opposingCount = activeSubs.filter(s => Math.sign(s) !== Math.sign(directionalScore || 1)).length;
-  if (bias === 'NEUTRAL') {
-    signalGrade = ivRegime === 'HIGH' ? 'B' : 'C';
-  } else if (allAligned && activeSubs.length === 3 && ivState === 'CONFIRMS') signalGrade = 'A+';
-  else if (allAligned && activeSubs.length >= 2 && ivState !== 'CONTRADICTS') signalGrade = 'A';
-  else if (opposingCount === 0 && ivState !== 'CONTRADICTS') signalGrade = 'B';
-  else if (opposingCount >= 2 || ivState === 'CONTRADICTS') signalGrade = 'D';
-  else signalGrade = 'C';
+  // --- Signal quality grade: derived from the same vNext signal-quality score shown to the user ---
+  const signalGrade = confidence >= 85 ? 'A+' : confidence >= 70 ? 'A' : confidence >= 55 ? 'B' : confidence >= 40 ? 'C' : confidence >= 25 ? 'D' : 'E';
 
   // --- Trade thesis (deterministic - assembled from the same inputs the engine scored) ---
   const strategyHuman = STRATEGY_NAMES[strategy] || strategy;
@@ -796,11 +797,11 @@ function analyse(chain, expiryDate, marketContext = null) {
   if (strategy === 'WAIT') {
     thesisParts.push('No edge at current readings; ' + strategyHuman + ' until structure or volatility shifts.');
   } else if (ivRegime === 'HIGH') {
-    thesisParts.push('Elevated IV (' + avgIV.toFixed(1) + ' pct) favours premium selling; ' + strategyHuman + ' offers defined-risk theta exposure consistent with the ' + dirWord + ' read.');
+    thesisParts.push('Elevated near-ATM IV (' + nearAtmIV.toFixed(1) + ' pct) favours premium selling; ' + strategyHuman + ' offers defined-risk theta exposure consistent with the ' + dirWord + ' read.');
   } else if (ivRegime === 'LOW') {
-    thesisParts.push('Low IV (' + avgIV.toFixed(1) + ' pct) favours long premium; ' + strategyHuman + ' aligns with the ' + dirWord + ' read.');
+    thesisParts.push('Low near-ATM IV (' + nearAtmIV.toFixed(1) + ' pct) favours long premium; ' + strategyHuman + ' aligns with the ' + dirWord + ' read.');
   } else {
-    thesisParts.push('IV at ' + avgIV.toFixed(1) + ' pct is mid-regime; ' + strategyHuman + ' fits the ' + dirWord + ' structure.');
+    thesisParts.push('Near-ATM IV at ' + nearAtmIV.toFixed(1) + ' pct is mid-regime; ' + strategyHuman + ' fits the ' + dirWord + ' structure.');
   }
   const thesis = thesisParts.join(' ');
 
@@ -862,7 +863,9 @@ function analyse(chain, expiryDate, marketContext = null) {
     pcr: parseFloat(pcr.toFixed(3)),
     totalCEOI,
     totalPEOI,
-    avgIV: parseFloat(avgIV.toFixed(2)),
+    avgIV: parseFloat(nearAtmIV.toFixed(2)),
+    nearAtmIV: parseFloat(nearAtmIV.toFixed(2)),
+    ivBasis: 'NEAR_ATM_MEDIAN_PM2',
     ivRegime,
     bias,
     biasLabel,
@@ -895,6 +898,8 @@ function analyse(chain, expiryDate, marketContext = null) {
       management: managementPlan,
       position: positionPlan,
       orchestration,
+      waitReason: orchestration.status === 'READY_TO_EXECUTE' ? null :
+        (entryPlan?.reason || setup?.blockers?.join(', ') || orchestration?.blockers?.join(', ') || 'Waiting for qualification gates.'),
       regime: {
         direction: regime.direction,
         label: regime.label,

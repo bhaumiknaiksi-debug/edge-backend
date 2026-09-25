@@ -48,6 +48,8 @@ assert(strategy && strategy.name);
 assert(Array.isArray(strategy.candidates));
 const fairVol=buildVolatilityContext({avgIV:15,atm:{ceIV:15,peIV:15.5},spot:23000,dte:4,indiaVix:15,expectedMovePoints:300});
 assert.strictEqual(fairVol.richness,'FAIR');
+assert.strictEqual(fairVol.nearAtmIV,15);
+assert.strictEqual(fairVol.ivBasis,'NEAR_ATM_MEDIAN_PM2');
 const bullDebit=selectStrategy({direction:'BULLISH'},'NORMAL',fairVol);
 assert.strictEqual(bullDebit.name,'BULL_CALL_SPREAD');
 const bearDebit=selectStrategy({direction:'BEARISH'},'NORMAL',fairVol);
