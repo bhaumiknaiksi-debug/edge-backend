@@ -133,8 +133,8 @@ assert.strictEqual(risk.stop.type, 'SPREAD_DEBIT');
 assert.strictEqual(risk.target1.type, 'SPREAD_DEBIT');
 assert.strictEqual(risk.target2.type, 'SPREAD_DEBIT');
 assert(risk.maxLossPoints > 0);
-assert.strictEqual(risk.rrTarget1, 0.5);
-assert.strictEqual(risk.rrTarget2, 0.75);
+assert.strictEqual(risk.rrTarget1, 0.33);
+assert.strictEqual(risk.rrTarget2, 0.5);
 
 const management = buildManagementPlan({
   strategy: 'BEAR_CALL_SPREAD',
