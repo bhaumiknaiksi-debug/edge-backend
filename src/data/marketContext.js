@@ -80,8 +80,8 @@ async function fetchMarketContext() {
   const [quote, thirty, intraday5, intraday15] = await Promise.all([
     requestJson('/v3/market-quote/quotes?instrument_key=' + encodeURIComponent(keys)),
     requestJson('/v3/market-quote/ohlc?instrument_key=' + encodeURIComponent(INDEX_KEY) + '&interval=I30'),
-    requestJson('/v3/historical-candle/intraday/' + encodeURIComponent(INDEX_KEY) + '/minutes/5'),
-    requestJson('/v3/historical-candle/intraday/' + encodeURIComponent(INDEX_KEY) + '/minutes/15')
+    requestJson('/v3/historical-candle/intraday/' + encodeURIComponent(INDEX_KEY) + '/minutes/5').catch(() => ({data:{candles:[]}})),
+    requestJson('/v3/historical-candle/intraday/' + encodeURIComponent(INDEX_KEY) + '/minutes/15').catch(() => ({data:{candles:[]}}))
   ]);
 
   const indexQuote = extractQuote(quote, INDEX_KEY);
