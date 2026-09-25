@@ -11,6 +11,7 @@ const { buildRiskPlan } = require('./riskEngine');
 const { buildManagementPlan } = require('./managementEngine');
 const { buildPositionPlan } = require('./positionSizingEngine');
 const { buildDecisionOrchestration } = require('./decisionOrchestrator');
+const { buildVolatilityContext } = require('./volatilityEngine');
 
 const strikes = [
   { strike: 22900, ceOI: 100, peOI: 300, cePrevOI: 80, pePrevOI: 260, ceLTP: 100, peLTP: 70 },
@@ -45,6 +46,12 @@ assert.strictEqual(regime.direction, 'STRONG_BEARISH');
 const strategy = selectStrategy(regime, 'HIGH');
 assert(strategy && strategy.name);
 assert(Array.isArray(strategy.candidates));
+const fairVol=buildVolatilityContext({avgIV:15,atm:{ceIV:15,peIV:15.5},spot:23000,dte:4,indiaVix:15,expectedMovePoints:300});
+assert.strictEqual(fairVol.richness,'FAIR');
+const bullDebit=selectStrategy({direction:'BULLISH'},'NORMAL',fairVol);
+assert.strictEqual(bullDebit.name,'BULL_CALL_SPREAD');
+const bearDebit=selectStrategy({direction:'BEARISH'},'NORMAL',fairVol);
+assert.strictEqual(bearDebit.name,'BEAR_PUT_SPREAD');
 const neutralRange = { direction: 'NEUTRAL', evidenceCoverage: 100 };
 const neutralPick = selectStrategy(neutralRange, 'HIGH');
 assert.strictEqual(neutralPick.name, 'IRON_CONDOR');
@@ -135,6 +142,24 @@ assert.strictEqual(risk.target2.type, 'SPREAD_DEBIT');
 assert(risk.maxLossPoints > 0);
 assert.strictEqual(risk.rrTarget1, 0.33);
 assert.strictEqual(risk.rrTarget2, 0.5);
+
+const debitEntry=buildEntryPlan({
+  strategy:'BULL_CALL_SPREAD',spot:23110,support:22900,resistance:23100,ceWall:23200,peWall:22900,
+  expectedMove:{low:22800,high:23400},
+  tradeLegs:{buyLeg:{strike:23100,premium:'100',bid:99,ask:101},sellLeg:{strike:23200,premium:'55',bid:54,ask:56},netDebit:'45'},
+  regime:{direction:'BULLISH'},features:{trend30mPct:0.2,sessionChangePct:0.4,optionFlow:{aggregate:{label:'BULLISH_FLOW'}}},
+  marketPhase:'OPEN',dte:3,minutesRemaining:100
+});
+assert.strictEqual(debitEntry.status,'READY_TO_ENTER');
+assert.strictEqual(debitEntry.type,'NET_DEBIT_ZONE');
+const debitRisk=buildRiskPlan({
+  strategy:'BULL_CALL_SPREAD',
+  tradeLegs:{buyLeg:{strike:23100},sellLeg:{strike:23200},netDebit:'45',breakeven:'23145'},
+  spot:23110,support:22900,resistance:23100,peWall:22900,ceWall:23200,expectedMove:{low:22800,high:23400},marketPhase:'OPEN',dte:3
+});
+assert.strictEqual(debitRisk.status,'READY');
+assert.strictEqual(debitRisk.model,'DEFINED_RISK_DEBIT');
+assert.strictEqual(debitRisk.maxLossPoints,45);
 
 const management = buildManagementPlan({
   strategy: 'BEAR_CALL_SPREAD',
