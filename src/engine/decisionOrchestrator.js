@@ -84,12 +84,6 @@ function buildDecisionOrchestration({
     position?.status === 'BLOCKED'
   ) {
     status = 'POSITION_BLOCKED';
-  } else if (
-    setup?.qualified &&
-    risk?.status === 'READY' &&
-    position?.status === 'READY'
-  ) {
-    status = 'WAIT_FOR_ENTRY';
   } else if (marketPhase !== 'OPEN') {
     status = 'MARKET_CLOSED';
   }
