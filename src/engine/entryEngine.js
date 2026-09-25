@@ -187,82 +187,44 @@ function tradeShortCondition(spot, shortStrike) {
 }
 
 function buildPremiumZone(strategy, tradeLegs) {
-  if (!tradeLegs) return { available: false, reason: 'Trade legs unavailable.' };
+  if (!tradeLegs) return { available:false, reason:'Trade legs unavailable.' };
 
   if (strategy === 'BEAR_CALL_SPREAD' || strategy === 'BULL_PUT_SPREAD' || strategy === 'IRON_CONDOR') {
-    const q = creditQuote(tradeLegs);
-    const current = n(tradeLegs.netCredit);
-    if (q && current !== null) {
-      return {
-        available: true,
-        type: 'NET_CREDIT',
-        low: q.executable,
-        high: q.indicative,
-        doNotChaseBelow: q.executable,
-        basis: 'Current executable credit from short-leg bid minus long-leg ask; indicative credit uses current LTPs.'
-      };
-    }
-    if (current !== null && current > 0) {
-      return {
-        available: true,
-        type: 'NET_CREDIT',
-        low: round(current * 0.97),
-        high: round(current),
-        doNotChaseBelow: round(current * 0.97),
-        basis: 'Current net credit; bid/ask unavailable, so zone is indicative only.'
-      };
-    }
+    const q=creditQuote(tradeLegs);
+    if(q) return {available:true,type:'NET_CREDIT',current:q.executable,acceptableMin:round(q.executable*0.95),acceptableMax:null,doNotChaseBelow:round(q.executable*0.95),indicative:q.indicative,basis:'Current executable credit is short bid minus protection ask; minimum acceptable credit is 95% of the captured executable quote.'};
+    const current=n(tradeLegs.netCredit);
+    if(current!==null&&current>0) return {available:true,type:'NET_CREDIT',current:round(current),acceptableMin:round(current*0.97),acceptableMax:null,doNotChaseBelow:round(current*0.97),indicativeOnly:true,basis:'Bid/ask unavailable; current net credit is indicative.'};
   }
 
   if (strategy === 'BULL_CALL_SPREAD' || strategy === 'BEAR_PUT_SPREAD') {
     const q=verticalDebitQuote(tradeLegs);
+    if(q) return {available:true,type:'NET_DEBIT',current:q.executable,acceptableMin:null,acceptableMax:round(q.executable*1.05),doNotChaseAbove:round(q.executable*1.05),indicative:q.indicative,basis:'Current executable debit is long ask minus short bid; do-not-chase ceiling is 5% above the captured executable quote.'};
     const current=n(tradeLegs.netDebit);
-    if(q) return {available:true,type:'NET_DEBIT',low:q.indicative,high:q.executable,doNotChaseAbove:round(q.executable*1.05),basis:'Executable debit uses long-leg ask minus short-leg bid.'};
-    if(current!==null&&current>0) return {available:true,type:'NET_DEBIT',low:round(current),high:round(current*1.03),doNotChaseAbove:round(current*1.08),basis:'Indicative net debit; complete bid/ask unavailable.'};
+    if(current!==null&&current>0) return {available:true,type:'NET_DEBIT',current:round(current),acceptableMin:null,acceptableMax:round(current*1.08),doNotChaseAbove:round(current*1.08),indicativeOnly:true,basis:'Bid/ask unavailable; current net debit is indicative.'};
   }
 
   if (strategy === 'LONG_CALL' || strategy === 'LONG_PUT') {
-    const q = debitQuote(tradeLegs);
-    const current = n(tradeLegs.buyLeg?.premium);
-    if (q) {
-      return {
-        available: true,
-        type: 'PREMIUM_DEBIT',
-        low: q.indicative,
-        high: q.executable,
-        doNotChaseAbove: round(q.executable * 1.05),
-        basis: 'Current LTP to executable ask.'
-      };
-    }
-    if (current !== null && current > 0) {
-      return {
-        available: true,
-        type: 'PREMIUM_DEBIT',
-        low: round(current),
-        high: round(current * 1.03),
-        doNotChaseAbove: round(current * 1.08),
-        basis: 'Current LTP; bid/ask unavailable, so zone is indicative only.'
-      };
-    }
+    const q=debitQuote(tradeLegs);
+    if(q) return {available:true,type:'PREMIUM_DEBIT',current:q.executable,acceptableMin:null,acceptableMax:round(q.executable*1.05),doNotChaseAbove:round(q.executable*1.05),ltp:q.indicative,bid:q.bid,basis:'Current executable price is the ask; do-not-chase ceiling is 5% above the captured ask.'};
+    const current=n(tradeLegs.buyLeg?.premium);
+    if(current!==null&&current>0) return {available:true,type:'PREMIUM_DEBIT',current:round(current),acceptableMin:null,acceptableMax:round(current*1.08),doNotChaseAbove:round(current*1.08),indicativeOnly:true,basis:'Bid/ask unavailable; current premium is indicative.'};
   }
-
-  return { available: false, reason: 'Premium data unavailable.' };
+  return {available:false,reason:'Premium data unavailable.'};
 }
 
-function evaluateExecution(strategy, premium) {
-  if (!premium?.available) return { status:'PRICE_UNAVAILABLE', executable:false, current:null, reason:premium?.reason || 'Executable quote unavailable.' };
-  const current = strategy === 'BEAR_CALL_SPREAD' || strategy === 'BULL_PUT_SPREAD' || strategy === 'IRON_CONDOR'
-    ? n(premium.low) : n(premium.high);
-  if (current === null) return { status:'PRICE_UNAVAILABLE', executable:false, current:null, reason:'Executable quote unavailable.' };
-
-  if (strategy === 'BEAR_CALL_SPREAD' || strategy === 'BULL_PUT_SPREAD' || strategy === 'IRON_CONDOR') {
-    const floor=n(premium.doNotChaseBelow);
+function evaluateExecution(strategy,premium){
+  if(!premium?.available) return {status:'PRICE_UNAVAILABLE',executable:false,current:null,reason:premium?.reason||'Executable quote unavailable.'};
+  const current=n(premium.current);
+  if(current===null) return {status:'PRICE_UNAVAILABLE',executable:false,current:null,reason:'Executable quote unavailable.'};
+  const credit=strategy==='BEAR_CALL_SPREAD'||strategy==='BULL_PUT_SPREAD'||strategy==='IRON_CONDOR';
+  if(credit){
+    const floor=n(premium.acceptableMin??premium.doNotChaseBelow);
     const ok=floor===null||current>=floor;
-    return {status:ok?'PRICE_OK':'PRICE_TOO_LOW',executable:ok,current,limit:floor,reason:ok?'Executable credit is acceptable.':'Credit has fallen below the minimum acceptable level.'};
+    return {status:ok?'PRICE_OK':'PRICE_TOO_LOW',executable:ok,current,acceptableMin:floor,acceptableMax:null,reason:ok?'Executable credit is acceptable.':'Credit has fallen below the minimum acceptable level.'};
   }
-  const ceiling=n(premium.doNotChaseAbove);
+  const ceiling=n(premium.acceptableMax??premium.doNotChaseAbove);
   const ok=ceiling===null||current<=ceiling;
-  return {status:ok?'PRICE_OK':'PRICE_TOO_HIGH',executable:ok,current,limit:ceiling,reason:ok?'Executable debit is acceptable.':'Premium is above the do-not-chase ceiling.'};
+  return {status:ok?'PRICE_OK':'PRICE_TOO_HIGH',executable:ok,current,acceptableMin:null,acceptableMax:ceiling,reason:ok?'Executable debit is acceptable.':'Premium is above the do-not-chase ceiling.'};
 }
 
 function calculateValidity(strategy, dte, marketPhase, minutesRemaining = null) {
@@ -303,12 +265,17 @@ function buildEntryPlan(input) {
   });
 
   const premium = buildPremiumZone(strategy, tradeLegs);
-  const timing = calculateValidity(strategy, dte, marketPhase, minutesRemaining);
+  const timingBase = calculateValidity(strategy, dte, marketPhase, minutesRemaining);
   const execution = evaluateExecution(strategy, premium);
   const triggerReady = trigger.status === 'READY_TO_ENTER';
   const priceReady = execution.executable;
   const finalStatus = triggerReady && priceReady ? 'READY_TO_ENTER' :
     triggerReady && !priceReady ? 'WAIT_FOR_PRICE' : 'WAIT_FOR_TRIGGER';
+  const timing = {
+    ...timingBase,
+    validForMinutes: triggerReady ? timingBase.validForMinutes : null,
+    validityStarts: triggerReady ? 'TRIGGER_CONFIRMED' : 'AFTER_TRIGGER'
+  };
   const displayState = finalStatus === 'READY_TO_ENTER' ? 'BUY_NOW' :
     finalStatus === 'WAIT_FOR_PRICE' ? 'TRIGGER_HIT_PRICE_BAD' :
     priceReady ? 'PRICE_OK_WAITING_TRIGGER' : 'WAITING_TRIGGER_AND_PRICE';
