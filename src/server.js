@@ -11,6 +11,7 @@ const { buildRiskPlan } = require('./engine/riskEngine');
 const { buildManagementPlan } = require('./engine/managementEngine');
 const { buildPositionPlan } = require('./engine/positionSizingEngine');
 const { buildDecisionOrchestration } = require('./engine/decisionOrchestrator');
+const { buildVolatilityContext } = require('./engine/volatilityEngine');
 
 const http = require('http');
 const https = require('https');
@@ -65,6 +66,8 @@ const STRATEGY_NAMES = {
   BULL_PUT_SPREAD: 'Bull Put Spread',
   LONG_CALL: 'Long Call',
   LONG_PUT: 'Long Put',
+  BULL_CALL_SPREAD: 'Bull Call Spread',
+  BEAR_PUT_SPREAD: 'Bear Put Spread',
   IRON_CONDOR: 'Iron Condor',
   WAIT: 'standing aside'
 };
@@ -367,12 +370,21 @@ function analyse(chain, expiryDate, marketContext = null) {
     atmIndex,
     windowSize: WINDOW,
     sessionChangePct: marketContext?.sessionChangePct ?? null,
+    trend5mPct: marketContext?.trend5mPct ?? null,
+    trend15mPct: marketContext?.trend15mPct ?? null,
     trend30mPct: marketContext?.trend30mPct ?? null,
     futures: marketContext?.futures ?? null,
     optionFlow
   });
   const regime = classifyRegime(marketFeatures);
-  const strategyPick = selectStrategy(regime, ivRegime);
+  const preliminaryExpectedMove = atm.ceLTP + atm.peLTP;
+  const volatility = buildVolatilityContext({
+    avgIV, atm, spot,
+    dte: Math.max(1, Math.ceil((new Date(expiryDate) - new Date()) / (1000*60*60*24))),
+    indiaVix: marketContext?.indiaVix ?? null,
+    expectedMovePoints: preliminaryExpectedMove
+  });
+  const strategyPick = selectStrategy(regime, ivRegime, volatility);
   let strategy = strategyPick.name;
   let strategyReason = strategyPick.reason;
 
@@ -483,6 +495,36 @@ function analyse(chain, expiryDate, marketContext = null) {
         rrr, pop,
         lotSize: NIFTY_LOT_SIZE,
         liquidity: liquidityTagFor([sellPESel.tier, protectPESel.tier])
+      };
+    }
+  } else if (strategy === 'BULL_CALL_SPREAD' && buyCEStrikes.length && sellCEStrikes.length) {
+    const buyLeg = buyCEStrikes.sort((a,b)=>Math.abs(a.ceDelta-0.50)-Math.abs(b.ceDelta-0.50))[0];
+    const sellLeg = sellCEStrikes.filter(s=>s.strike>buyLeg.strike).sort((a,b)=>a.strike-b.strike)[0];
+    if (sellLeg) {
+      const netDebit=buyLeg.ceLTP-sellLeg.ceLTP, width=sellLeg.strike-buyLeg.strike;
+      const maxProfit=Math.max(0,width-netDebit);
+      tradeLegs={
+        buyLeg:{contractId:buildContractId(expiryDate,buyLeg.strike,'CE'),strike:buyLeg.strike,premium:buyLeg.ceLTP.toFixed(2),bid:buyLeg.ceBid,ask:buyLeg.ceAsk,type:'CE'},
+        sellLeg:{contractId:buildContractId(expiryDate,sellLeg.strike,'CE'),strike:sellLeg.strike,premium:sellLeg.ceLTP.toFixed(2),bid:sellLeg.ceBid,ask:sellLeg.ceAsk,type:'CE'},
+        netDebit:netDebit.toFixed(2),maxLoss:netDebit.toFixed(2),maxLossRupees:pointsToRupees(netDebit),
+        maxProfit:maxProfit.toFixed(2),maxProfitRupees:pointsToRupees(maxProfit),
+        breakeven:(buyLeg.strike+netDebit).toFixed(0),lotSize:NIFTY_LOT_SIZE,
+        liquidity:liquidityTagFor([buyCESel.tier,sellCESel.tier])
+      };
+    }
+  } else if (strategy === 'BEAR_PUT_SPREAD' && buyPEStrikes.length && sellPEStrikes.length) {
+    const buyLeg=buyPEStrikes.sort((a,b)=>Math.abs(Math.abs(a.peDelta)-0.50)-Math.abs(Math.abs(b.peDelta)-0.50))[0];
+    const sellLeg=sellPEStrikes.filter(s=>s.strike<buyLeg.strike).sort((a,b)=>b.strike-a.strike)[0];
+    if (sellLeg) {
+      const netDebit=buyLeg.peLTP-sellLeg.peLTP, width=buyLeg.strike-sellLeg.strike;
+      const maxProfit=Math.max(0,width-netDebit);
+      tradeLegs={
+        buyLeg:{contractId:buildContractId(expiryDate,buyLeg.strike,'PE'),strike:buyLeg.strike,premium:buyLeg.peLTP.toFixed(2),bid:buyLeg.peBid,ask:buyLeg.peAsk,type:'PE'},
+        sellLeg:{contractId:buildContractId(expiryDate,sellLeg.strike,'PE'),strike:sellLeg.strike,premium:sellLeg.peLTP.toFixed(2),bid:sellLeg.peBid,ask:sellLeg.peAsk,type:'PE'},
+        netDebit:netDebit.toFixed(2),maxLoss:netDebit.toFixed(2),maxLossRupees:pointsToRupees(netDebit),
+        maxProfit:maxProfit.toFixed(2),maxProfitRupees:pointsToRupees(maxProfit),
+        breakeven:(buyLeg.strike-netDebit).toFixed(0),lotSize:NIFTY_LOT_SIZE,
+        liquidity:liquidityTagFor([buyPESel.tier,sellPESel.tier])
       };
     }
   } else if (strategy === 'LONG_CALL' && buyCEStrikes.length) {
@@ -870,6 +912,7 @@ function analyse(chain, expiryDate, marketContext = null) {
     explain: { factors, signalGrade, thesis, counterarguments, invalidation },
     expectedMove: { points: expectedMovePts, low: emLow, high: emHigh, strikeSafety },
     structure: { writerDominance, peWall, ceWall, rangeWidth, rangePct, compression, breakoutRisk, premiumSelling },
+    volatility,
     market: {
       phase: getMarketPhase(),
       features: marketFeatures,
