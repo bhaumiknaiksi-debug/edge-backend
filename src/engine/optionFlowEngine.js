@@ -42,7 +42,7 @@ function classifyOptionFlow(option, type, underlyingChangePct = null) {
   const premiumChange = ltp - close;
   const premiumChangePct = (premiumChange / close) * 100;
 
-  const oiDir = signBucket(oiChange, MIN_OI_CHANGE_PCT);
+  const oiDir = signBucket(oiChangePct, MIN_OI_CHANGE_PCT);
   const premiumDir = Math.abs(premiumChange) >= MIN_PREMIUM_CHANGE_POINTS
     ? signBucket(premiumChange, MIN_PREMIUM_CHANGE_PCT)
     : 0;
@@ -111,7 +111,10 @@ function aggregateFlow(rows) {
 
   for (const row of rows) {
     if (!row || !row.available || !FLOW_DIRECTION_SCORE[row.state]) continue;
-    const weight = Math.min(25, Math.max(1, Math.abs(Number(row.oiChange) || 0)));
+    const oiPct = Math.abs(Number(row.oiChangePct) || 0);
+    const premiumPct = Math.abs(Number(row.premiumChangePct) || 0);
+    const confidenceFactor = Math.max(0.35, (Number(row.confidence) || 0) / 100);
+    const weight = Math.min(25, Math.max(1, (Math.log1p(oiPct) * 6 + Math.log1p(premiumPct) * 2) * confidenceFactor));
     if (FLOW_DIRECTION_SCORE[row.state] > 0) bullishWeight += weight;
     else bearishWeight += weight;
     counts[row.state] = (counts[row.state] || 0) + 1;

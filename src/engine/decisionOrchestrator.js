@@ -23,7 +23,8 @@ function buildDecisionOrchestration({
 }) {
   const blockers = [];
 
-  if (!regime || !regime.direction || regime.direction === 'NEUTRAL') {
+  const rangeStrategy = strategy === 'IRON_CONDOR' || strategy === 'IRON_BUTTERFLY';
+  if (!regime || !regime.direction || (!rangeStrategy && regime.direction === 'NEUTRAL')) {
     blockers.push('NO_REGIME_EDGE');
   }
 
@@ -90,7 +91,7 @@ function buildDecisionOrchestration({
     executionAllowed,
     blockers: uniqueBlockers,
     gates: {
-      regime: !!regime && regime.direction !== 'NEUTRAL',
+      regime: !!regime && (rangeStrategy || regime.direction !== 'NEUTRAL'),
       strategy: !!strategy && strategy !== 'WAIT',
       setup: !!setup?.qualified,
       entry: entry?.status === 'READY_TO_ENTER',
