@@ -37,6 +37,12 @@ function lotRisk(strategy, tradeLegs, risk) {
     };
   }
 
+  if (strategy === 'BULL_CALL_SPREAD' || strategy === 'BEAR_PUT_SPREAD') {
+    const maxLossPoints=n(risk.maxLossPoints);
+    if(maxLossPoints===null||maxLossPoints<=0) return null;
+    return {points:maxLossPoints,rupees:maxLossPoints*lotSize};
+  }
+
   if (strategy === 'LONG_CALL' || strategy === 'LONG_PUT') {
     const entry = n(risk.entryPremium);
     const stop = n(risk.stop?.value);
