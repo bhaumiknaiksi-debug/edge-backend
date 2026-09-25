@@ -6,7 +6,8 @@
  */
 function qualifySetup({ regime, strategy, tradeLegs, marketPhase }) {
   const blockers = [];
-  if (!regime || regime.direction === 'NEUTRAL') blockers.push('NO_DIRECTIONAL_EDGE');
+  const rangeStrategy = strategy === 'IRON_CONDOR' || strategy === 'IRON_BUTTERFLY';
+  if (!regime || (!rangeStrategy && regime.direction === 'NEUTRAL')) blockers.push('NO_DIRECTIONAL_EDGE');
   if (!strategy || strategy === 'WAIT') blockers.push('NO_STRATEGY');
   if (strategy !== 'WAIT' && !tradeLegs) blockers.push('INCOMPLETE_LEGS');
   if (marketPhase && marketPhase !== 'OPEN') blockers.push('MARKET_NOT_OPEN');
