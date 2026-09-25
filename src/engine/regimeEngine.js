@@ -32,6 +32,16 @@ function classifyRegime(features) {
     factors.push({ key: 'SESSION_PRICE', label: 'Session price trend', score: s, available: true });
   } else factors.push({ key: 'SESSION_PRICE', label: 'Session price trend', score: 0, available: false });
 
+  // 5m/15m trend agreement improves timing while 30m retains more regime weight.
+  if (Number.isFinite(features.trend5mPct)) {
+    const t5 = Math.max(-8, Math.min(8, features.trend5mPct * 30));
+    factors.push({ key:'TREND_5M', label:'5m price trend', score:t5, available:true });
+  } else factors.push({ key:'TREND_5M', label:'5m price trend', score:0, available:false });
+  if (Number.isFinite(features.trend15mPct)) {
+    const t15 = Math.max(-12, Math.min(12, features.trend15mPct * 25));
+    factors.push({ key:'TREND_15M', label:'15m price trend', score:t15, available:true });
+  } else factors.push({ key:'TREND_15M', label:'15m price trend', score:0, available:false });
+
   // 30-minute structure adds intraday confirmation without pretending it is a full TA engine.
   if (Number.isFinite(features.trend30mPct)) {
     const t = Math.max(-20, Math.min(20, features.trend30mPct * 20));
