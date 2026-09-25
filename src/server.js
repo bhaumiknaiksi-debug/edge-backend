@@ -102,6 +102,14 @@ function getMarketPhase() {
   return 'CLOSED';
 }
 
+function getMinutesRemainingIST() {
+  if (getMarketPhase() !== 'OPEN') return 0;
+  const now = new Date();
+  const ist = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+  const mins = ist.getHours() * 60 + ist.getMinutes();
+  return Math.max(0, 940 - mins); // 15:40 IST close
+}
+
 function getNextOpenIST() {
   const now = new Date();
   const ist = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
@@ -618,7 +626,8 @@ function analyse(chain, expiryDate, marketContext = null) {
     regime,
     features: marketFeatures,
     marketPhase: getMarketPhase(),
-    dte
+    dte,
+    minutesRemaining: getMinutesRemainingIST()
   });
 
   const riskPlan = buildRiskPlan({
@@ -816,6 +825,7 @@ function analyse(chain, expiryDate, marketContext = null) {
     bias,
     biasLabel,
     confidence,
+    signalQuality: confidence,
     atm: { strike: atm.strike, ceLTP: atm.ceLTP, peLTP: atm.peLTP,
       ceDelta: atm.ceDelta, peDelta: atm.peDelta, ceIV: atm.ceIV, peIV: atm.peIV,
       ceTheta: atm.ceTheta, peTheta: atm.peTheta },
@@ -832,6 +842,7 @@ function analyse(chain, expiryDate, marketContext = null) {
     })),
     decision: {
       strategy,
+      candidates: strategyPick.candidates || [strategy],
       reason: strategyReason,
       tradeLegs,
       action: setup.action,
@@ -847,6 +858,7 @@ function analyse(chain, expiryDate, marketContext = null) {
         label: regime.label,
         score: regime.score,
         confidence: regime.confidence,
+        signalQuality: regime.confidence,
         evidenceCoverage: regime.evidenceCoverage,
         missing: regime.missing,
         factors: regime.factors
