@@ -53,6 +53,14 @@ function creditQuote(tradeLegs) {
   };
 }
 
+function verticalDebitQuote(tradeLegs) {
+  if (!validQuote(tradeLegs?.buyLeg) || !validQuote(tradeLegs?.sellLeg)) return null;
+  const executable=n(tradeLegs.buyLeg.ask)-n(tradeLegs.sellLeg.bid);
+  const indicative=n(tradeLegs.netDebit);
+  if (executable<=0 || indicative===null || indicative<=0) return null;
+  return {executable:round(executable),indicative:round(indicative),spreadCost:round(Math.max(0,executable-indicative))};
+}
+
 function debitQuote(tradeLegs) {
   const leg = tradeLegs.buyLeg;
   if (!validQuote(leg)) return null;
@@ -119,6 +127,20 @@ function buildTrigger({ strategy, spot, support, resistance, ceWall, peWall, reg
         'Support hold lacks sufficient confirmation.',
       evidence: { aboveShort, supportHold, bullishConfirmation, flow, trend30mPct: trend }
     };
+  }
+
+  if (strategy === 'BULL_CALL_SPREAD') {
+    const reclaim=s>=res;
+    const momentum=(trend!==null&&trend>0)||(session!==null&&session>0)||bullishFlow;
+    const ready=reclaim&&momentum;
+    return {status:ready?'READY_TO_ENTER':'WAIT_FOR_TRIGGER',trigger:'Wait for resistance reclaim with positive momentum before paying the debit.',reason:ready?'Bullish structure confirmed.':'Debit spread needs breakout confirmation.',evidence:{reclaim,momentum,flow,trend30mPct:trend}};
+  }
+
+  if (strategy === 'BEAR_PUT_SPREAD') {
+    const breakdown=s<=sup;
+    const momentum=(trend!==null&&trend<0)||(session!==null&&session<0)||bearishFlow;
+    const ready=breakdown&&momentum;
+    return {status:ready?'READY_TO_ENTER':'WAIT_FOR_TRIGGER',trigger:'Wait for support break with negative momentum before paying the debit.',reason:ready?'Bearish structure confirmed.':'Debit spread needs breakdown confirmation.',evidence:{breakdown,momentum,flow,trend30mPct:trend}};
   }
 
   if (strategy === 'LONG_CALL') {
@@ -192,6 +214,13 @@ function buildPremiumZone(strategy, tradeLegs) {
     }
   }
 
+  if (strategy === 'BULL_CALL_SPREAD' || strategy === 'BEAR_PUT_SPREAD') {
+    const q=verticalDebitQuote(tradeLegs);
+    const current=n(tradeLegs.netDebit);
+    if(q) return {available:true,type:'NET_DEBIT',low:q.indicative,high:q.executable,doNotChaseAbove:round(q.executable*1.05),basis:'Executable debit uses long-leg ask minus short-leg bid.'};
+    if(current!==null&&current>0) return {available:true,type:'NET_DEBIT',low:round(current),high:round(current*1.03),doNotChaseAbove:round(current*1.08),basis:'Indicative net debit; complete bid/ask unavailable.'};
+  }
+
   if (strategy === 'LONG_CALL' || strategy === 'LONG_PUT') {
     const q = debitQuote(tradeLegs);
     const current = n(tradeLegs.buyLeg?.premium);
@@ -225,7 +254,7 @@ function calculateValidity(strategy, dte, marketPhase, minutesRemaining = null) 
   let base;
   if (dte <= 0) base = { validForMinutes: 10, maxHoldMinutes: 60 };
   else if (strategy === 'IRON_CONDOR') base = { validForMinutes: 20, maxHoldMinutes: 150 };
-  else if (strategy === 'BEAR_CALL_SPREAD' || strategy === 'BULL_PUT_SPREAD') base = { validForMinutes: 15, maxHoldMinutes: 120 };
+  else if (strategy === 'BEAR_CALL_SPREAD' || strategy === 'BULL_PUT_SPREAD' || strategy === 'BULL_CALL_SPREAD' || strategy === 'BEAR_PUT_SPREAD') base = { validForMinutes: 15, maxHoldMinutes: 120 };
   else base = { validForMinutes: 10, maxHoldMinutes: 90 };
 
   if (!Number.isFinite(Number(minutesRemaining))) return { ...base, sessionCapped: false };
@@ -266,6 +295,10 @@ function buildEntryPlan(input) {
     invalidation.push('Spot sustains above short call ' + tradeLegs.sellLeg.strike);
   } else if (strategy === 'BULL_PUT_SPREAD' && n(tradeLegs.sellLeg?.strike) !== null) {
     invalidation.push('Spot sustains below short put ' + tradeLegs.sellLeg.strike);
+  } else if (strategy === 'BULL_CALL_SPREAD') {
+    invalidation.push('Spot loses the reclaimed bullish structure');
+  } else if (strategy === 'BEAR_PUT_SPREAD') {
+    invalidation.push('Spot reclaims the broken bearish structure');
   } else if (strategy === 'LONG_CALL') {
     invalidation.push('Spot loses the reclaimed resistance/support structure');
   } else if (strategy === 'LONG_PUT') {
@@ -276,7 +309,7 @@ function buildEntryPlan(input) {
 
   return {
     status: trigger.status,
-    type: strategy === 'LONG_CALL' || strategy === 'LONG_PUT' ? 'PREMIUM_ZONE' : 'NET_CREDIT_ZONE',
+    type: strategy === 'LONG_CALL' || strategy === 'LONG_PUT' ? 'PREMIUM_ZONE' : (strategy === 'BULL_CALL_SPREAD' || strategy === 'BEAR_PUT_SPREAD' ? 'NET_DEBIT_ZONE' : 'NET_CREDIT_ZONE'),
     trigger: trigger.trigger,
     reason: trigger.reason,
     evidence: trigger.evidence,

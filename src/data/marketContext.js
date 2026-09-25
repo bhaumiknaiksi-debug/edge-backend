@@ -4,6 +4,7 @@ const https = require('https');
 
 const API_BASE = 'https://api.upstox.com';
 const INDEX_KEY = 'NSE_INDEX|Nifty 50';
+const VIX_KEY = 'NSE_INDEX|India VIX';
 
 let cachedFuture = null;
 let cachedAt = 0;
@@ -74,15 +75,18 @@ function pct(a, b) {
 
 async function fetchMarketContext() {
   const future = await findNearestNiftyFuture();
-  const keys = [INDEX_KEY, future.instrument_key].join(',');
+  const keys = [INDEX_KEY, future.instrument_key, VIX_KEY].join(',');
 
-  const [quote, thirty] = await Promise.all([
+  const [quote, thirty, intraday5, intraday15] = await Promise.all([
     requestJson('/v3/market-quote/quotes?instrument_key=' + encodeURIComponent(keys)),
-    requestJson('/v3/market-quote/ohlc?instrument_key=' + encodeURIComponent(INDEX_KEY) + '&interval=I30')
+    requestJson('/v3/market-quote/ohlc?instrument_key=' + encodeURIComponent(INDEX_KEY) + '&interval=I30'),
+    requestJson('/v3/historical-candle/intraday/' + encodeURIComponent(INDEX_KEY) + '/minutes/5').catch(() => ({data:{candles:[]}})),
+    requestJson('/v3/historical-candle/intraday/' + encodeURIComponent(INDEX_KEY) + '/minutes/15').catch(() => ({data:{candles:[]}}))
   ]);
 
   const indexQuote = extractQuote(quote, INDEX_KEY);
   const futureQuote = extractQuote(quote, future.instrument_key);
+  const vixQuote = extractQuote(quote, VIX_KEY);
   if (!indexQuote) throw new Error('NIFTY index quote unavailable');
   if (!futureQuote) throw new Error('NIFTY futures quote unavailable');
 
@@ -101,6 +105,15 @@ async function fetchMarketContext() {
   const previousOI = Number(futureQuote.previous_oi);
   const futuresOIChangePct = pct(currentOI, previousOI);
   const trend30mPct = pct(Number(live30.close), Number(prev30.close));
+  function candleTrend(parsed) {
+    const candles = parsed?.data?.candles || [];
+    if (candles.length < 2) return null;
+    const newest = Number(candles[0]?.[4]), previous = Number(candles[1]?.[4]);
+    return pct(newest, previous);
+  }
+  const trend5mPct = candleTrend(intraday5);
+  const trend15mPct = candleTrend(intraday15);
+  const indiaVix = Number(vixQuote?.last_price ?? vixQuote?.ohlc?.close);
 
   let futuresBuildUp = 'UNAVAILABLE';
   if (Number.isFinite(futuresPriceChangePct) && Number.isFinite(futuresOIChangePct)) {
@@ -117,7 +130,10 @@ async function fetchMarketContext() {
     sessionHigh: Number(indexOhlc.high) || null,
     sessionLow: Number(indexOhlc.low) || null,
     sessionChangePct,
+    trend5mPct,
+    trend15mPct,
     trend30mPct,
+    indiaVix: Number.isFinite(indiaVix) ? indiaVix : null,
     futures: {
       instrumentKey: future.instrument_key,
       tradingSymbol: future.trading_symbol,

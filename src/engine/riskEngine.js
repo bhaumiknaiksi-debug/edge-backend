@@ -114,6 +114,28 @@ function creditRisk(strategy, tradeLegs) {
   return plan;
 }
 
+
+function debitSpreadRisk(strategy, tradeLegs) {
+  const debit=n(tradeLegs?.netDebit), buy=n(tradeLegs?.buyLeg?.strike), sell=n(tradeLegs?.sellLeg?.strike);
+  if(!positive(debit)||buy===null||sell===null) return null;
+  const width=Math.abs(sell-buy), maxProfit=Math.max(0,width-debit);
+  if(!positive(width)||maxProfit<=0) return null;
+  const stopDebit=Math.max(0.05,debit*0.50);
+  const target1=Math.min(width,debit+maxProfit*0.50);
+  const target2=Math.min(width,debit+maxProfit*0.75);
+  const riskPoints=debit-stopDebit;
+  return {
+    model:'DEFINED_RISK_DEBIT',entryDebit:round(debit),maxLossPoints:round(debit),maxProfitPoints:round(maxProfit),
+    stop:{type:'SPREAD_DEBIT',value:round(stopDebit),rule:'Exit if spread value loses 50% of entry debit or underlying thesis invalidates.'},
+    target1:{type:'SPREAD_DEBIT',value:round(target1),profitPoints:round(target1-debit),rule:'Take partial profit after capturing 50% of maximum spread profit.'},
+    target2:{type:'SPREAD_DEBIT',value:round(target2),profitPoints:round(target2-debit),rule:'Exit remaining risk after capturing 75% of maximum spread profit.'},
+    rrTarget1:riskPoints>0?round((target1-debit)/riskPoints):null,
+    rrTarget2:riskPoints>0?round((target2-debit)/riskPoints):null,
+    breakeven:{value:n(tradeLegs.breakeven)},
+    structure:{longStrike:buy,shortStrike:sell}
+  };
+}
+
 function directionalRisk(strategy, tradeLegs, context) {
   const entry = n(tradeLegs?.buyLeg?.premium);
   const delta = Math.abs(n(tradeLegs?.legDelta));
@@ -196,6 +218,12 @@ function buildRiskPlan({ strategy, tradeLegs, spot, support, resistance, peWall,
       ...plan,
       maxHoldMinutes: strategy === 'IRON_CONDOR' ? 150 : (dte <= 0 ? 60 : 120)
     };
+  }
+
+  if (strategy === 'BULL_CALL_SPREAD' || strategy === 'BEAR_PUT_SPREAD') {
+    const plan=debitSpreadRisk(strategy,tradeLegs);
+    if(!plan) return {status:'UNAVAILABLE',reason:'Insufficient quote/structure data for debit spread risk.'};
+    return {status:'READY',...plan,maxHoldMinutes:dte<=0?60:120};
   }
 
   if (strategy === 'LONG_CALL' || strategy === 'LONG_PUT') {

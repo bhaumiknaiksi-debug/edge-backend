@@ -59,6 +59,17 @@ function buildManagementPlan({ strategy, risk, entry, regime, spot }) {
     };
   }
 
+  if (strategy === 'BULL_CALL_SPREAD' || strategy === 'BEAR_PUT_SPREAD') {
+    return {
+      status:'READY',action:entry?.status==='READY_TO_ENTER'?'ENTER_IF_PREMIUM_ZONE_HOLDS':'WAIT',
+      profitTaking:{target1:'Take partial profit at risk.target1.',target2:'Close remaining spread at risk.target2.'},
+      trailing:{afterTarget1:'Protect the remaining debit; never widen the initial stop.',condition:'Continue only while underlying structure supports the directional thesis.'},
+      adjustment:['Do not average down a losing debit spread.','Exit on underlying invalidation even if spread stop has not printed.'],
+      thesisInvalidation:strategy==='BULL_CALL_SPREAD'?'Underlying loses reclaimed bullish structure.':'Underlying reclaims broken bearish structure.',
+      timeExit:'Exit/reassess when maxHoldMinutes is reached.',snapshot:{spot:s}
+    };
+  }
+
   if (strategy === 'LONG_CALL' || strategy === 'LONG_PUT') {
     return {
       status: 'READY',
