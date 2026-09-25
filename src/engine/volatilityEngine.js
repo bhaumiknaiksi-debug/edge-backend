@@ -28,7 +28,7 @@ function buildVolatilityContext({ avgIV, atm, spot, dte, indiaVix, expectedMoveP
   if (skew!==null) skewLabel=skew>=2?'PUT_RICH':skew<=-2?'CALL_RICH':'BALANCED';
 
   return {
-    chainIV: iv, indiaVix:vix, ivVixSpread:ivVixSpread===null?null:round(ivVixSpread),
+    nearAtmIV: iv, ivBasis:'NEAR_ATM_MEDIAN_PM2', indiaVix:vix, ivVixSpread:ivVixSpread===null?null:round(ivVixSpread),
     atmSkew:skew===null?null:round(skew), skewLabel,
     straddleMovePct:straddleMovePct===null?null:round(straddleMovePct),
     vixExpectedMovePct:vixMovePct===null?null:round(vixMovePct),
@@ -36,7 +36,7 @@ function buildVolatilityContext({ avgIV, atm, spot, dte, indiaVix, expectedMoveP
     richness,
     ivRank:null,
     ivRankStatus:'UNAVAILABLE_WITHOUT_HISTORICAL_IV_SERIES',
-    note:'Richness is a live cross-check, not IV rank or a forecast.'
+    note:'Richness compares robust near-ATM IV and priced move with India VIX; it is not IV rank or a forecast.'
   };
 }
 module.exports={buildVolatilityContext};
