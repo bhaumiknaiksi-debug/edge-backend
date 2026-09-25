@@ -145,6 +145,31 @@ assert(risk.maxLossPoints > 0);
 assert.strictEqual(risk.rrTarget1, 0.33);
 assert.strictEqual(risk.rrTarget2, 0.5);
 
+const waitingPut=buildEntryPlan({
+  strategy:'LONG_PUT',spot:23120,support:23000,resistance:23200,ceWall:23200,peWall:23000,
+  expectedMove:{low:22800,high:23400},
+  tradeLegs:{buyLeg:{strike:23100,premium:'111.10',bid:110.9,ask:111.2}},
+  regime:{direction:'BEARISH'},features:{trend30mPct:-0.2,sessionChangePct:-0.3,optionFlow:{aggregate:{label:'BEARISH_FLOW'}}},
+  marketPhase:'OPEN',dte:4,minutesRemaining:120
+});
+assert.strictEqual(waitingPut.status,'WAIT_FOR_TRIGGER');
+assert.strictEqual(waitingPut.triggerStatus,'WAITING');
+assert.strictEqual(waitingPut.priceStatus,'PRICE_OK_WAITING_TRIGGER');
+assert.strictEqual(waitingPut.buyNow,false);
+assert.strictEqual(waitingPut.currentEntryPrice,111.1);
+
+const readyPut=buildEntryPlan({
+  strategy:'LONG_PUT',spot:22990,support:23000,resistance:23200,ceWall:23200,peWall:23000,
+  expectedMove:{low:22800,high:23400},
+  tradeLegs:{buyLeg:{strike:23100,premium:'111.10',bid:110.9,ask:111.2}},
+  regime:{direction:'BEARISH'},features:{trend30mPct:-0.2,sessionChangePct:-0.3,optionFlow:{aggregate:{label:'BEARISH_FLOW'}}},
+  marketPhase:'OPEN',dte:4,minutesRemaining:120
+});
+assert.strictEqual(readyPut.status,'READY_TO_ENTER');
+assert.strictEqual(readyPut.triggerStatus,'CONFIRMED');
+assert.strictEqual(readyPut.priceStatus,'EXECUTABLE');
+assert.strictEqual(readyPut.buyNow,true);
+
 const debitEntry=buildEntryPlan({
   strategy:'BULL_CALL_SPREAD',spot:23110,support:22900,resistance:23100,ceWall:23200,peWall:22900,
   expectedMove:{low:22800,high:23400},
