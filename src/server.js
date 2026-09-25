@@ -508,7 +508,7 @@ function analyse(chain, expiryDate, marketContext = null) {
         sellLeg:{contractId:buildContractId(expiryDate,sellLeg.strike,'CE'),strike:sellLeg.strike,premium:sellLeg.ceLTP.toFixed(2),bid:sellLeg.ceBid,ask:sellLeg.ceAsk,type:'CE'},
         netDebit:netDebit.toFixed(2),netDebitRupees:pointsToRupees(netDebit),maxLoss:netDebit.toFixed(2),maxLossRupees:pointsToRupees(netDebit),
         maxProfit:maxProfit.toFixed(2),maxProfitRupees:pointsToRupees(maxProfit),
-        breakeven:(buyLeg.strike+netDebit).toFixed(0),lotSize:NIFTY_LOT_SIZE,
+        breakeven:(buyLeg.strike+netDebit).toFixed(0),rrr:netDebit>0?(maxProfit/netDebit).toFixed(2):'N/A',lotSize:NIFTY_LOT_SIZE,
         liquidity:liquidityTagFor([buyCESel.tier,sellCESel.tier])
       };
     }
@@ -523,7 +523,7 @@ function analyse(chain, expiryDate, marketContext = null) {
         sellLeg:{contractId:buildContractId(expiryDate,sellLeg.strike,'PE'),strike:sellLeg.strike,premium:sellLeg.peLTP.toFixed(2),bid:sellLeg.peBid,ask:sellLeg.peAsk,type:'PE'},
         netDebit:netDebit.toFixed(2),netDebitRupees:pointsToRupees(netDebit),maxLoss:netDebit.toFixed(2),maxLossRupees:pointsToRupees(netDebit),
         maxProfit:maxProfit.toFixed(2),maxProfitRupees:pointsToRupees(maxProfit),
-        breakeven:(buyLeg.strike-netDebit).toFixed(0),lotSize:NIFTY_LOT_SIZE,
+        breakeven:(buyLeg.strike-netDebit).toFixed(0),rrr:netDebit>0?(maxProfit/netDebit).toFixed(2):'N/A',lotSize:NIFTY_LOT_SIZE,
         liquidity:liquidityTagFor([buyPESel.tier,sellPESel.tier])
       };
     }
