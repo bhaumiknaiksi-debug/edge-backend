@@ -118,6 +118,9 @@ const blockedEntry = buildEntryPlan({
   dte: 2
 });
 assert.strictEqual(blockedEntry.status, 'WAIT_FOR_TRIGGER');
+assert.strictEqual(blockedEntry.triggerReady, false);
+assert.strictEqual(blockedEntry.priceReady, true);
+assert.strictEqual(blockedEntry.displayState, 'PRICE_OK_WAITING_TRIGGER');
 
 const risk = buildRiskPlan({
   strategy: 'BEAR_CALL_SPREAD',
@@ -153,6 +156,9 @@ const debitEntry=buildEntryPlan({
   marketPhase:'OPEN',dte:3,minutesRemaining:100
 });
 assert.strictEqual(debitEntry.status,'READY_TO_ENTER');
+assert.strictEqual(debitEntry.triggerReady,true);
+assert.strictEqual(debitEntry.priceReady,true);
+assert.strictEqual(debitEntry.displayState,'BUY_NOW');
 assert.strictEqual(debitEntry.type,'NET_DEBIT_ZONE');
 const debitRisk=buildRiskPlan({
   strategy:'BULL_CALL_SPREAD',
