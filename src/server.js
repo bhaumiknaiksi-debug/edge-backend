@@ -12,6 +12,7 @@ const { buildManagementPlan } = require('./engine/managementEngine');
 const { buildPositionPlan } = require('./engine/positionSizingEngine');
 const { buildDecisionOrchestration } = require('./engine/decisionOrchestrator');
 const { buildVolatilityContext } = require('./engine/volatilityEngine');
+const { evidenceKey } = require('./evidence/evidenceEngine');
 
 const http = require('http');
 const https = require('https');
@@ -81,6 +82,8 @@ let lastError = null;
 // History ring buffer - last N successful polls for session grading
 const HISTORY_LIMIT = 500;
 const history = [];
+const evidenceSnapshots = [];
+const EVIDENCE_LIMIT = 2000;
 
 // --- Market hours ---
 // NSE F&O regular market: 09:15-15:40 IST; F&O pre-open: 09:00-09:15 IST.
@@ -972,6 +975,25 @@ async function poll() {
         tradeLegs: result.decision?.tradeLegs
       });
       if (history.length > HISTORY_LIMIT) history.shift();
+
+      // Evidence snapshot: preserve the state that produced the decision.
+      // Outcome is intentionally not guessed here; it is joined later to real future contract candles.
+      const evidenceSnapshot = {
+        timestamp: result.timestamp,
+        spot: result.spot,
+        dte: result.dte,
+        strategy: result.decision?.strategy,
+        tradeLegs: result.decision?.tradeLegs,
+        regime: result.decision?.regime,
+        volatility: result.volatility,
+        signalQuality: result.signalQuality,
+        entryStatus: result.decision?.entry?.status,
+        orchestrationStatus: result.decision?.orchestration?.status,
+        features: result.market?.features
+      };
+      evidenceSnapshot.evidenceKey = evidenceKey(evidenceSnapshot);
+      evidenceSnapshots.push(evidenceSnapshot);
+      if (evidenceSnapshots.length > EVIDENCE_LIMIT) evidenceSnapshots.shift();
     }
     backoffMs = 30000;
   } catch (err) {
@@ -1001,6 +1023,11 @@ app.get('/api/v1/market/status', (req, res) => res.json({ phase: getMarketPhase(
 
 // History endpoint - last N poll snapshots for session grading
 // Query: ?limit=N (default 100, max HISTORY_LIMIT), ?since=ISO (filter by timestamp)
+app.get('/evidence/snapshots', (req,res) => {
+  const limit=Math.min(EVIDENCE_LIMIT,parseInt(req.query.limit,10)||100);
+  res.json({count:Math.min(limit,evidenceSnapshots.length),total:evidenceSnapshots.length,entries:evidenceSnapshots.slice(-limit)});
+});
+
 app.get('/history', (req, res) => {
   const limit = Math.min(HISTORY_LIMIT, parseInt(req.query.limit, 10) || 100);
   const since = req.query.since ? new Date(req.query.since).getTime() : 0;
