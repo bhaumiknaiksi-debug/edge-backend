@@ -267,6 +267,23 @@ function calculateValidity(strategy, dte, marketPhase, minutesRemaining = null) 
   };
 }
 
+function premiumState(strategy, tradeLegs, premium, triggerReady) {
+  if (!premium?.available) return { status:'UNAVAILABLE', current:null, acceptable:false, label:'NO QUOTE' };
+  let current=null;
+  if (strategy === 'LONG_CALL' || strategy === 'LONG_PUT') current=n(tradeLegs?.buyLeg?.premium);
+  else if (strategy === 'BULL_CALL_SPREAD' || strategy === 'BEAR_PUT_SPREAD') current=n(tradeLegs?.netDebit);
+  else current=n(tradeLegs?.netCredit);
+  const low=n(premium.low), high=n(premium.high);
+  const acceptable=current!==null && low!==null && high!==null && current>=Math.min(low,high) && current<=Math.max(low,high);
+  return {
+    status: acceptable ? (triggerReady ? 'EXECUTABLE' : 'PRICE_OK_WAITING_TRIGGER') : 'OUTSIDE_ZONE',
+    current: current===null?null:round(current),
+    acceptable,
+    triggerReady:!!triggerReady,
+    label: acceptable ? (triggerReady ? 'PRICE OK' : 'PRICE OK · WAIT TRIGGER') : 'PRICE OUTSIDE ZONE'
+  };
+}
+
 function buildEntryPlan(input) {
   const {
     strategy, spot, support, resistance, ceWall, peWall, expectedMove,
@@ -287,6 +304,9 @@ function buildEntryPlan(input) {
   });
 
   const premium = buildPremiumZone(strategy, tradeLegs);
+  const triggerReady = trigger.status === 'READY_TO_ENTER';
+  const priceState = premiumState(strategy, tradeLegs, premium, triggerReady);
+  const finalStatus = triggerReady && priceState.acceptable ? 'READY_TO_ENTER' : 'WAIT_FOR_TRIGGER';
   const timing = calculateValidity(strategy, dte, marketPhase, minutesRemaining);
 
   const invalidation = [];
@@ -308,12 +328,21 @@ function buildEntryPlan(input) {
   }
 
   return {
-    status: trigger.status,
+    status: finalStatus,
+    triggerStatus: triggerReady ? 'CONFIRMED' : 'WAITING',
+    priceStatus: priceState.status,
+    currentEntryPrice: priceState.current,
+    buyNow: finalStatus === 'READY_TO_ENTER',
     type: strategy === 'LONG_CALL' || strategy === 'LONG_PUT' ? 'PREMIUM_ZONE' : (strategy === 'BULL_CALL_SPREAD' || strategy === 'BEAR_PUT_SPREAD' ? 'NET_DEBIT_ZONE' : 'NET_CREDIT_ZONE'),
     trigger: trigger.trigger,
-    reason: trigger.reason,
+    reason: finalStatus === 'READY_TO_ENTER'
+      ? 'Trigger confirmed and current execution price is inside the acceptable zone.'
+      : (priceState.acceptable && !triggerReady
+          ? 'Price is acceptable, but the market trigger is not confirmed yet.'
+          : trigger.reason),
     evidence: trigger.evidence,
     premium,
+    priceState,
     timing,
     invalidation,
     snapshot: {
