@@ -76,7 +76,7 @@ function creditRisk(strategy, tradeLegs) {
   const target1Debit = Math.max(0, s.credit * 0.50);
   const target2Debit = Math.max(0, s.credit * 0.25);
 
-  const riskPoints = Math.max(0, stopDebit - 0);
+  const riskPoints = Math.max(0, stopDebit - s.credit);
   const reward1 = Math.max(0, s.credit - target1Debit);
   const reward2 = Math.max(0, s.credit - target2Debit);
 
