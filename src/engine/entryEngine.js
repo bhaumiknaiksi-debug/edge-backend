@@ -220,20 +220,28 @@ function buildPremiumZone(strategy, tradeLegs) {
   return { available: false, reason: 'Premium data unavailable.' };
 }
 
-function calculateValidity(strategy, dte, marketPhase) {
-  if (marketPhase !== 'OPEN') return { validForMinutes: 0, maxHoldMinutes: 0 };
-  if (dte <= 0) return { validForMinutes: 10, maxHoldMinutes: 60 };
-  if (strategy === 'IRON_CONDOR') return { validForMinutes: 20, maxHoldMinutes: 150 };
-  if (strategy === 'BEAR_CALL_SPREAD' || strategy === 'BULL_PUT_SPREAD') {
-    return { validForMinutes: 15, maxHoldMinutes: 120 };
-  }
-  return { validForMinutes: 10, maxHoldMinutes: 90 };
+function calculateValidity(strategy, dte, marketPhase, minutesRemaining = null) {
+  if (marketPhase !== 'OPEN') return { validForMinutes: 0, maxHoldMinutes: 0, sessionCapped: false };
+  let base;
+  if (dte <= 0) base = { validForMinutes: 10, maxHoldMinutes: 60 };
+  else if (strategy === 'IRON_CONDOR') base = { validForMinutes: 20, maxHoldMinutes: 150 };
+  else if (strategy === 'BEAR_CALL_SPREAD' || strategy === 'BULL_PUT_SPREAD') base = { validForMinutes: 15, maxHoldMinutes: 120 };
+  else base = { validForMinutes: 10, maxHoldMinutes: 90 };
+
+  if (!Number.isFinite(Number(minutesRemaining))) return { ...base, sessionCapped: false };
+  const remaining = Math.max(0, Math.floor(Number(minutesRemaining)));
+  return {
+    validForMinutes: Math.min(base.validForMinutes, remaining),
+    maxHoldMinutes: Math.min(base.maxHoldMinutes, remaining),
+    sessionCapped: remaining < base.maxHoldMinutes,
+    minutesRemaining: remaining
+  };
 }
 
 function buildEntryPlan(input) {
   const {
     strategy, spot, support, resistance, ceWall, peWall, expectedMove,
-    tradeLegs, regime, features, marketPhase, dte
+    tradeLegs, regime, features, marketPhase, dte, minutesRemaining
   } = input;
 
   if (!strategy || strategy === 'WAIT' || !tradeLegs) {
@@ -250,7 +258,7 @@ function buildEntryPlan(input) {
   });
 
   const premium = buildPremiumZone(strategy, tradeLegs);
-  const timing = calculateValidity(strategy, dte, marketPhase);
+  const timing = calculateValidity(strategy, dte, marketPhase, minutesRemaining);
 
   const invalidation = [];
   const s = n(spot);
