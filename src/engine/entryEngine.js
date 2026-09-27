@@ -78,7 +78,7 @@ function legLiquidity(leg) {
   if (bid <= 0 || ask <= 0) return { ok:false, reason:'POSITIVE_BID_ASK_REQUIRED', bid, ask };
   const spread=ask-bid;
   const spreadPct=ask>0 ? spread/ask*100 : Infinity;
-  const ok=spread<=5 && spreadPct<=5;
+  const ok=spread<=5 && spreadPct<=10;
   return { ok, bid:round(bid), ask:round(ask), spread:round(spread), spreadPct:round(spreadPct), reason:ok?'LIQUID':'SPREAD_TOO_WIDE' };
 }
 
