@@ -13,6 +13,7 @@
  */
 
 function n(v) {
+  if (v === null || v === undefined || v === '') return null;
   const x = Number(v);
   return Number.isFinite(x) ? x : null;
 }
@@ -23,7 +24,7 @@ function round(v, dp = 2) {
 
 function validQuote(leg) {
   return leg && n(leg.bid) !== null && n(leg.ask) !== null &&
-    n(leg.bid) >= 0 && n(leg.ask) >= n(leg.bid);
+    n(leg.bid) > 0 && n(leg.ask) >= n(leg.bid);
 }
 
 function creditQuote(tradeLegs) {
@@ -63,7 +64,7 @@ function verticalDebitQuote(tradeLegs) {
 
 function debitQuote(tradeLegs) {
   const leg = tradeLegs.buyLeg;
-  if (!validQuote(leg)) return null;
+  if (!validQuote(leg) || n(leg.premium) === null || n(leg.premium) <= 0) return null;
 
   return {
     executable: round(n(leg.ask)),
@@ -196,16 +197,19 @@ function buildPremiumZone(strategy, tradeLegs) {
       return {
         available: true,
         type: 'NET_CREDIT',
+        current: q.executable,
         low: q.executable,
         high: q.indicative,
-        doNotChaseBelow: q.executable,
-        basis: 'Current executable credit from short-leg bid minus long-leg ask; indicative credit uses current LTPs.'
+        doNotChaseBelow: round(q.indicative * 0.95),
+        basis: 'Executable credit is short bid minus protection ask; minimum credit is 95% of the independent LTP valuation.'
       };
     }
     if (current !== null && current > 0) {
       return {
         available: true,
         type: 'NET_CREDIT',
+        current: null,
+        indicativeOnly: true,
         low: round(current * 0.97),
         high: round(current),
         doNotChaseBelow: round(current * 0.97),
@@ -217,8 +221,8 @@ function buildPremiumZone(strategy, tradeLegs) {
   if (strategy === 'BULL_CALL_SPREAD' || strategy === 'BEAR_PUT_SPREAD') {
     const q=verticalDebitQuote(tradeLegs);
     const current=n(tradeLegs.netDebit);
-    if(q) return {available:true,type:'NET_DEBIT',low:q.indicative,high:q.executable,doNotChaseAbove:round(q.executable*1.05),basis:'Executable debit uses long-leg ask minus short-leg bid.'};
-    if(current!==null&&current>0) return {available:true,type:'NET_DEBIT',low:round(current),high:round(current*1.03),doNotChaseAbove:round(current*1.08),basis:'Indicative net debit; complete bid/ask unavailable.'};
+    if(q) return {available:true,type:'NET_DEBIT',current:q.executable,low:q.indicative,high:q.executable,doNotChaseAbove:round(q.indicative*1.05),basis:'Executable debit uses long ask minus short bid; maximum debit is 105% of the independent LTP valuation.'};
+    if(current!==null&&current>0) return {available:true,type:'NET_DEBIT',current:null,indicativeOnly:true,low:round(current),high:round(current*1.03),doNotChaseAbove:round(current*1.08),basis:'Indicative net debit; complete bid/ask unavailable.'};
   }
 
   if (strategy === 'LONG_CALL' || strategy === 'LONG_PUT') {
@@ -228,16 +232,19 @@ function buildPremiumZone(strategy, tradeLegs) {
       return {
         available: true,
         type: 'PREMIUM_DEBIT',
+        current: q.executable,
         low: q.indicative,
         high: q.executable,
-        doNotChaseAbove: round(q.executable * 1.05),
-        basis: 'Current LTP to executable ask.'
+        doNotChaseAbove: round(q.indicative * 1.05),
+        basis: 'Executable price is the ask; maximum debit is 105% of the independent LTP valuation.'
       };
     }
     if (current !== null && current > 0) {
       return {
         available: true,
         type: 'PREMIUM_DEBIT',
+        current: null,
+        indicativeOnly: true,
         low: round(current),
         high: round(current * 1.03),
         doNotChaseAbove: round(current * 1.08),
@@ -251,17 +258,16 @@ function buildPremiumZone(strategy, tradeLegs) {
 
 function evaluateExecution(strategy, premium) {
   if (!premium?.available) return { status:'PRICE_UNAVAILABLE', executable:false, current:null, reason:premium?.reason || 'Executable quote unavailable.' };
-  const current = strategy === 'BEAR_CALL_SPREAD' || strategy === 'BULL_PUT_SPREAD' || strategy === 'IRON_CONDOR'
-    ? n(premium.low) : n(premium.high);
+  const current = premium.indicativeOnly ? null : n(premium.current);
   if (current === null) return { status:'PRICE_UNAVAILABLE', executable:false, current:null, reason:'Executable quote unavailable.' };
 
   if (strategy === 'BEAR_CALL_SPREAD' || strategy === 'BULL_PUT_SPREAD' || strategy === 'IRON_CONDOR') {
     const floor=n(premium.doNotChaseBelow);
-    const ok=floor===null||current>=floor;
+    const ok=floor!==null&&current>=floor;
     return {status:ok?'PRICE_OK':'PRICE_TOO_LOW',executable:ok,current,limit:floor,reason:ok?'Executable credit is acceptable.':'Credit has fallen below the minimum acceptable level.'};
   }
   const ceiling=n(premium.doNotChaseAbove);
-  const ok=ceiling===null||current<=ceiling;
+  const ok=ceiling!==null&&current<=ceiling;
   return {status:ok?'PRICE_OK':'PRICE_TOO_HIGH',executable:ok,current,limit:ceiling,reason:ok?'Executable debit is acceptable.':'Premium is above the do-not-chase ceiling.'};
 }
 
@@ -273,7 +279,7 @@ function calculateValidity(strategy, dte, marketPhase, minutesRemaining = null) 
   else if (strategy === 'BEAR_CALL_SPREAD' || strategy === 'BULL_PUT_SPREAD' || strategy === 'BULL_CALL_SPREAD' || strategy === 'BEAR_PUT_SPREAD') base = { validForMinutes: 15, maxHoldMinutes: 120 };
   else base = { validForMinutes: 10, maxHoldMinutes: 90 };
 
-  if (!Number.isFinite(Number(minutesRemaining))) return { ...base, sessionCapped: false };
+  if (n(minutesRemaining) === null) return { ...base, sessionCapped: false };
   const remaining = Math.max(0, Math.floor(Number(minutesRemaining)));
   return {
     validForMinutes: Math.min(base.validForMinutes, remaining),
@@ -303,13 +309,18 @@ function buildEntryPlan(input) {
   });
 
   const premium = buildPremiumZone(strategy, tradeLegs);
-  const timing = calculateValidity(strategy, dte, marketPhase, minutesRemaining);
+  const timingBase = calculateValidity(strategy, dte, marketPhase, minutesRemaining);
   const execution = evaluateExecution(strategy, premium);
   const triggerReady = trigger.status === 'READY_TO_ENTER';
   const priceReady = execution.executable;
-  const finalStatus = triggerReady && priceReady ? 'READY_TO_ENTER' :
+  const timing = {
+    ...timingBase,
+    validForMinutes: marketPhase !== 'OPEN' ? 0 : (triggerReady ? timingBase.validForMinutes : null),
+    validityStarts: triggerReady ? 'TRIGGER_CONFIRMED' : 'AFTER_TRIGGER'
+  };
+  const finalStatus = triggerReady && priceReady ? (marketPhase === 'OPEN' ? 'READY_TO_ENTER' : 'WAIT_FOR_MARKET') :
     triggerReady && !priceReady ? 'WAIT_FOR_PRICE' : 'WAIT_FOR_TRIGGER';
-  const displayState = finalStatus === 'READY_TO_ENTER' ? 'BUY_NOW' :
+  const displayState = marketPhase !== 'OPEN' ? 'MARKET_NOT_OPEN' : finalStatus === 'READY_TO_ENTER' ? 'BUY_NOW' :
     finalStatus === 'WAIT_FOR_PRICE' ? 'TRIGGER_HIT_PRICE_BAD' :
     priceReady ? 'PRICE_OK_WAITING_TRIGGER' : 'WAITING_TRIGGER_AND_PRICE';
 
@@ -340,7 +351,7 @@ function buildEntryPlan(input) {
     priceReady,
     type: strategy === 'LONG_CALL' || strategy === 'LONG_PUT' ? 'PREMIUM_ZONE' : (strategy === 'BULL_CALL_SPREAD' || strategy === 'BEAR_PUT_SPREAD' ? 'NET_DEBIT_ZONE' : 'NET_CREDIT_ZONE'),
     trigger: trigger.trigger,
-    reason: finalStatus === 'READY_TO_ENTER' ? 'Trigger confirmed and executable price is acceptable.' : (finalStatus === 'WAIT_FOR_PRICE' ? execution.reason : trigger.reason),
+    reason: finalStatus === 'WAIT_FOR_MARKET' ? 'Market is not open for execution.' : finalStatus === 'READY_TO_ENTER' ? 'Trigger confirmed and executable price is acceptable.' : (finalStatus === 'WAIT_FOR_PRICE' ? execution.reason : trigger.reason),
     evidence: trigger.evidence,
     premium,
     timing,

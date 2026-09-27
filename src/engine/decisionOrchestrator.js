@@ -40,6 +40,8 @@ function buildDecisionOrchestration({
     blockers.push('ENTRY_UNAVAILABLE');
   } else if (entry.status === 'WAIT_FOR_PRICE') {
     blockers.push('ENTRY_PRICE_NOT_ACCEPTABLE');
+  } else if (entry.status === 'WAIT_FOR_MARKET') {
+    blockers.push('MARKET_NOT_OPEN');
   } else if (entry.status !== 'READY_TO_ENTER') {
     blockers.push('ENTRY_TRIGGER_NOT_CONFIRMED');
   }
@@ -84,12 +86,6 @@ function buildDecisionOrchestration({
     position?.status === 'BLOCKED'
   ) {
     status = 'POSITION_BLOCKED';
-  } else if (
-    setup?.qualified &&
-    risk?.status === 'READY' &&
-    position?.status === 'READY'
-  ) {
-    status = 'WAIT_FOR_ENTRY';
   } else if (marketPhase !== 'OPEN') {
     status = 'MARKET_CLOSED';
   }

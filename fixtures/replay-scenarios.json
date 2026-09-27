@@ -19,8 +19,8 @@
       "optionFlow": { "aggregate": { "label": "BULLISH_FLOW" } }
     },
     "tradeLegs": {
-      "sellLeg": { "strike": 22900, "premium": "45", "bid": 44, "ask": 46, "type": "PE" },
-      "buyLeg": { "strike": 22800, "premium": "20", "bid": 19, "ask": 21, "type": "PE" },
+      "sellLeg": { "strike": 22900, "premium": "45", "bid": 44.5, "ask": 45.5, "type": "PE" },
+      "buyLeg": { "strike": 22800, "premium": "20", "bid": 19.5, "ask": 20.5, "type": "PE" },
       "netCredit": "25",
       "breakeven": "22875",
       "lotSize": 65

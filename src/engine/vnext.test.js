@@ -71,8 +71,8 @@ const entry = buildEntryPlan({
   peWall: 22900,
   expectedMove: { low: 22900, high: 23100 },
   tradeLegs: {
-    sellLeg: { strike: 23100, premium: '50', bid: 49, ask: 51 },
-    buyLeg: { strike: 23200, premium: '25', bid: 24, ask: 26 },
+    sellLeg: { strike: 23100, premium: '50', bid: 49.5, ask: 50.5 },
+    buyLeg: { strike: 23200, premium: '25', bid: 24.5, ask: 25.5 },
     netCredit: '25'
   },
   regime,
@@ -108,8 +108,8 @@ const blockedEntry = buildEntryPlan({
   peWall: 22900,
   expectedMove: { low: 23020, high: 23220 },
   tradeLegs: {
-    sellLeg: { strike: 23100, premium: '50', bid: 49, ask: 51 },
-    buyLeg: { strike: 23200, premium: '25', bid: 24, ask: 26 },
+    sellLeg: { strike: 23100, premium: '50', bid: 49.5, ask: 50.5 },
+    buyLeg: { strike: 23200, premium: '25', bid: 24.5, ask: 25.5 },
     netCredit: '25'
   },
   regime,
@@ -191,9 +191,9 @@ const position = buildPositionPlan({
   openRiskRupees: 0
 });
 assert.strictEqual(position.status, 'READY');
-assert.strictEqual(position.recommendedLots, 3);
+assert.strictEqual(position.recommendedLots, 2);
 assert.strictEqual(position.riskPerLotRupees, 4875);
-assert.strictEqual(position.actualRiskRupees, 14625);
+assert.strictEqual(position.actualRiskRupees, 9750);
 
 const blockedPosition = buildPositionPlan({
   strategy: 'BEAR_CALL_SPREAD',
@@ -254,5 +254,7 @@ const neutralOrchestration = buildDecisionOrchestration({
 });
 assert.strictEqual(neutralOrchestration.status, 'READY_TO_EXECUTE');
 assert.strictEqual(neutralOrchestration.gates.regime, true);
+
+require('./entryEngine.test');
 
 console.log('EDGE vNext engine tests passed');
