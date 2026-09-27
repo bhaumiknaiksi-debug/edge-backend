@@ -72,6 +72,28 @@ function debitQuote(tradeLegs) {
   };
 }
 
+function legLiquidity(leg) {
+  if (!validQuote(leg)) return { ok:false, reason:'VALID_BID_ASK_REQUIRED' };
+  const bid=n(leg.bid), ask=n(leg.ask);
+  if (bid <= 0 || ask <= 0) return { ok:false, reason:'POSITIVE_BID_ASK_REQUIRED', bid, ask };
+  const spread=ask-bid;
+  const spreadPct=ask>0 ? spread/ask*100 : Infinity;
+  const ok=spread<=5 && spreadPct<=5;
+  return { ok, bid:round(bid), ask:round(ask), spread:round(spread), spreadPct:round(spreadPct), reason:ok?'LIQUID':'SPREAD_TOO_WIDE' };
+}
+
+function evaluateLiquidity(strategy, tradeLegs) {
+  if (!tradeLegs) return { ok:false, reason:'TRADE_LEGS_UNAVAILABLE', legs:[] };
+  let legs=[];
+  if (strategy==='IRON_CONDOR') legs=[tradeLegs.ceShort,tradeLegs.ceLong,tradeLegs.peShort,tradeLegs.peLong];
+  else if (strategy==='LONG_CALL'||strategy==='LONG_PUT') legs=[tradeLegs.buyLeg];
+  else legs=[tradeLegs.buyLeg,tradeLegs.sellLeg];
+  const checks=legs.filter(Boolean).map(legLiquidity);
+  if (!checks.length || checks.length !== legs.filter(Boolean).length) return { ok:false, reason:'QUOTE_UNAVAILABLE', legs:checks };
+  const bad=checks.find(x=>!x.ok);
+  return { ok:!bad, reason:bad?.reason||'LIQUID', maxSpreadPct:round(Math.max(...checks.map(x=>x.spreadPct))), legs:checks };
+}
+
 function flowLabel(features) {
   return features?.optionFlow?.aggregate?.label || 'UNAVAILABLE';
 }
@@ -267,9 +289,12 @@ function buildEntryPlan(input) {
   const premium = buildPremiumZone(strategy, tradeLegs);
   const timingBase = calculateValidity(strategy, dte, marketPhase, minutesRemaining);
   const execution = evaluateExecution(strategy, premium);
+  const liquidity = evaluateLiquidity(strategy, tradeLegs);
   const triggerReady = trigger.status === 'READY_TO_ENTER';
   const priceReady = execution.executable;
-  const finalStatus = triggerReady && priceReady ? 'READY_TO_ENTER' :
+  const liquidityReady = liquidity.ok;
+  const finalStatus = triggerReady && priceReady && liquidityReady ? 'READY_TO_ENTER' :
+    triggerReady && priceReady && !liquidityReady ? 'WAIT_FOR_LIQUIDITY' :
     triggerReady && !priceReady ? 'WAIT_FOR_PRICE' : 'WAIT_FOR_TRIGGER';
   const timing = {
     ...timingBase,
@@ -277,6 +302,7 @@ function buildEntryPlan(input) {
     validityStarts: triggerReady ? 'TRIGGER_CONFIRMED' : 'AFTER_TRIGGER'
   };
   const displayState = finalStatus === 'READY_TO_ENTER' ? 'BUY_NOW' :
+    finalStatus === 'WAIT_FOR_LIQUIDITY' ? 'TRIGGER_HIT_LIQUIDITY_BAD' :
     finalStatus === 'WAIT_FOR_PRICE' ? 'TRIGGER_HIT_PRICE_BAD' :
     priceReady ? 'PRICE_OK_WAITING_TRIGGER' : 'WAITING_TRIGGER_AND_PRICE';
 
@@ -305,9 +331,13 @@ function buildEntryPlan(input) {
     triggerReady,
     execution,
     priceReady,
+    liquidity,
+    liquidityReady,
     type: strategy === 'LONG_CALL' || strategy === 'LONG_PUT' ? 'PREMIUM_ZONE' : (strategy === 'BULL_CALL_SPREAD' || strategy === 'BEAR_PUT_SPREAD' ? 'NET_DEBIT_ZONE' : 'NET_CREDIT_ZONE'),
     trigger: trigger.trigger,
-    reason: finalStatus === 'READY_TO_ENTER' ? 'Trigger confirmed and executable price is acceptable.' : (finalStatus === 'WAIT_FOR_PRICE' ? execution.reason : trigger.reason),
+    reason: finalStatus === 'READY_TO_ENTER' ? 'Trigger, executable price, and liquidity are acceptable.' :
+      (finalStatus === 'WAIT_FOR_LIQUIDITY' ? 'Trigger and price are valid, but bid/ask liquidity is not acceptable.' :
+      (finalStatus === 'WAIT_FOR_PRICE' ? execution.reason : trigger.reason)),
     evidence: trigger.evidence,
     premium,
     timing,
