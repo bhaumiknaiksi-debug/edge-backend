@@ -255,4 +255,26 @@ const neutralOrchestration = buildDecisionOrchestration({
 assert.strictEqual(neutralOrchestration.status, 'READY_TO_EXECUTE');
 assert.strictEqual(neutralOrchestration.gates.regime, true);
 
+
+const illiquidEntry=buildEntryPlan({
+  strategy:'LONG_CALL',spot:23210,support:23000,resistance:23200,ceWall:24000,peWall:23000,
+  expectedMove:{low:22900,high:23500},
+  tradeLegs:{buyLeg:{strike:23200,premium:'97',bid:80,ask:97}},
+  regime:{direction:'BULLISH'},features:{trend30mPct:0.2,sessionChangePct:0.3,optionFlow:{aggregate:{label:'BULLISH_FLOW'}}},
+  marketPhase:'OPEN',dte:0,minutesRemaining:60
+});
+assert.strictEqual(illiquidEntry.triggerReady,true);
+assert.strictEqual(illiquidEntry.priceReady,true);
+assert.strictEqual(illiquidEntry.liquidityReady,false);
+assert.strictEqual(illiquidEntry.status,'WAIT_FOR_LIQUIDITY');
+
+const orchestrationPreOpen=buildDecisionOrchestration({
+  strategy:'LONG_CALL',setup:{qualified:true,blockers:[]},
+  entry:{status:'READY_TO_ENTER',liquidityReady:true},risk:{status:'READY'},management:{status:'READY'},
+  position:{status:'READY'},marketPhase:'PRE_OPEN',regime:{direction:'BULLISH'}
+});
+assert.strictEqual(orchestrationPreOpen.executionAllowed,false);
+assert.strictEqual(orchestrationPreOpen.status,'MARKET_CLOSED');
+assert.strictEqual(orchestrationPreOpen.blockers.includes('MARKET_NOT_OPEN'),true);
+
 console.log('EDGE vNext engine tests passed');
