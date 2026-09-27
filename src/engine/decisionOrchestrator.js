@@ -38,6 +38,8 @@ function buildDecisionOrchestration({
 
   if (!entry || entry.status === 'NO_ENTRY') {
     blockers.push('ENTRY_UNAVAILABLE');
+  } else if (entry.status === 'WAIT_FOR_LIQUIDITY') {
+    blockers.push('ENTRY_LIQUIDITY_NOT_ACCEPTABLE');
   } else if (entry.status === 'WAIT_FOR_PRICE') {
     blockers.push('ENTRY_PRICE_NOT_ACCEPTABLE');
   } else if (entry.status !== 'READY_TO_ENTER') {
@@ -73,6 +75,14 @@ function buildDecisionOrchestration({
     status = 'WAIT_FOR_TRIGGER';
   } else if (
     setup?.qualified &&
+    entry?.status === 'WAIT_FOR_LIQUIDITY' &&
+    risk?.status === 'READY' &&
+    position?.status === 'READY' &&
+    marketPhase === 'OPEN'
+  ) {
+    status = 'WAIT_FOR_LIQUIDITY';
+  } else if (
+    setup?.qualified &&
     entry?.status === 'WAIT_FOR_PRICE' &&
     risk?.status === 'READY' &&
     position?.status === 'READY' &&
@@ -99,6 +109,7 @@ function buildDecisionOrchestration({
       strategy: !!strategy && strategy !== 'WAIT',
       setup: !!setup?.qualified,
       entry: entry?.status === 'READY_TO_ENTER',
+      liquidity: entry?.liquidityReady === true,
       risk: risk?.status === 'READY',
       management: management?.status === 'READY',
       position: position?.status === 'READY',
