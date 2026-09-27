@@ -13,6 +13,7 @@ const { buildPositionPlan } = require('./engine/positionSizingEngine');
 const { buildDecisionOrchestration } = require('./engine/decisionOrchestrator');
 const { buildVolatilityContext } = require('./engine/volatilityEngine');
 const { evidenceKey } = require('./evidence/evidenceEngine');
+const { createEvidenceStore } = require('./evidence/evidenceStore');
 
 const http = require('http');
 const https = require('https');
@@ -82,8 +83,10 @@ let lastError = null;
 // History ring buffer - last N successful polls for session grading
 const HISTORY_LIMIT = 500;
 const history = [];
-const evidenceSnapshots = [];
-const EVIDENCE_LIMIT = 2000;
+const EVIDENCE_LIMIT = 10000;
+const evidenceStore = createEvidenceStore({ limit: EVIDENCE_LIMIT });
+const evidenceSnapshots = evidenceStore.load();
+let lastDecisionFingerprint = null;
 
 // --- Market hours ---
 // NSE F&O regular market: 09:15-15:40 IST; F&O pre-open: 09:00-09:15 IST.
@@ -979,8 +982,11 @@ async function poll() {
       // Evidence snapshot: preserve the state that produced the decision.
       // Outcome is intentionally not guessed here; it is joined later to real future contract candles.
       const evidenceSnapshot = {
+        id: String(result.timestamp) + '|' + String(result.decision?.strategy || 'WAIT') + '|' + String(result.decision?.orchestration?.status || 'UNKNOWN'),
+        recordType: 'POLL_SNAPSHOT',
         timestamp: result.timestamp,
         spot: result.spot,
+        expiry: result.expiry,
         dte: result.dte,
         strategy: result.decision?.strategy,
         tradeLegs: result.decision?.tradeLegs,
@@ -988,12 +994,34 @@ async function poll() {
         volatility: result.volatility,
         signalQuality: result.signalQuality,
         entryStatus: result.decision?.entry?.status,
+        entry: result.decision?.entry,
+        risk: result.decision?.risk,
         orchestrationStatus: result.decision?.orchestration?.status,
-        features: result.market?.features
+        orchestration: result.decision?.orchestration,
+        features: result.market?.features,
+        optionFlow: result.intel?.optionFlow,
+        pcr: result.pcr,
+        maxPain: result.maxPain,
+        support: result.support,
+        resistance: result.resistance
       };
       evidenceSnapshot.evidenceKey = evidenceKey(evidenceSnapshot);
+      evidenceStore.append(evidenceSnapshot);
       evidenceSnapshots.push(evidenceSnapshot);
       if (evidenceSnapshots.length > EVIDENCE_LIMIT) evidenceSnapshots.shift();
+
+      const decisionFingerprint = [
+        evidenceSnapshot.strategy,
+        evidenceSnapshot.orchestrationStatus,
+        evidenceSnapshot.entryStatus,
+        evidenceSnapshot.tradeLegs?.buyLeg?.contractId || '',
+        evidenceSnapshot.tradeLegs?.sellLeg?.contractId || ''
+      ].join('|');
+      if (decisionFingerprint !== lastDecisionFingerprint) {
+        const transition = { ...evidenceSnapshot, id: evidenceSnapshot.id + '|TRANSITION', recordType: 'DECISION_TRANSITION' };
+        evidenceStore.append(transition);
+        lastDecisionFingerprint = decisionFingerprint;
+      }
     }
     backoffMs = 30000;
   } catch (err) {
@@ -1025,7 +1053,11 @@ app.get('/api/v1/market/status', (req, res) => res.json({ phase: getMarketPhase(
 // Query: ?limit=N (default 100, max HISTORY_LIMIT), ?since=ISO (filter by timestamp)
 app.get('/evidence/snapshots', (req,res) => {
   const limit=Math.min(EVIDENCE_LIMIT,parseInt(req.query.limit,10)||100);
-  res.json({count:Math.min(limit,evidenceSnapshots.length),total:evidenceSnapshots.length,entries:evidenceSnapshots.slice(-limit)});
+  res.json({count:Math.min(limit,evidenceSnapshots.length),total:evidenceSnapshots.length,storage:evidenceStore.status(),entries:evidenceSnapshots.slice(-limit)});
+});
+
+app.get('/evidence/status', (req,res) => {
+  res.json({ total:evidenceSnapshots.length, storage:evidenceStore.status(), lastDecisionFingerprint });
 });
 
 app.get('/history', (req, res) => {
