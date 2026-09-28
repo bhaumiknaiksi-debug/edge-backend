@@ -1,6 +1,6 @@
 'use strict';
 const assert=require('assert');
-const {eligible,isExpired,harvestOutcome,createOutcomeHarvester,retryDelay}=require('./outcomeHarvester');
+const {eligible,isExpired,episodeStartIds,harvestOutcome,createOutcomeHarvester,retryDelay}=require('./outcomeHarvester');
 const old=new Date(Date.now()-121*60000).toISOString();
 const snapshot={id:'x',recordType:'POLL_SNAPSHOT',timestamp:old,expiry:'2099-09-29',orchestrationStatus:'READY_TO_EXECUTE',strategy:'LONG_CALL',tradeLegs:{buyLeg:{contractId:'NIFTY TEST CE',instrumentKey:'NSE_FO|123',strike:23000,type:'CE',premium:100,ask:101,bid:99}}};
 assert.strictEqual(eligible(snapshot),true);
@@ -8,6 +8,13 @@ assert.strictEqual(eligible({...snapshot,orchestrationStatus:'WAIT_FOR_TRIGGER'}
 assert.strictEqual(eligible({...snapshot,tradeLegs:{buyLeg:{...snapshot.tradeLegs.buyLeg,instrumentKey:null}}}),false);
 assert.strictEqual(isExpired({...snapshot,expiry:'2020-01-01'}),true);
 assert(retryDelay(2)>retryDelay(1));
+const same={...snapshot,id:'x2',timestamp:new Date(new Date(old).getTime()+5000).toISOString()};
+const wait={...snapshot,id:'w',timestamp:new Date(new Date(old).getTime()+10000).toISOString(),orchestrationStatus:'WAIT_FOR_TRIGGER'};
+const readyAgain={...snapshot,id:'x3',timestamp:new Date(new Date(old).getTime()+15000).toISOString()};
+const starts=episodeStartIds([snapshot,same,wait,readyAgain]);
+assert(starts.has('x'));
+assert(!starts.has('x2'));
+assert(starts.has('x3'));
 
 (async()=>{
  const fetchCandles=async()=>[
