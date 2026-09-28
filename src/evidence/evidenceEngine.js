@@ -69,23 +69,29 @@ function measureOutcome({snapshot,candlesByContract={},horizons=[15,30,60,120]})
   const names=Object.keys(marks);
   const snapshotMs=new Date(snapshot.timestamp).getTime();
   const maxRequested=Math.max(...horizons);
-  const maxObservedMs=snapshotMs+maxRequested*60000;
+  const targetEndMs=snapshotMs+maxRequested*60000;
   const maps=Object.fromEntries(names.map(name=>[name,new Map(marks[name].map(c=>[new Date(c.timestamp).getTime(),c]))]));
   const commonTimes=[...maps[names[0]].keys()]
-    .filter(ts=>ts<=maxObservedMs&&names.every(name=>maps[name].has(ts)))
+    .filter(ts=>names.every(name=>maps[name].has(ts)))
     .sort((a,b)=>a-b);
   if(!commonTimes.length)return{status:'UNAVAILABLE',reason:'NO_ALIGNED_FUTURE_CANDLES'};
-  const aligned=Object.fromEntries(names.map(name=>[name,commonTimes.map(ts=>maps[name].get(ts))]));
+  // A snapshot can occur between one-minute candle boundaries. Include the
+  // first common candle at/after the requested horizon, then stop. This avoids
+  // both false INCOMPLETE_HORIZON results and all-day MFE/MAE contamination.
+  const cutoff=commonTimes.findIndex(ts=>ts>=targetEndMs);
+  if(cutoff<0)return{status:'UNAVAILABLE',reason:'INCOMPLETE_HORIZON',entryValue:round(entry),observedThroughMinute:round((commonTimes[commonTimes.length-1]-snapshotMs)/60000,0),horizonsPct:{}};
+  const studyTimes=commonTimes.slice(0,cutoff+1);
+  const aligned=Object.fromEntries(names.map(name=>[name,studyTimes.map(ts=>maps[name].get(ts))]));
   let mfe=-Infinity,mae=Infinity,bestMinute=null,worstMinute=null;
   const horizonResults={};
-  for(let i=0;i<commonTimes.length;i++){
+  for(let i=0;i<studyTimes.length;i++){
     const v=strategyValue(strategy,legs,aligned,i),p=pnlPct(strategy,entry,v); if(p===null)continue;
-    const mins=Math.max(0,(commonTimes[i]-snapshotMs)/60000);
+    const mins=Math.max(0,(studyTimes[i]-snapshotMs)/60000);
     if(p>mfe){mfe=p;bestMinute=round(mins,0);} if(p<mae){mae=p;worstMinute=round(mins,0);}
     for(const h of horizons) if(horizonResults[h]===undefined&&mins>=h) horizonResults[h]=round(p);
   }
   if(!Number.isFinite(mfe)||!Number.isFinite(mae))return{status:'UNAVAILABLE',reason:'NO_VALID_MARKS'};
-  if(horizonResults[maxRequested]===undefined)return{status:'UNAVAILABLE',reason:'INCOMPLETE_HORIZON',entryValue:round(entry),observedThroughMinute:commonTimes.length?round((commonTimes[commonTimes.length-1]-snapshotMs)/60000,0):null,horizonsPct:horizonResults};
+  if(horizonResults[maxRequested]===undefined)return{status:'UNAVAILABLE',reason:'INCOMPLETE_HORIZON',entryValue:round(entry),observedThroughMinute:studyTimes.length?round((studyTimes[studyTimes.length-1]-snapshotMs)/60000,0):null,horizonsPct:horizonResults};
   return{status:'MEASURED',entryValue:round(entry),mfePct:round(mfe),maePct:round(mae),bestMinute,worstMinute,horizonsPct:horizonResults};
 }
 function summarizeEvidence(records,minSamples=20){
