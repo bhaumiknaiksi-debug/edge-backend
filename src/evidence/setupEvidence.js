@@ -57,7 +57,7 @@ function summarizeSetupEvidence(records=[],minSamples=20){
   }
   const out={};
   for(const [k,rows] of Object.entries(groups)){
-    const h60=rows.map(x=>x.horizonsPct?.60).filter(Number.isFinite);
+    const h60=rows.map(x=>x.horizonsPct?.[60]).filter(Number.isFinite);
     const mfe=rows.map(x=>x.mfePct).filter(Number.isFinite);
     const mae=rows.map(x=>x.maePct).filter(Number.isFinite);
     const avg=a=>a.length?round(a.reduce((x,y)=>x+y,0)/a.length):null;
