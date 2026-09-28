@@ -1,6 +1,7 @@
 'use strict';
 
 const https = require('https');
+const { buildSetupObservability } = require('../engine/setupObservability');
 
 const API_BASE = 'https://api.upstox.com';
 const INDEX_KEY = 'NSE_INDEX|Nifty 50';
@@ -77,11 +78,12 @@ async function fetchMarketContext() {
   const future = await findNearestNiftyFuture();
   const keys = [INDEX_KEY, future.instrument_key, VIX_KEY].join(',');
 
-  const [quote, thirty, intraday5, intraday15] = await Promise.all([
+  const [quote, thirty, intraday5, intraday15, futureIntraday5] = await Promise.all([
     requestJson('/v3/market-quote/quotes?instrument_key=' + encodeURIComponent(keys)),
     requestJson('/v3/market-quote/ohlc?instrument_key=' + encodeURIComponent(INDEX_KEY) + '&interval=I30'),
     requestJson('/v3/historical-candle/intraday/' + encodeURIComponent(INDEX_KEY) + '/minutes/5').catch(() => ({data:{candles:[]}})),
-    requestJson('/v3/historical-candle/intraday/' + encodeURIComponent(INDEX_KEY) + '/minutes/15').catch(() => ({data:{candles:[]}}))
+    requestJson('/v3/historical-candle/intraday/' + encodeURIComponent(INDEX_KEY) + '/minutes/15').catch(() => ({data:{candles:[]}})),
+    requestJson('/v3/historical-candle/intraday/' + encodeURIComponent(future.instrument_key) + '/minutes/5').catch(() => ({data:{candles:[]}}))
   ]);
 
   const indexQuote = extractQuote(quote, INDEX_KEY);
@@ -114,6 +116,10 @@ async function fetchMarketContext() {
   const trend5mPct = candleTrend(intraday5);
   const trend15mPct = candleTrend(intraday15);
   const indiaVix = Number(vixQuote?.last_price ?? vixQuote?.ohlc?.close);
+  const setupFeatures = buildSetupObservability({
+    index5m: intraday5?.data?.candles || [],
+    future5m: futureIntraday5?.data?.candles || []
+  });
 
   let futuresBuildUp = 'UNAVAILABLE';
   if (Number.isFinite(futuresPriceChangePct) && Number.isFinite(futuresOIChangePct)) {
@@ -134,6 +140,7 @@ async function fetchMarketContext() {
     trend15mPct,
     trend30mPct,
     indiaVix: Number.isFinite(indiaVix) ? indiaVix : null,
+    setupFeatures,
     futures: {
       instrumentKey: future.instrument_key,
       tradingSymbol: future.trading_symbol,
