@@ -11,7 +11,8 @@
     "test:setup": "node src/engine/setupObservability.test.js",
     "test:setup-evidence": "node src/evidence/setupEvidence.test.js",
     "test:harvester": "node src/evidence/outcomeHarvester.test.js",
-    "test:intelligence": "node src/evidence/evidenceIntelligence.test.js"
+    "test:intelligence": "node src/evidence/evidenceIntelligence.test.js",
+    "test:syntax": "find src -name '*.js' -print0 | xargs -0 -n1 node --check"
   },
   "dependencies": {
     "express": "^4.18.0",
