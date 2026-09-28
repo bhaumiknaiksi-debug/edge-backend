@@ -3,7 +3,7 @@ const assert=require('assert');
 const {evidenceKey,measureOutcome,summarizeEvidence}=require('./evidenceEngine');
 const snapshot={timestamp:'2026-09-25T10:00:00+05:30',strategy:'LONG_CALL',dte:4,regime:{direction:'BULLISH'},volatility:{richness:'CHEAP'},tradeLegs:{buyLeg:{contractId:'NIFTY TEST CE',premium:'100',bid:99,ask:101}}};
 const candles={'NIFTY TEST CE':[
- {timestamp:'2026-09-25T10:15:00+05:30',close:110},{timestamp:'2026-09-25T10:30:00+05:30',close:95},{timestamp:'2026-09-25T11:00:00+05:30',close:130},{timestamp:'2026-09-25T12:00:00+05:30',close:120}
+ {timestamp:'2026-09-25T10:15:00+05:30',close:110},{timestamp:'2026-09-25T10:30:00+05:30',close:95},{timestamp:'2026-09-25T11:00:00+05:30',close:130},{timestamp:'2026-09-25T12:00:00+05:30',close:120},{timestamp:'2026-09-25T13:00:00+05:30',close:999}
 ]};
 const out=measureOutcome({snapshot,candlesByContract:candles});
 assert.strictEqual(out.status,'MEASURED');
@@ -29,3 +29,6 @@ assert.strictEqual(incomplete.reason,'INCOMPLETE_HORIZON');
 // Credit spread math: entry credit = short bid 100 - long ask 50 = 50.
 // At +30m spread value = 80 - 40 = 40, so profit = (50-40)/50 = +20%.
 assert(Math.abs(spreadOut.horizonsPct[30]-20)<0.001);
+
+// Excursions after the requested 120-minute study window must not contaminate MFE.
+assert(out.mfePct<100);
