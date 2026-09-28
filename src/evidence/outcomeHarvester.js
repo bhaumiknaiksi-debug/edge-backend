@@ -44,6 +44,21 @@ function eligible(snapshot, now=Date.now(), horizonMinutes=120){
   const legs=requiredLegs(snapshot);
   return legs.length>0&&legs.every(([,leg])=>leg.instrumentKey);
 }
+function opportunityKey(snapshot){
+  const legs=requiredLegs(snapshot).map(([name,leg])=>name+':'+(leg.instrumentKey||leg.contractId)).sort().join(',');
+  return String(snapshot?.strategy||'WAIT')+'|'+legs;
+}
+function episodeStartIds(rows){
+  const polls=(rows||[]).filter(x=>x.recordType==='POLL_SNAPSHOT').sort((a,b)=>new Date(a.timestamp)-new Date(b.timestamp));
+  const starts=new Set(); let previous=null;
+  for(const snap of polls){
+    const ready=snap.orchestrationStatus==='READY_TO_EXECUTE';
+    const key=ready?opportunityKey(snap):null;
+    if(ready&&(!previous?.ready||previous.key!==key))starts.add(snap.id);
+    previous={ready,key};
+  }
+  return starts;
+}
 function normalizeCandles(rows){
   return (rows||[]).map(c=>({timestamp:c[0],open:c[1],high:c[2],low:c[3],close:c[4],volume:c[5],oi:c[6]}));
 }
@@ -99,9 +114,11 @@ function createOutcomeHarvester({store,snapshots,token,intervalMs=60000,horizonM
     running=true; status.lastRun=new Date().toISOString(); status.lastError=null; status.eligible=0; status.skipped=0; status.retried=0;
     try{
       const now=Date.now();
+      const episodeStarts=episodeStartIds(snapshots||[]);
       const existingIds=new Set((snapshots||[]).map(x=>x.id));
       for(const snap of [...(snapshots||[])]){
         if(terminal.has(snap.id)){status.skipped++;continue;}
+        if(!episodeStarts.has(snap.id)){continue;}
         if(!eligible(snap,now,horizonMinutes))continue;
         const prior=attempts.get(snap.id)||0;
         const last=(snapshots||[]).filter(x=>x.recordType==='OUTCOME'&&x.snapshotId===snap.id).slice(-1)[0];
@@ -127,8 +144,8 @@ function createOutcomeHarvester({store,snapshots,token,intervalMs=60000,horizonM
     return{...status};
   }
   function start(){if(timer)return; timer=setInterval(run,intervalMs); timer.unref?.();}
-  function getStatus(){return{...status,running,pending:[...(snapshots||[])].filter(s=>eligible(s,Date.now(),horizonMinutes)&&!terminal.has(s.id)).length};}
+  function getStatus(){const starts=episodeStartIds(snapshots||[]);return{...status,running,pending:[...(snapshots||[])].filter(s=>starts.has(s.id)&&eligible(s,Date.now(),horizonMinutes)&&!terminal.has(s.id)).length};}
   return{run,start,getStatus};
 }
 
-module.exports={eligible,isExpired,harvestOutcome,createOutcomeHarvester,normalizeCandles,retryDelay};
+module.exports={eligible,isExpired,opportunityKey,episodeStartIds,harvestOutcome,createOutcomeHarvester,normalizeCandles,retryDelay};
