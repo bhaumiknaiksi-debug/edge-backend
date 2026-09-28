@@ -999,6 +999,7 @@ async function poll() {
         orchestrationStatus: result.decision?.orchestration?.status,
         orchestration: result.decision?.orchestration,
         features: result.market?.features,
+        setupFeatures: result.market?.context?.setupFeatures || null,
         optionFlow: result.intel?.optionFlow,
         pcr: result.pcr,
         maxPain: result.maxPain,
