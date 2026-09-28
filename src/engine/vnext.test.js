@@ -191,9 +191,9 @@ const position = buildPositionPlan({
   openRiskRupees: 0
 });
 assert.strictEqual(position.status, 'READY');
-assert.strictEqual(position.recommendedLots, 3);
+assert.strictEqual(position.recommendedLots, 2);
 assert.strictEqual(position.riskPerLotRupees, 4875);
-assert.strictEqual(position.actualRiskRupees, 14625);
+assert.strictEqual(position.actualRiskRupees, 9750);
 
 const blockedPosition = buildPositionPlan({
   strategy: 'BEAR_CALL_SPREAD',
