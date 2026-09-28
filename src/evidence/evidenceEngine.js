@@ -63,15 +63,35 @@ function measureOutcome({snapshot,candlesByContract={},horizons=[15,30,60,120]})
   const marks=buildInstrumentMarks(legs,candlesByContract,snapshot.timestamp);
   const required=Object.values(legs).filter(v=>v&&typeof v==='object'&&v.contractId).length;
   if(Object.keys(marks).length<required||Object.values(marks).some(x=>!x.length))return{status:'UNAVAILABLE',reason:'MISSING_FUTURE_CONTRACT_CANDLES'};
-  const maxLen=Math.min(...Object.values(marks).map(x=>x.length));
+  // Multi-leg values must be measured at the same candle timestamp. Pairing
+  // rows by array index can silently combine different minutes when one leg
+  // has a missing/illiquid candle.
+  const names=Object.keys(marks);
+  const snapshotMs=new Date(snapshot.timestamp).getTime();
+  const maxRequested=Math.max(...horizons);
+  const targetEndMs=snapshotMs+maxRequested*60000;
+  const maps=Object.fromEntries(names.map(name=>[name,new Map(marks[name].map(c=>[new Date(c.timestamp).getTime(),c]))]));
+  const commonTimes=[...maps[names[0]].keys()]
+    .filter(ts=>names.every(name=>maps[name].has(ts)))
+    .sort((a,b)=>a-b);
+  if(!commonTimes.length)return{status:'UNAVAILABLE',reason:'NO_ALIGNED_FUTURE_CANDLES'};
+  // A snapshot can occur between one-minute candle boundaries. Include the
+  // first common candle at/after the requested horizon, then stop. This avoids
+  // both false INCOMPLETE_HORIZON results and all-day MFE/MAE contamination.
+  const cutoff=commonTimes.findIndex(ts=>ts>=targetEndMs);
+  if(cutoff<0)return{status:'UNAVAILABLE',reason:'INCOMPLETE_HORIZON',entryValue:round(entry),observedThroughMinute:round((commonTimes[commonTimes.length-1]-snapshotMs)/60000,0),horizonsPct:{}};
+  const studyTimes=commonTimes.slice(0,cutoff+1);
+  const aligned=Object.fromEntries(names.map(name=>[name,studyTimes.map(ts=>maps[name].get(ts))]));
   let mfe=-Infinity,mae=Infinity,bestMinute=null,worstMinute=null;
   const horizonResults={};
-  for(let i=0;i<maxLen;i++){
-    const v=strategyValue(strategy,legs,marks,i),p=pnlPct(strategy,entry,v); if(p===null)continue;
-    const mins=Math.max(0,(new Date(Object.values(marks)[0][i].timestamp)-new Date(snapshot.timestamp))/60000);
+  for(let i=0;i<studyTimes.length;i++){
+    const v=strategyValue(strategy,legs,aligned,i),p=pnlPct(strategy,entry,v); if(p===null)continue;
+    const mins=Math.max(0,(studyTimes[i]-snapshotMs)/60000);
     if(p>mfe){mfe=p;bestMinute=round(mins,0);} if(p<mae){mae=p;worstMinute=round(mins,0);}
     for(const h of horizons) if(horizonResults[h]===undefined&&mins>=h) horizonResults[h]=round(p);
   }
+  if(!Number.isFinite(mfe)||!Number.isFinite(mae))return{status:'UNAVAILABLE',reason:'NO_VALID_MARKS'};
+  if(horizonResults[maxRequested]===undefined)return{status:'UNAVAILABLE',reason:'INCOMPLETE_HORIZON',entryValue:round(entry),observedThroughMinute:studyTimes.length?round((studyTimes[studyTimes.length-1]-snapshotMs)/60000,0):null,horizonsPct:horizonResults};
   return{status:'MEASURED',entryValue:round(entry),mfePct:round(mfe),maePct:round(mae),bestMinute,worstMinute,horizonsPct:horizonResults};
 }
 function summarizeEvidence(records,minSamples=20){

@@ -15,6 +15,7 @@ const { buildVolatilityContext } = require('./engine/volatilityEngine');
 const { evidenceKey } = require('./evidence/evidenceEngine');
 const { createEvidenceStore } = require('./evidence/evidenceStore');
 const { setupFeatureTags, setupEvidenceKey } = require('./evidence/setupEvidence');
+const { createOutcomeHarvester } = require('./evidence/outcomeHarvester');
 
 const http = require('http');
 const https = require('https');
@@ -88,6 +89,7 @@ const EVIDENCE_LIMIT = 10000;
 const evidenceStore = createEvidenceStore({ limit: EVIDENCE_LIMIT });
 const evidenceSnapshots = evidenceStore.load();
 let lastDecisionFingerprint = null;
+const outcomeHarvester = createOutcomeHarvester({ store: evidenceStore, snapshots: evidenceSnapshots, token: UPSTOX_TOKEN });
 
 // --- Market hours ---
 // NSE F&O regular market: 09:15-15:40 IST; F&O pre-open: 09:00-09:15 IST.
@@ -263,6 +265,8 @@ function analyse(chain, expiryDate, marketContext = null) {
       peClosePrice: pe?.market_data?.close_price || 0,
       ceVolume: ce?.market_data?.volume || 0,
       peVolume: pe?.market_data?.volume || 0,
+      ceInstrumentKey: ce?.instrument_key || null,
+      peInstrumentKey: pe?.instrument_key || null,
     });
   }
 
@@ -481,8 +485,8 @@ function analyse(chain, expiryDate, marketContext = null) {
       const rrr = maxLoss > 0 ? (maxProfit / maxLoss).toFixed(2) : 'N/A';
       const pop = Math.round((1 - sellLeg.ceDelta) * 100);
       tradeLegs = {
-        sellLeg: { contractId: buildContractId(expiryDate, sellLeg.strike, 'CE'), strike: sellLeg.strike, premium: sellLeg.ceLTP.toFixed(2), bid: sellLeg.ceBid, ask: sellLeg.ceAsk, type: 'CE' },
-        buyLeg:  { contractId: buildContractId(expiryDate, buyLeg.strike,  'CE'), strike: buyLeg.strike,  premium: buyLeg.ceLTP.toFixed(2), bid: buyLeg.ceBid, ask: buyLeg.ceAsk, type: 'CE' },
+        sellLeg: { contractId: buildContractId(expiryDate, sellLeg.strike, 'CE'), instrumentKey: sellLeg.ceInstrumentKey, strike: sellLeg.strike, premium: sellLeg.ceLTP.toFixed(2), bid: sellLeg.ceBid, ask: sellLeg.ceAsk, type: 'CE' },
+        buyLeg:  { contractId: buildContractId(expiryDate, buyLeg.strike,  'CE'), instrumentKey: buyLeg.ceInstrumentKey, strike: buyLeg.strike,  premium: buyLeg.ceLTP.toFixed(2), bid: buyLeg.ceBid, ask: buyLeg.ceAsk, type: 'CE' },
         netCredit: netCredit.toFixed(2),     netCreditRupees: pointsToRupees(netCredit),
         maxProfit: maxProfit.toFixed(2),     maxProfitRupees: pointsToRupees(maxProfit),
         maxLoss:   maxLoss.toFixed(2),       maxLossRupees:   pointsToRupees(maxLoss),
@@ -504,8 +508,8 @@ function analyse(chain, expiryDate, marketContext = null) {
       const rrr = maxLoss > 0 ? (maxProfit / maxLoss).toFixed(2) : 'N/A';
       const pop = Math.round((1 - Math.abs(sellLeg.peDelta)) * 100);
       tradeLegs = {
-        sellLeg: { contractId: buildContractId(expiryDate, sellLeg.strike, 'PE'), strike: sellLeg.strike, premium: sellLeg.peLTP.toFixed(2), bid: sellLeg.peBid, ask: sellLeg.peAsk, type: 'PE' },
-        buyLeg:  { contractId: buildContractId(expiryDate, buyLeg.strike,  'PE'), strike: buyLeg.strike,  premium: buyLeg.peLTP.toFixed(2),  bid: buyLeg.peBid, ask: buyLeg.peAsk, type: 'PE' },
+        sellLeg: { contractId: buildContractId(expiryDate, sellLeg.strike, 'PE'), instrumentKey: sellLeg.peInstrumentKey, strike: sellLeg.strike, premium: sellLeg.peLTP.toFixed(2), bid: sellLeg.peBid, ask: sellLeg.peAsk, type: 'PE' },
+        buyLeg:  { contractId: buildContractId(expiryDate, buyLeg.strike,  'PE'), instrumentKey: buyLeg.peInstrumentKey, strike: buyLeg.strike,  premium: buyLeg.peLTP.toFixed(2),  bid: buyLeg.peBid, ask: buyLeg.peAsk, type: 'PE' },
         netCredit: netCredit.toFixed(2),     netCreditRupees: pointsToRupees(netCredit),
         maxProfit: maxProfit.toFixed(2),     maxProfitRupees: pointsToRupees(maxProfit),
         maxLoss:   maxLoss.toFixed(2),       maxLossRupees:   pointsToRupees(maxLoss),
@@ -522,8 +526,8 @@ function analyse(chain, expiryDate, marketContext = null) {
       const netDebit=buyLeg.ceLTP-sellLeg.ceLTP, width=sellLeg.strike-buyLeg.strike;
       const maxProfit=Math.max(0,width-netDebit);
       tradeLegs={
-        buyLeg:{contractId:buildContractId(expiryDate,buyLeg.strike,'CE'),strike:buyLeg.strike,premium:buyLeg.ceLTP.toFixed(2),bid:buyLeg.ceBid,ask:buyLeg.ceAsk,type:'CE'},
-        sellLeg:{contractId:buildContractId(expiryDate,sellLeg.strike,'CE'),strike:sellLeg.strike,premium:sellLeg.ceLTP.toFixed(2),bid:sellLeg.ceBid,ask:sellLeg.ceAsk,type:'CE'},
+        buyLeg:{contractId:buildContractId(expiryDate,buyLeg.strike,'CE'),instrumentKey:buyLeg.ceInstrumentKey,strike:buyLeg.strike,premium:buyLeg.ceLTP.toFixed(2),bid:buyLeg.ceBid,ask:buyLeg.ceAsk,type:'CE'},
+        sellLeg:{contractId:buildContractId(expiryDate,sellLeg.strike,'CE'),instrumentKey:sellLeg.ceInstrumentKey,strike:sellLeg.strike,premium:sellLeg.ceLTP.toFixed(2),bid:sellLeg.ceBid,ask:sellLeg.ceAsk,type:'CE'},
         netDebit:netDebit.toFixed(2),netDebitRupees:pointsToRupees(netDebit),maxLoss:netDebit.toFixed(2),maxLossRupees:pointsToRupees(netDebit),
         maxProfit:maxProfit.toFixed(2),maxProfitRupees:pointsToRupees(maxProfit),
         breakeven:(buyLeg.strike+netDebit).toFixed(0),rrr:netDebit>0?(maxProfit/netDebit).toFixed(2):'N/A',lotSize:NIFTY_LOT_SIZE,
@@ -537,8 +541,8 @@ function analyse(chain, expiryDate, marketContext = null) {
       const netDebit=buyLeg.peLTP-sellLeg.peLTP, width=buyLeg.strike-sellLeg.strike;
       const maxProfit=Math.max(0,width-netDebit);
       tradeLegs={
-        buyLeg:{contractId:buildContractId(expiryDate,buyLeg.strike,'PE'),strike:buyLeg.strike,premium:buyLeg.peLTP.toFixed(2),bid:buyLeg.peBid,ask:buyLeg.peAsk,type:'PE'},
-        sellLeg:{contractId:buildContractId(expiryDate,sellLeg.strike,'PE'),strike:sellLeg.strike,premium:sellLeg.peLTP.toFixed(2),bid:sellLeg.peBid,ask:sellLeg.peAsk,type:'PE'},
+        buyLeg:{contractId:buildContractId(expiryDate,buyLeg.strike,'PE'),instrumentKey:buyLeg.peInstrumentKey,strike:buyLeg.strike,premium:buyLeg.peLTP.toFixed(2),bid:buyLeg.peBid,ask:buyLeg.peAsk,type:'PE'},
+        sellLeg:{contractId:buildContractId(expiryDate,sellLeg.strike,'PE'),instrumentKey:sellLeg.peInstrumentKey,strike:sellLeg.strike,premium:sellLeg.peLTP.toFixed(2),bid:sellLeg.peBid,ask:sellLeg.peAsk,type:'PE'},
         netDebit:netDebit.toFixed(2),netDebitRupees:pointsToRupees(netDebit),maxLoss:netDebit.toFixed(2),maxLossRupees:pointsToRupees(netDebit),
         maxProfit:maxProfit.toFixed(2),maxProfitRupees:pointsToRupees(maxProfit),
         breakeven:(buyLeg.strike-netDebit).toFixed(0),rrr:netDebit>0?(maxProfit/netDebit).toFixed(2):'N/A',lotSize:NIFTY_LOT_SIZE,
@@ -548,7 +552,7 @@ function analyse(chain, expiryDate, marketContext = null) {
   } else if (strategy === 'LONG_CALL' && buyCEStrikes.length) {
     const leg = buyCEStrikes.sort((a, b) => Math.abs(a.ceDelta - 0.50) - Math.abs(b.ceDelta - 0.50))[0];
     tradeLegs = {
-      buyLeg: { contractId: buildContractId(expiryDate, leg.strike, 'CE'), strike: leg.strike, premium: leg.ceLTP.toFixed(2), bid: leg.ceBid, ask: leg.ceAsk, type: 'CE' },
+      buyLeg: { contractId: buildContractId(expiryDate, leg.strike, 'CE'), instrumentKey: leg.ceInstrumentKey, strike: leg.strike, premium: leg.ceLTP.toFixed(2), bid: leg.ceBid, ask: leg.ceAsk, type: 'CE' },
       legDelta: leg.ceDelta,
       maxProfit: 'Unlimited',  maxProfitRupees: 'Unlimited',
       maxLoss: leg.ceLTP.toFixed(2),  maxLossRupees: pointsToRupees(leg.ceLTP),
@@ -560,7 +564,7 @@ function analyse(chain, expiryDate, marketContext = null) {
   } else if (strategy === 'LONG_PUT' && buyPEStrikes.length) {
     const leg = buyPEStrikes.sort((a, b) => Math.abs(Math.abs(a.peDelta) - 0.50) - Math.abs(Math.abs(b.peDelta) - 0.50))[0];
     tradeLegs = {
-      buyLeg: { contractId: buildContractId(expiryDate, leg.strike, 'PE'), strike: leg.strike, premium: leg.peLTP.toFixed(2), bid: leg.peBid, ask: leg.peAsk, type: 'PE' },
+      buyLeg: { contractId: buildContractId(expiryDate, leg.strike, 'PE'), instrumentKey: leg.peInstrumentKey, strike: leg.strike, premium: leg.peLTP.toFixed(2), bid: leg.peBid, ask: leg.peAsk, type: 'PE' },
       legDelta: Math.abs(leg.peDelta),
       maxProfit: (leg.strike - leg.peLTP).toFixed(2),  maxProfitRupees: pointsToRupees(leg.strike - leg.peLTP),
       maxLoss: leg.peLTP.toFixed(2),                   maxLossRupees: pointsToRupees(leg.peLTP),
@@ -586,10 +590,10 @@ function analyse(chain, expiryDate, marketContext = null) {
       const rrr = maxLoss > 0 ? (netCredit / maxLoss).toFixed(2) : 'N/A';
       const pop = Math.round(Math.max(0, Math.min(100, (1 - ceShort.ceDelta - Math.abs(peShort.peDelta)) * 100)));
       tradeLegs = {
-        ceShort: { contractId: buildContractId(expiryDate, ceShort.strike, 'CE'), strike: ceShort.strike, premium: ceShort.ceLTP.toFixed(2), bid: ceShort.ceBid, ask: ceShort.ceAsk, type: 'CE' },
-        ceLong:  { contractId: buildContractId(expiryDate, ceLong.strike,  'CE'), strike: ceLong.strike,  premium: ceLong.ceLTP.toFixed(2), bid: ceLong.ceBid, ask: ceLong.ceAsk, type: 'CE' },
-        peShort: { contractId: buildContractId(expiryDate, peShort.strike, 'PE'), strike: peShort.strike, premium: peShort.peLTP.toFixed(2), bid: peShort.peBid, ask: peShort.peAsk, type: 'PE' },
-        peLong:  { contractId: buildContractId(expiryDate, peLong.strike,  'PE'), strike: peLong.strike,  premium: peLong.peLTP.toFixed(2), bid: peLong.peBid, ask: peLong.peAsk, type: 'PE' },
+        ceShort: { contractId: buildContractId(expiryDate, ceShort.strike, 'CE'), instrumentKey: ceShort.ceInstrumentKey, strike: ceShort.strike, premium: ceShort.ceLTP.toFixed(2), bid: ceShort.ceBid, ask: ceShort.ceAsk, type: 'CE' },
+        ceLong:  { contractId: buildContractId(expiryDate, ceLong.strike,  'CE'), instrumentKey: ceLong.ceInstrumentKey, strike: ceLong.strike,  premium: ceLong.ceLTP.toFixed(2), bid: ceLong.ceBid, ask: ceLong.ceAsk, type: 'CE' },
+        peShort: { contractId: buildContractId(expiryDate, peShort.strike, 'PE'), instrumentKey: peShort.peInstrumentKey, strike: peShort.strike, premium: peShort.peLTP.toFixed(2), bid: peShort.peBid, ask: peShort.peAsk, type: 'PE' },
+        peLong:  { contractId: buildContractId(expiryDate, peLong.strike,  'PE'), instrumentKey: peLong.peInstrumentKey, strike: peLong.strike,  premium: peLong.peLTP.toFixed(2), bid: peLong.peBid, ask: peLong.peAsk, type: 'PE' },
         netCredit: netCredit.toFixed(2),  netCreditRupees: pointsToRupees(netCredit),
         maxProfit: netCredit.toFixed(2),  maxProfitRupees: pointsToRupees(netCredit),
         maxLoss:   maxLoss.toFixed(2),    maxLossRupees:   pointsToRupees(maxLoss),
@@ -1061,7 +1065,13 @@ app.get('/evidence/snapshots', (req,res) => {
 });
 
 app.get('/evidence/status', (req,res) => {
-  res.json({ total:evidenceSnapshots.length, storage:evidenceStore.status(), lastDecisionFingerprint });
+  const counts = evidenceSnapshots.reduce((a,r)=>{a[r.recordType||'UNKNOWN']=(a[r.recordType||'UNKNOWN']||0)+1;return a;},{});
+  res.json({ total:evidenceSnapshots.length, counts, storage:evidenceStore.status(), harvester:outcomeHarvester.getStatus(), lastDecisionFingerprint });
+});
+
+app.post('/evidence/harvest', async (req,res) => {
+  const status = await outcomeHarvester.run();
+  res.json(status);
 });
 
 app.get('/history', (req, res) => {
@@ -1079,5 +1089,6 @@ server.listen(PORT, () => {
   const probeUrl = new URL('https://api.upstox.com/v2/option/contract');
   probeUrl.searchParams.set('instrument_key', 'NSE_INDEX|Nifty 50');
   console.log('[upstox] expiry URL constructed:', probeUrl.toString());
+  outcomeHarvester.start();
   poll();
 });
