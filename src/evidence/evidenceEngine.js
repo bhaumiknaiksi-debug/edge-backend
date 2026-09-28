@@ -63,12 +63,21 @@ function measureOutcome({snapshot,candlesByContract={},horizons=[15,30,60,120]})
   const marks=buildInstrumentMarks(legs,candlesByContract,snapshot.timestamp);
   const required=Object.values(legs).filter(v=>v&&typeof v==='object'&&v.contractId).length;
   if(Object.keys(marks).length<required||Object.values(marks).some(x=>!x.length))return{status:'UNAVAILABLE',reason:'MISSING_FUTURE_CONTRACT_CANDLES'};
-  const maxLen=Math.min(...Object.values(marks).map(x=>x.length));
+  // Multi-leg values must be measured at the same candle timestamp. Pairing
+  // rows by array index can silently combine different minutes when one leg
+  // has a missing/illiquid candle.
+  const names=Object.keys(marks);
+  const maps=Object.fromEntries(names.map(name=>[name,new Map(marks[name].map(c=>[new Date(c.timestamp).getTime(),c]))]));
+  const commonTimes=[...maps[names[0]].keys()]
+    .filter(ts=>names.every(name=>maps[name].has(ts)))
+    .sort((a,b)=>a-b);
+  if(!commonTimes.length)return{status:'UNAVAILABLE',reason:'NO_ALIGNED_FUTURE_CANDLES'};
+  const aligned=Object.fromEntries(names.map(name=>[name,commonTimes.map(ts=>maps[name].get(ts))]));
   let mfe=-Infinity,mae=Infinity,bestMinute=null,worstMinute=null;
   const horizonResults={};
-  for(let i=0;i<maxLen;i++){
-    const v=strategyValue(strategy,legs,marks,i),p=pnlPct(strategy,entry,v); if(p===null)continue;
-    const mins=Math.max(0,(new Date(Object.values(marks)[0][i].timestamp)-new Date(snapshot.timestamp))/60000);
+  for(let i=0;i<commonTimes.length;i++){
+    const v=strategyValue(strategy,legs,aligned,i),p=pnlPct(strategy,entry,v); if(p===null)continue;
+    const mins=Math.max(0,(commonTimes[i]-new Date(snapshot.timestamp).getTime())/60000);
     if(p>mfe){mfe=p;bestMinute=round(mins,0);} if(p<mae){mae=p;worstMinute=round(mins,0);}
     for(const h of horizons) if(horizonResults[h]===undefined&&mins>=h) horizonResults[h]=round(p);
   }
