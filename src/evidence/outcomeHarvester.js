@@ -83,7 +83,7 @@ async function harvestOutcome(snapshot,{token,fetchCandles}={}){
 }
 function retryDelay(attempt){return Math.min(30*60*1000,BASE_RETRY_MS*Math.pow(2,Math.max(0,attempt-1)));}
 
-function createOutcomeHarvester({store,snapshots,token,intervalMs=60000,horizonMinutes=120}={}){
+function createOutcomeHarvester({store,snapshots,token,intervalMs=60000,horizonMinutes=120,harvest=harvestOutcome}={}){
   let timer=null,running=false;
   const terminal=new Set();
   const attempts=new Map();
@@ -108,7 +108,7 @@ function createOutcomeHarvester({store,snapshots,token,intervalMs=60000,horizonM
         if(last?.nextRetryAt&&now<new Date(last.nextRetryAt).getTime()){status.skipped++;continue;}
         status.eligible++;
         const attempt=prior+1; let outcome;
-        try{ outcome=await harvestOutcome(snap,{token}); }
+        try{ outcome=await harvest(snap,{token}); }
         catch(e){ outcome={status:'UNAVAILABLE',reason:'HARVEST_ERROR',error:e.message}; }
         const measured=outcome.status==='MEASURED';
         const terminalFailure=!measured&&attempt>=MAX_RETRIES;
