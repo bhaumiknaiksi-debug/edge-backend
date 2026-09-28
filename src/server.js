@@ -16,6 +16,7 @@ const { evidenceKey } = require('./evidence/evidenceEngine');
 const { createEvidenceStore } = require('./evidence/evidenceStore');
 const { setupFeatureTags, setupEvidenceKey } = require('./evidence/setupEvidence');
 const { createOutcomeHarvester } = require('./evidence/outcomeHarvester');
+const { buildEvidenceIntelligence } = require('./evidence/evidenceIntelligence');
 
 const http = require('http');
 const https = require('https');
@@ -1062,6 +1063,12 @@ app.get('/api/v1/market/status', (req, res) => res.json({ phase: getMarketPhase(
 app.get('/evidence/snapshots', (req,res) => {
   const limit=Math.min(EVIDENCE_LIMIT,parseInt(req.query.limit,10)||100);
   res.json({count:Math.min(limit,evidenceSnapshots.length),total:evidenceSnapshots.length,storage:evidenceStore.status(),entries:evidenceSnapshots.slice(-limit)});
+});
+
+app.get('/evidence/intelligence', (req,res) => {
+  const requested=parseInt(req.query.minSamples,10);
+  const minSamples=Number.isFinite(requested)?Math.max(1,Math.min(1000,requested)):20;
+  res.json(buildEvidenceIntelligence(evidenceSnapshots,{minSamples}));
 });
 
 app.get('/evidence/status', (req,res) => {
