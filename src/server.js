@@ -14,6 +14,7 @@ const { buildDecisionOrchestration } = require('./engine/decisionOrchestrator');
 const { buildVolatilityContext } = require('./engine/volatilityEngine');
 const { evidenceKey } = require('./evidence/evidenceEngine');
 const { createEvidenceStore } = require('./evidence/evidenceStore');
+const { setupFeatureTags, setupEvidenceKey } = require('./evidence/setupEvidence');
 
 const http = require('http');
 const https = require('https');
@@ -1007,6 +1008,8 @@ async function poll() {
         resistance: result.resistance
       };
       evidenceSnapshot.evidenceKey = evidenceKey(evidenceSnapshot);
+      evidenceSnapshot.setupFeatureTags = setupFeatureTags(evidenceSnapshot);
+      evidenceSnapshot.setupEvidenceKey = setupEvidenceKey(evidenceSnapshot);
       evidenceStore.append(evidenceSnapshot);
       evidenceSnapshots.push(evidenceSnapshot);
       if (evidenceSnapshots.length > EVIDENCE_LIMIT) evidenceSnapshots.shift();
