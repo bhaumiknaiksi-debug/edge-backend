@@ -14,3 +14,10 @@ const key=evidenceKey(snapshot); assert(key.includes('BULLISH|CHEAP|4_7DTE|MORNI
 const rows=Array.from({length:20},()=>({snapshot,evidenceKey:key,outcome:out}));
 const s=summarizeEvidence(rows);assert.strictEqual(s[key].qualified,true);assert.strictEqual(s[key].samples,20);
 console.log('EDGE evidence tests passed');
+
+// Multi-leg candles must align by timestamp rather than array position.
+const spreadSnap={timestamp:'2026-09-25T10:00:00+05:30',strategy:'BEAR_CALL_SPREAD',tradeLegs:{sellLeg:{contractId:'S',bid:100,ask:101},buyLeg:{contractId:'B',bid:49,ask:50}}};
+const spreadCandles={S:[{timestamp:'2026-09-25T10:15:00+05:30',close:90},{timestamp:'2026-09-25T10:30:00+05:30',close:80}],B:[{timestamp:'2026-09-25T10:30:00+05:30',close:40}]};
+const spreadOut=measureOutcome({snapshot:spreadSnap,candlesByContract:spreadCandles,horizons:[30]});
+assert.strictEqual(spreadOut.status,'MEASURED');
+assert.strictEqual(spreadOut.bestMinute,30);
