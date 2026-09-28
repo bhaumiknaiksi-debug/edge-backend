@@ -21,3 +21,11 @@ const spreadCandles={S:[{timestamp:'2026-09-25T10:15:00+05:30',close:90},{timest
 const spreadOut=measureOutcome({snapshot:spreadSnap,candlesByContract:spreadCandles,horizons:[30]});
 assert.strictEqual(spreadOut.status,'MEASURED');
 assert.strictEqual(spreadOut.bestMinute,30);
+
+const incomplete=measureOutcome({snapshot,candlesByContract:{'NIFTY TEST CE':[{timestamp:'2026-09-25T10:15:00+05:30',close:110}]},horizons:[15,30]});
+assert.strictEqual(incomplete.status,'UNAVAILABLE');
+assert.strictEqual(incomplete.reason,'INCOMPLETE_HORIZON');
+
+// Credit spread math: entry credit = short bid 100 - long ask 50 = 50.
+// At +30m spread value = 80 - 40 = 40, so profit = (50-40)/50 = +20%.
+assert(Math.abs(spreadOut.horizonsPct[30]-20)<0.001);
