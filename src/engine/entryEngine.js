@@ -257,7 +257,7 @@ function calculateValidity(strategy, dte, marketPhase, minutesRemaining = null) 
   else if (strategy === 'BEAR_CALL_SPREAD' || strategy === 'BULL_PUT_SPREAD' || strategy === 'BULL_CALL_SPREAD' || strategy === 'BEAR_PUT_SPREAD') base = { validForMinutes: 15, maxHoldMinutes: 120 };
   else base = { validForMinutes: 10, maxHoldMinutes: 90 };
 
-  if (!Number.isFinite(Number(minutesRemaining))) return { ...base, sessionCapped: false };
+  if (minutesRemaining === null || minutesRemaining === undefined || !Number.isFinite(Number(minutesRemaining))) return { ...base, sessionCapped: false };
   const remaining = Math.max(0, Math.floor(Number(minutesRemaining)));
   return {
     validForMinutes: Math.min(base.validForMinutes, remaining),
