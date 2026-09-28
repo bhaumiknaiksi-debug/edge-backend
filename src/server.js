@@ -15,6 +15,7 @@ const { buildVolatilityContext } = require('./engine/volatilityEngine');
 const { evidenceKey } = require('./evidence/evidenceEngine');
 const { createEvidenceStore } = require('./evidence/evidenceStore');
 const { setupFeatureTags, setupEvidenceKey } = require('./evidence/setupEvidence');
+const { createOutcomeHarvester } = require('./evidence/outcomeHarvester');
 
 const http = require('http');
 const https = require('https');
@@ -88,6 +89,7 @@ const EVIDENCE_LIMIT = 10000;
 const evidenceStore = createEvidenceStore({ limit: EVIDENCE_LIMIT });
 const evidenceSnapshots = evidenceStore.load();
 let lastDecisionFingerprint = null;
+const outcomeHarvester = createOutcomeHarvester({ store: evidenceStore, snapshots: evidenceSnapshots, token: UPSTOX_TOKEN });
 
 // --- Market hours ---
 // NSE F&O regular market: 09:15-15:40 IST; F&O pre-open: 09:00-09:15 IST.
@@ -1063,7 +1065,13 @@ app.get('/evidence/snapshots', (req,res) => {
 });
 
 app.get('/evidence/status', (req,res) => {
-  res.json({ total:evidenceSnapshots.length, storage:evidenceStore.status(), lastDecisionFingerprint });
+  const counts = evidenceSnapshots.reduce((a,r)=>{a[r.recordType||'UNKNOWN']=(a[r.recordType||'UNKNOWN']||0)+1;return a;},{});
+  res.json({ total:evidenceSnapshots.length, counts, storage:evidenceStore.status(), harvester:outcomeHarvester.getStatus(), lastDecisionFingerprint });
+});
+
+app.post('/evidence/harvest', async (req,res) => {
+  const status = await outcomeHarvester.run();
+  res.json(status);
 });
 
 app.get('/history', (req, res) => {
@@ -1081,5 +1089,6 @@ server.listen(PORT, () => {
   const probeUrl = new URL('https://api.upstox.com/v2/option/contract');
   probeUrl.searchParams.set('instrument_key', 'NSE_INDEX|Nifty 50');
   console.log('[upstox] expiry URL constructed:', probeUrl.toString());
+  outcomeHarvester.start();
   poll();
 });
