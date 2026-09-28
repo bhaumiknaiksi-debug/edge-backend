@@ -81,6 +81,9 @@ function measureOutcome({snapshot,candlesByContract={},horizons=[15,30,60,120]})
     if(p>mfe){mfe=p;bestMinute=round(mins,0);} if(p<mae){mae=p;worstMinute=round(mins,0);}
     for(const h of horizons) if(horizonResults[h]===undefined&&mins>=h) horizonResults[h]=round(p);
   }
+  if(!Number.isFinite(mfe)||!Number.isFinite(mae))return{status:'UNAVAILABLE',reason:'NO_VALID_MARKS'};
+  const maxRequested=Math.max(...horizons);
+  if(horizonResults[maxRequested]===undefined)return{status:'UNAVAILABLE',reason:'INCOMPLETE_HORIZON',entryValue:round(entry),observedThroughMinute:commonTimes.length?round((commonTimes[commonTimes.length-1]-new Date(snapshot.timestamp).getTime())/60000,0):null,horizonsPct:horizonResults};
   return{status:'MEASURED',entryValue:round(entry),mfePct:round(mfe),maePct:round(mae),bestMinute,worstMinute,horizonsPct:horizonResults};
 }
 function summarizeEvidence(records,minSamples=20){
