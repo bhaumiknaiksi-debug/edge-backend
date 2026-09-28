@@ -484,7 +484,7 @@ function analyse(chain, expiryDate, marketContext = null) {
       const pop = Math.round((1 - sellLeg.ceDelta) * 100);
       tradeLegs = {
         sellLeg: { contractId: buildContractId(expiryDate, sellLeg.strike, 'CE'), instrumentKey: sellLeg.ceInstrumentKey, strike: sellLeg.strike, premium: sellLeg.ceLTP.toFixed(2), bid: sellLeg.ceBid, ask: sellLeg.ceAsk, type: 'CE' },
-        buyLeg:  { contractId: buildContractId(expiryDate, buyLeg.strike,  'CE'), strike: buyLeg.strike,  premium: buyLeg.ceLTP.toFixed(2), bid: buyLeg.ceBid, ask: buyLeg.ceAsk, type: 'CE' },
+        buyLeg:  { contractId: buildContractId(expiryDate, buyLeg.strike,  'CE'), instrumentKey: buyLeg.ceInstrumentKey, strike: buyLeg.strike,  premium: buyLeg.ceLTP.toFixed(2), bid: buyLeg.ceBid, ask: buyLeg.ceAsk, type: 'CE' },
         netCredit: netCredit.toFixed(2),     netCreditRupees: pointsToRupees(netCredit),
         maxProfit: maxProfit.toFixed(2),     maxProfitRupees: pointsToRupees(maxProfit),
         maxLoss:   maxLoss.toFixed(2),       maxLossRupees:   pointsToRupees(maxLoss),
@@ -507,7 +507,7 @@ function analyse(chain, expiryDate, marketContext = null) {
       const pop = Math.round((1 - Math.abs(sellLeg.peDelta)) * 100);
       tradeLegs = {
         sellLeg: { contractId: buildContractId(expiryDate, sellLeg.strike, 'PE'), instrumentKey: sellLeg.peInstrumentKey, strike: sellLeg.strike, premium: sellLeg.peLTP.toFixed(2), bid: sellLeg.peBid, ask: sellLeg.peAsk, type: 'PE' },
-        buyLeg:  { contractId: buildContractId(expiryDate, buyLeg.strike,  'PE'), strike: buyLeg.strike,  premium: buyLeg.peLTP.toFixed(2),  bid: buyLeg.peBid, ask: buyLeg.peAsk, type: 'PE' },
+        buyLeg:  { contractId: buildContractId(expiryDate, buyLeg.strike,  'PE'), instrumentKey: buyLeg.peInstrumentKey, strike: buyLeg.strike,  premium: buyLeg.peLTP.toFixed(2),  bid: buyLeg.peBid, ask: buyLeg.peAsk, type: 'PE' },
         netCredit: netCredit.toFixed(2),     netCreditRupees: pointsToRupees(netCredit),
         maxProfit: maxProfit.toFixed(2),     maxProfitRupees: pointsToRupees(maxProfit),
         maxLoss:   maxLoss.toFixed(2),       maxLossRupees:   pointsToRupees(maxLoss),
@@ -589,9 +589,9 @@ function analyse(chain, expiryDate, marketContext = null) {
       const pop = Math.round(Math.max(0, Math.min(100, (1 - ceShort.ceDelta - Math.abs(peShort.peDelta)) * 100)));
       tradeLegs = {
         ceShort: { contractId: buildContractId(expiryDate, ceShort.strike, 'CE'), instrumentKey: ceShort.ceInstrumentKey, strike: ceShort.strike, premium: ceShort.ceLTP.toFixed(2), bid: ceShort.ceBid, ask: ceShort.ceAsk, type: 'CE' },
-        ceLong:  { contractId: buildContractId(expiryDate, ceLong.strike,  'CE'), strike: ceLong.strike,  premium: ceLong.ceLTP.toFixed(2), bid: ceLong.ceBid, ask: ceLong.ceAsk, type: 'CE' },
+        ceLong:  { contractId: buildContractId(expiryDate, ceLong.strike,  'CE'), instrumentKey: ceLong.ceInstrumentKey, strike: ceLong.strike,  premium: ceLong.ceLTP.toFixed(2), bid: ceLong.ceBid, ask: ceLong.ceAsk, type: 'CE' },
         peShort: { contractId: buildContractId(expiryDate, peShort.strike, 'PE'), instrumentKey: peShort.peInstrumentKey, strike: peShort.strike, premium: peShort.peLTP.toFixed(2), bid: peShort.peBid, ask: peShort.peAsk, type: 'PE' },
-        peLong:  { contractId: buildContractId(expiryDate, peLong.strike,  'PE'), strike: peLong.strike,  premium: peLong.peLTP.toFixed(2), bid: peLong.peBid, ask: peLong.peAsk, type: 'PE' },
+        peLong:  { contractId: buildContractId(expiryDate, peLong.strike,  'PE'), instrumentKey: peLong.peInstrumentKey, strike: peLong.strike,  premium: peLong.peLTP.toFixed(2), bid: peLong.peBid, ask: peLong.peAsk, type: 'PE' },
         netCredit: netCredit.toFixed(2),  netCreditRupees: pointsToRupees(netCredit),
         maxProfit: netCredit.toFixed(2),  maxProfitRupees: pointsToRupees(netCredit),
         maxLoss:   maxLoss.toFixed(2),    maxLossRupees:   pointsToRupees(maxLoss),
