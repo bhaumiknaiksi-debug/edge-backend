@@ -33,7 +33,7 @@ assert(retryDelay(2)>retryDelay(1));
  // Retry/dedupe: failed attempts get unique IDs and backoff instead of appending every minute.
  const y={...snapshot,id:'y'};
  const rows2=[y]; const writes=[];
- const h2=createOutcomeHarvester({store:{append:r=>{writes.push(r);rows2.push(r);return true;}},snapshots:rows2,token:'test'});
+ const h2=createOutcomeHarvester({store:{append:r=>{writes.push(r);rows2.push(r);return true;}},snapshots:rows2,token:'test',harvest:async()=>({status:'UNAVAILABLE',reason:'TEST_FAILURE'})});
  await h2.run();
  assert.strictEqual(writes.length,1);
  assert.strictEqual(writes[0].id,'y|OUTCOME|1');
