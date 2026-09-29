@@ -7,13 +7,14 @@
     "test": "node src/engine/vnext.test.js",
     "test:replay": "node src/replay/replayEngine.test.js",
     "test:evidence": "node src/evidence/evidenceEngine.test.js",
-    "test:all": "node src/engine/vnext.test.js && node src/engine/setupObservability.test.js && node src/evidence/setupEvidence.test.js && node src/evidence/outcomeHarvester.test.js && node src/replay/replayEngine.test.js && node src/evidence/evidenceEngine.test.js && node src/evidence/evidenceIntelligence.test.js && node src/evidence/evidenceArchive.test.js",
+    "test:all": "node src/engine/vnext.test.js && node src/engine/setupObservability.test.js && node src/engine/setupScanner.test.js && node src/evidence/setupEvidence.test.js && node src/evidence/outcomeHarvester.test.js && node src/replay/replayEngine.test.js && node src/evidence/evidenceEngine.test.js && node src/evidence/evidenceIntelligence.test.js && node src/evidence/evidenceArchive.test.js",
     "test:setup": "node src/engine/setupObservability.test.js",
     "test:setup-evidence": "node src/evidence/setupEvidence.test.js",
     "test:harvester": "node src/evidence/outcomeHarvester.test.js",
     "test:intelligence": "node src/evidence/evidenceIntelligence.test.js",
     "test:syntax": "find src -name '*.js' -print0 | xargs -0 -n1 node --check",
-    "test:archive": "node src/evidence/evidenceArchive.test.js"
+    "test:archive": "node src/evidence/evidenceArchive.test.js",
+    "test:scanner": "node src/engine/setupScanner.test.js"
   },
   "dependencies": {
     "express": "^4.18.0"
