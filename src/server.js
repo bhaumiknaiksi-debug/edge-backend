@@ -4,6 +4,7 @@ const { buildMarketFeatures } = require('./engine/marketFeatureEngine');
 const { classifyRegime } = require('./engine/regimeEngine');
 const { selectStrategy } = require('./engine/strategyEngine');
 const { qualifySetup } = require('./engine/setupEngine');
+const { scanSetups } = require('./engine/setupScanner');
 const { fetchMarketContext } = require('./data/marketContext');
 const { classifyOptionChainFlow } = require('./engine/optionFlowEngine');
 const { buildEntryPlan } = require('./engine/entryEngine');
@@ -679,6 +680,16 @@ function analyse(chain, expiryDate, marketContext = null) {
                      : nearWall ? 'MODERATE' : 'LOW';
   const premiumSelling = ivRegime === 'HIGH' ? 'FAVOURABLE' : ivRegime === 'NORMAL' ? 'NEUTRAL' : 'UNFAVOURABLE';
 
+  // Research-only setup scanner. This is deliberately downstream-only data:
+  // it is persisted for evidence analysis but is NOT passed into setup,
+  // entry, risk, sizing, management, or orchestration.
+  const setupScanner = scanSetups({
+    setupFeatures: marketContext?.setupFeatures || null,
+    trend5mPct: marketContext?.trend5mPct,
+    trend15mPct: marketContext?.trend15mPct,
+    trend30mPct: marketContext?.trend30mPct
+  });
+
   // --- Phase 5/6 execution pipeline ---
   // Entry is evaluated only after real market-structure walls are known.
   const entryPlan = buildEntryPlan({
@@ -936,7 +947,8 @@ function analyse(chain, expiryDate, marketContext = null) {
       phase: getMarketPhase(),
       features: marketFeatures,
       regime,
-      context: marketContext
+      context: marketContext,
+      setupScanner
     }
   };
 }
@@ -1008,6 +1020,7 @@ async function poll() {
         orchestration: result.decision?.orchestration,
         features: result.market?.features,
         setupFeatures: result.market?.context?.setupFeatures || null,
+        setupScanner: result.market?.setupScanner || null,
         optionFlow: result.intel?.optionFlow,
         pcr: result.pcr,
         maxPain: result.maxPain,
