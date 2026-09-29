@@ -18,6 +18,8 @@ assert.strictEqual(h['x-amz-date'],'20260929T000000Z');
   const backed=await archive.backup(restored.records);
   assert.strictEqual(backed.backedUp,true); assert.strictEqual(backed.records,2);
   assert.strictEqual(calls[1].body,'{"id":"1"}\n{"id":"2"}\n');
+  assert.strictEqual(calls[1].headers['content-length'], String(Buffer.byteLength(calls[1].body, 'utf8')));
+  assert.strictEqual(calls[1].headers['content-type'], 'application/x-ndjson');
   assert.strictEqual(archive.status().recordsBackedUp,2);
 
   const empty=createEvidenceArchive({env,request:async()=>({statusCode:404,body:''})});
