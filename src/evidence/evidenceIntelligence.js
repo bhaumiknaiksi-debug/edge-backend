@@ -38,6 +38,20 @@ function groupBy(rows,keyFn,minSamples,horizons){
   return Object.fromEntries(Object.entries(groups).sort((a,b)=>b[1].length-a[1].length||a[0].localeCompare(b[0])).map(([key,items])=>[key,metrics(items,minSamples,horizons)]));
 }
 function snapshotOf(row){return row.snapshot||{};}
+function scannerCandidate(row,type){
+  return (snapshotOf(row).setupScanner?.candidates||[]).find(c=>c?.type===type)||null;
+}
+function scannerKey(row,type){
+  const c=scannerCandidate(row,type);
+  if(!c||c.observed===false||c.state==='UNAVAILABLE')return 'UNAVAILABLE';
+  return [c.direction||'UNKNOWN',c.state||'UNKNOWN'].join('|');
+}
+function scannerCombinationKey(row){
+  const s=snapshotOf(row).setupScanner;
+  if(!s||!Array.isArray(s.candidates))return 'UNAVAILABLE';
+  const types=['OPENING_RANGE_BREAK','VWAP_CONTINUATION','VWAP_PULLBACK','MULTI_TIMEFRAME_MOMENTUM'];
+  return types.map(type=>type+'='+scannerKey(row,type)).join('||');
+}
 
 function buildEvidenceIntelligence(records=[],opts={}){
   const minSamples=Number.isFinite(Number(opts.minSamples))?Math.max(1,Number(opts.minSamples)):20;
@@ -54,16 +68,22 @@ function buildEvidenceIntelligence(records=[],opts={}){
     vwapSide:groupBy(rows,r=>tags(r).vwapSide,minSamples,horizons),
     vwapSlope:groupBy(rows,r=>tags(r).vwapSlopeDirection,minSamples,horizons),
     relativeVolume:groupBy(rows,r=>tags(r).relativeVolumeBucket,minSamples,horizons),
-    atr:groupBy(rows,r=>tags(r).atrBucket,minSamples,horizons)
+    atr:groupBy(rows,r=>tags(r).atrBucket,minSamples,horizons),
+    scannerOpeningRange:groupBy(rows,r=>scannerKey(r,'OPENING_RANGE_BREAK'),minSamples,horizons),
+    scannerVwapContinuation:groupBy(rows,r=>scannerKey(r,'VWAP_CONTINUATION'),minSamples,horizons),
+    scannerVwapPullback:groupBy(rows,r=>scannerKey(r,'VWAP_PULLBACK'),minSamples,horizons),
+    scannerMomentum:groupBy(rows,r=>scannerKey(r,'MULTI_TIMEFRAME_MOMENTUM'),minSamples,horizons)
   };
   const setupGroups=groupBy(rows,r=>r.setupEvidenceKey||setupEvidenceKey(snapshotOf(r)),minSamples,horizons);
+  const scannerGroups=groupBy(rows,scannerCombinationKey,minSamples,horizons);
   return {
-    version:'EVIDENCE_INTELLIGENCE_V1',generatedAt:new Date().toISOString(),researchOnly:true,liveDecisionImpact:false,
+    version:'EVIDENCE_INTELLIGENCE_V2',generatedAt:new Date().toISOString(),researchOnly:true,liveDecisionImpact:false,
     minSamples,measuredEpisodes:rows.length,
     methodology:{population:'MEASURED READY_TO_EXECUTE episode outcomes only',dedupe:'one measured outcome per snapshotId',horizonsMinutes:horizons,
       winDefinition:'horizon return > 0',qualification:'sample-count marker only; not proof of edge or permission to trade',
-      friction:'returns currently exclude brokerage, taxes, fees and execution slippage; exit marks use aligned 1m candle closes'},
-    overall:metrics(rows,minSamples,horizons),dimensions,setupGroups
+      friction:'returns currently exclude brokerage, taxes, fees and execution slippage; exit marks use aligned 1m candle closes',
+      scanner:'Setup Scanner dimensions are observational research labels only; qualification does not permit live trading'},
+    overall:metrics(rows,minSamples,horizons),dimensions,setupGroups,scannerGroups
   };
 }
 
