@@ -74,7 +74,10 @@ function createEvidenceArchive({ env = process.env, objectKey = env.R2_OBJECT_KE
   async function call(method, body = '') {
     const url = objectUrl();
     const headers = signedHeaders({ method, url, body, accessKeyId: config.accessKeyId, secretAccessKey: config.secretAccessKey, now: now() });
-    if (method === 'PUT') headers['content-type'] = 'application/x-ndjson';
+    if (method === 'PUT') {
+      headers['content-type'] = 'application/x-ndjson';
+      headers['content-length'] = String(Buffer.byteLength(body, 'utf8'));
+    }
     return request({ method, url, headers, body });
   }
   async function restore() {
