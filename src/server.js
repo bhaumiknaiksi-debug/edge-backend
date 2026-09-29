@@ -17,6 +17,7 @@ const { createEvidenceStore } = require('./evidence/evidenceStore');
 const { setupFeatureTags, setupEvidenceKey } = require('./evidence/setupEvidence');
 const { createOutcomeHarvester } = require('./evidence/outcomeHarvester');
 const { buildEvidenceIntelligence } = require('./evidence/evidenceIntelligence');
+const { createEvidenceArchive } = require('./evidence/evidenceArchive');
 
 const http = require('http');
 const https = require('https');
@@ -89,6 +90,7 @@ const history = [];
 const EVIDENCE_LIMIT = 10000;
 const evidenceStore = createEvidenceStore({ limit: EVIDENCE_LIMIT });
 const evidenceSnapshots = evidenceStore.load();
+const evidenceArchive = createEvidenceArchive();
 let lastDecisionFingerprint = null;
 const outcomeHarvester = createOutcomeHarvester({ store: evidenceStore, snapshots: evidenceSnapshots, token: UPSTOX_TOKEN });
 
@@ -1073,7 +1075,7 @@ app.get('/evidence/intelligence', (req,res) => {
 
 app.get('/evidence/status', (req,res) => {
   const counts = evidenceSnapshots.reduce((a,r)=>{a[r.recordType||'UNKNOWN']=(a[r.recordType||'UNKNOWN']||0)+1;return a;},{});
-  res.json({ total:evidenceSnapshots.length, counts, storage:evidenceStore.status(), harvester:outcomeHarvester.getStatus(), lastDecisionFingerprint });
+  res.json({ total:evidenceSnapshots.length, counts, storage:evidenceStore.status(), archive:evidenceArchive.status(), harvester:outcomeHarvester.getStatus(), lastDecisionFingerprint });
 });
 
 app.post('/evidence/harvest', async (req,res) => {
@@ -1091,11 +1093,46 @@ app.get('/history', (req, res) => {
 
 const server = http.createServer(app);
 
-server.listen(PORT, () => {
+async function restoreEvidenceArchive() {
+  const restored = await evidenceArchive.restore();
+  if (restored.restored) {
+    const merged = new Map();
+    for (const record of restored.records.concat(evidenceSnapshots)) {
+      const key = record.id ? String(record.recordType || '') + '|' + String(record.id) : JSON.stringify(record);
+      merged.set(key, record);
+    }
+    const rows = Array.from(merged.values()).sort((a,b) => String(a.timestamp || '').localeCompare(String(b.timestamp || '')));
+    evidenceSnapshots.splice(0, evidenceSnapshots.length, ...rows.slice(-EVIDENCE_LIMIT));
+    console.log('[evidence archive] restored', restored.records.length, 'records; merged total', evidenceSnapshots.length);
+  } else if (restored.reason === 'ERROR') {
+    console.error('[evidence archive] restore failed:', restored.error);
+  }
+  // Seed an empty/new archive from any local evidence we still have.
+  if (evidenceArchive.status().configured && evidenceSnapshots.length && !restored.restored) {
+    const seeded = await evidenceArchive.backup(evidenceSnapshots);
+    if (!seeded.backedUp) console.error('[evidence archive] initial backup failed:', seeded.error || seeded.reason);
+  }
+  evidenceArchive.start(() => evidenceSnapshots.slice());
+}
+
+let shuttingDown = false;
+async function gracefulShutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log('[shutdown]', signal, '- checkpointing evidence');
+  try { await evidenceArchive.backup(evidenceSnapshots); } catch (err) { console.error('[evidence archive] shutdown backup failed:', err.message); }
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(0), 10000).unref();
+}
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+server.listen(PORT, async () => {
   console.log('EDGE backend on port', PORT);
   const probeUrl = new URL('https://api.upstox.com/v2/option/contract');
   probeUrl.searchParams.set('instrument_key', 'NSE_INDEX|Nifty 50');
   console.log('[upstox] expiry URL constructed:', probeUrl.toString());
+  await restoreEvidenceArchive();
   outcomeHarvester.start();
   poll();
 });
