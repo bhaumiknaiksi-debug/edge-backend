@@ -1,6 +1,6 @@
 'use strict';
 
-// Calibrated one-lot research cost profiles for NSE equity options.
+// Calibrated research cost profiles for NSE equity options.
 // Rates are intentionally isolated from live execution logic.
 const PROFILES = Object.freeze({
   UPSTOX_STANDARD_NSE_OPTIONS_2026: Object.freeze({
