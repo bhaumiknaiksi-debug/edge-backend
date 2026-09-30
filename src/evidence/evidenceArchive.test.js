@@ -21,6 +21,11 @@ assert.strictEqual(h['x-amz-date'],'20260929T000000Z');
   assert.strictEqual(calls[1].headers['content-length'], String(Buffer.byteLength(calls[1].body, 'utf8')));
   assert.strictEqual(calls[1].headers['content-type'], 'application/x-ndjson');
   assert.strictEqual(archive.status().recordsBackedUp,2);
+  const roundTrip=await archive.verify(restored.records);
+  assert.strictEqual(roundTrip.ok,true);
+  assert.strictEqual(roundTrip.expectedRecords,2);
+  assert.strictEqual(roundTrip.restoredRecords,2);
+  assert.strictEqual(archive.status().lastVerification.ok,true);
 
   const empty=createEvidenceArchive({env,request:async()=>({statusCode:404,body:''})});
   const none=await empty.restore();
