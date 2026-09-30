@@ -100,7 +100,7 @@ function normalizeFriction(opts={}){
     lotSize,
     basis:calibratedProfile
       ?'calibrated broker/statutory option charges applied to leg-level entry and horizon exit marks'
-      :'research stress model; bps apply to gross option premium across executable legs, flat rupees are per leg round trip'
+      :'research stress model; friction bps and slippage bps apply to gross option premium across executable legs, flat rupees are per leg round trip'
   };
 }
 function frictionCostPct(row,friction={},horizon=null){
@@ -117,8 +117,11 @@ function frictionCostPct(row,friction={},horizon=null){
   if(!legs)return null;
   const gross=grossPremiumPoints(row);
   const bpsPoints=gross*(model.roundTripBpsOnGrossPremium/10000);
+  // Without leg-level horizon marks, treat slippageBps as an explicit round-trip
+  // premium-turnover stress rather than silently ignoring it.
+  const slippagePoints=gross*(model.slippageBps/10000);
   const flatPoints=(model.flatRupeesPerLegRoundTrip*legs)/model.lotSize;
-  return round((bpsPoints+flatPoints)/entry*100,4);
+  return round((bpsPoints+slippagePoints+flatPoints)/entry*100,4);
 }
 function applyFriction(rows=[],friction={}){
   const model=normalizeFriction(friction);
@@ -237,7 +240,10 @@ function walkForwardFolds(rows=[],opts={}){
   const minTrainSamples=Math.max(1,n(opts.minTrainSamples)??20);
   const minTestSamples=Math.max(1,n(opts.minTestSamples)??5);
   const testWindowSize=Math.max(minTestSamples,n(opts.testWindowSize)??10);
-  const stepSize=Math.max(1,n(opts.stepSize)??testWindowSize);
+  // Replication claims require disjoint forward test blocks. Clamp custom steps
+  // so a snapshot can never confirm more than one fold.
+  const requestedStepSize=Math.max(1,n(opts.stepSize)??testWindowSize);
+  const stepSize=Math.max(testWindowSize,requestedStepSize);
   const maxFolds=Math.max(1,n(opts.maxFolds)??12);
   const folds=[];
   for(let testStart=minTrainSamples;testStart<sorted.length;testStart+=stepSize){
