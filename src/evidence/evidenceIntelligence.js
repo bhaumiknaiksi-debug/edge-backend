@@ -2,6 +2,7 @@
 
 const { bucketDte, bucketTime } = require('./evidenceEngine');
 const { setupFeatureTags, setupEvidenceKey } = require('./setupEvidence');
+const { getProfile, calibratedRoundTripCost } = require('./tradingFriction');
 
 const DEFAULT_HORIZONS=[15,30,60,120];
 
@@ -67,43 +68,84 @@ function grossPremiumPoints(row){
   },0);
 }
 function normalizeFriction(opts={}){
+  const profileName=opts.profileName||opts.profile||null;
+  const calibratedProfile=getProfile(profileName);
   const roundTripBpsOnGrossPremium=Math.max(0,n(opts.roundTripBpsOnGrossPremium)??0);
   const flatRupeesPerLegRoundTrip=Math.max(0,n(opts.flatRupeesPerLegRoundTrip)??0);
   const lotSize=Math.max(1,n(opts.lotSize)??65);
+  const stressConfigured=roundTripBpsOnGrossPremium>0||flatRupeesPerLegRoundTrip>0;
   return {
-    configured:roundTripBpsOnGrossPremium>0||flatRupeesPerLegRoundTrip>0,
+    configured:!!calibratedProfile||stressConfigured,
+    mode:calibratedProfile?'CALIBRATED_PROFILE':stressConfigured?'STRESS':'NONE',
+    profileName:calibratedProfile?.name||null,
+    calibratedProfile:calibratedProfile?{
+      name:calibratedProfile.name,
+      broker:calibratedProfile.broker,
+      segment:calibratedProfile.segment,
+      effectiveFrom:calibratedProfile.effectiveFrom,
+      calibratedAsOf:calibratedProfile.calibratedAsOf,
+      brokeragePerExecutedOrderRupees:calibratedProfile.brokeragePerExecutedOrderRupees,
+      sttSellPct:calibratedProfile.sttSellPct,
+      exchangeTransactionPct:calibratedProfile.exchangeTransactionPct,
+      sebiPerCroreRupees:calibratedProfile.sebiPerCroreRupees,
+      stampDutyBuyPct:calibratedProfile.stampDutyBuyPct,
+      gstPct:calibratedProfile.gstPct,
+      ipftPerCroreRupees:calibratedProfile.ipftPerCroreRupees,
+      assumptions:calibratedProfile.assumptions
+    }:null,
     roundTripBpsOnGrossPremium,
     flatRupeesPerLegRoundTrip,
     lotSize,
-    basis:'research stress model; bps apply to gross option premium across executable legs, flat rupees are per leg round trip'
+    basis:calibratedProfile
+      ?'calibrated broker/statutory option charges applied to leg-level entry and horizon exit marks'
+      :'research stress model; bps apply to gross option premium across executable legs, flat rupees are per leg round trip'
   };
 }
-function frictionCostPct(row,friction={}){
+function frictionCostPct(row,friction={},horizon=null){
   const model=normalizeFriction(friction);
+  if(model.mode==='CALIBRATED_PROFILE'){
+    if(horizon===null||horizon===undefined)return null;
+    const exact=calibratedRoundTripCost(row,horizon,model.profileName);
+    return exact.available?exact.costPct:null;
+  }
+  if(model.mode==='NONE')return 0;
   const entry=n(row?.outcome?.entryValue);
-  if(entry===null||entry<=0)return 0;
+  if(entry===null||entry<=0)return null;
   const legs=executableLegs(row).length;
-  if(!legs)return 0;
+  if(!legs)return null;
   const gross=grossPremiumPoints(row);
   const bpsPoints=gross*(model.roundTripBpsOnGrossPremium/10000);
   const flatPoints=(model.flatRupeesPerLegRoundTrip*legs)/model.lotSize;
   return round((bpsPoints+flatPoints)/entry*100,4);
 }
 function applyFriction(rows=[],friction={}){
+  const model=normalizeFriction(friction);
   return rows.map(row=>{
-    const cost=frictionCostPct(row,friction);
     const outcome=row.outcome||{};
-    const horizonsPct={};
+    const horizonsPct={},costsByHorizon={};
     for(const [h,v] of Object.entries(outcome.horizonsPct||{})){
-      const x=n(v); horizonsPct[h]=x===null?v:round(x-cost,4);
+      const x=n(v),cost=frictionCostPct(row,model,h);
+      costsByHorizon[h]=cost;
+      horizonsPct[h]=x===null?null:(cost===null?null:round(x-cost,4));
     }
-    const mfe=n(outcome.mfePct),mae=n(outcome.maePct);
+    let mfe=outcome.mfePct,mae=outcome.maePct;
+    if(model.mode==='STRESS'){
+      const cost=frictionCostPct(row,model);
+      const m=n(outcome.mfePct),a=n(outcome.maePct);
+      mfe=m===null?outcome.mfePct:(cost===null?null:round(m-cost,4));
+      mae=a===null?outcome.maePct:(cost===null?null:round(a-cost,4));
+    } else if(model.mode==='CALIBRATED_PROFILE'){
+      // Exact excursion costs require the exit-leg marks at the best/worst minute.
+      // Keep them unavailable rather than subtracting a fabricated constant.
+      mfe=null; mae=null;
+    }
     return {...row,outcome:{...outcome,
-      frictionCostPct:cost,
+      frictionMode:model.mode,
+      frictionCostsPctByHorizon:costsByHorizon,
       grossHorizonsPct:outcome.horizonsPct||{},
       horizonsPct,
-      mfePct:mfe===null?outcome.mfePct:round(mfe-cost,4),
-      maePct:mae===null?outcome.maePct:round(mae-cost,4)
+      mfePct:mfe,
+      maePct:mae
     }};
   });
 }
@@ -183,6 +225,100 @@ function buildChronologicalValidation(rows=[],opts={}){
   };
 }
 
+function uniqueBySnapshot(rows=[]){
+  const m=new Map();
+  for(const row of rows){const k=row.snapshotId||row.id;if(k)m.set(k,row);}
+  return [...m.values()];
+}
+function walkForwardFolds(rows=[],opts={}){
+  const sorted=[...rows].sort((a,b)=>snapshotTimestamp(a)-snapshotTimestamp(b));
+  const minTrainSamples=Math.max(1,n(opts.minTrainSamples)??20);
+  const minTestSamples=Math.max(1,n(opts.minTestSamples)??5);
+  const testWindowSize=Math.max(minTestSamples,n(opts.testWindowSize)??10);
+  const stepSize=Math.max(1,n(opts.stepSize)??testWindowSize);
+  const maxFolds=Math.max(1,n(opts.maxFolds)??12);
+  const folds=[];
+  for(let testStart=minTrainSamples;testStart<sorted.length;testStart+=stepSize){
+    const train=sorted.slice(0,testStart);
+    const test=sorted.slice(testStart,Math.min(sorted.length,testStart+testWindowSize));
+    if(test.length<minTestSamples)break;
+    folds.push({
+      index:folds.length+1,
+      train,
+      test,
+      trainStart:snapshotOf(train[0])?.timestamp||null,
+      trainEnd:snapshotOf(train[train.length-1])?.timestamp||null,
+      testStart:snapshotOf(test[0])?.timestamp||null,
+      testEnd:snapshotOf(test[test.length-1])?.timestamp||null
+    });
+  }
+  return{minTrainSamples,minTestSamples,testWindowSize,stepSize,maxFolds,folds:folds.slice(-maxFolds)};
+}
+function walkForwardGroupSummary(folds,keyFn,minTrainGroup,minTestGroup,horizons,friction){
+  const keys=new Set();
+  for(const fold of folds){
+    Object.keys(groupRows(fold.train,keyFn)).forEach(k=>keys.add(k));
+    Object.keys(groupRows(fold.test,keyFn)).forEach(k=>keys.add(k));
+  }
+  const out={};
+  for(const key of keys){
+    let eligibleFolds=0;
+    const collected=[];
+    const foldResults=[];
+    for(const fold of folds){
+      const tr=groupRows(fold.train,keyFn)[key]||[];
+      const te=groupRows(fold.test,keyFn)[key]||[];
+      const eligible=tr.length>=minTrainGroup&&te.length>=minTestGroup;
+      if(eligible){eligibleFolds++;collected.push(...te);}
+      foldResults.push({fold:fold.index,eligible,trainSamples:tr.length,testSamples:te.length,
+        test:eligible?validationMetrics(te,minTestGroup,horizons,friction):null});
+    }
+    const unique=uniqueBySnapshot(collected);
+    out[key]={
+      totalFolds:folds.length,
+      eligibleFolds,
+      replicatedAcrossFolds:eligibleFolds>=2,
+      aggregateTest:validationMetrics(unique,minTestGroup,horizons,friction),
+      folds:foldResults
+    };
+  }
+  return Object.fromEntries(Object.entries(out).sort((a,b)=>b[1].aggregateTest.gross.samples-a[1].aggregateTest.gross.samples||a[0].localeCompare(b[0])));
+}
+function buildWalkForwardValidation(rows=[],opts={}){
+  const horizons=Array.isArray(opts.horizons)&&opts.horizons.length?opts.horizons:DEFAULT_HORIZONS;
+  const friction=normalizeFriction(opts.friction||{});
+  const wf=walkForwardFolds(rows,opts);
+  const minTrainGroup=Math.max(1,n(opts.minTrainGroupSamples)??Math.min(10,wf.minTrainSamples));
+  const minTestGroup=Math.max(1,n(opts.minTestGroupSamples)??Math.min(3,wf.minTestSamples));
+  const allTest=uniqueBySnapshot(wf.folds.flatMap(f=>f.test));
+  return{
+    version:'WALK_FORWARD_V1',
+    researchOnly:true,
+    liveDecisionImpact:false,
+    foldCount:wf.folds.length,
+    minTrainSamples:wf.minTrainSamples,
+    minTestSamples:wf.minTestSamples,
+    testWindowSize:wf.testWindowSize,
+    stepSize:wf.stepSize,
+    maxFolds:wf.maxFolds,
+    minTrainGroupSamples:minTrainGroup,
+    minTestGroupSamples:minTestGroup,
+    enoughForWalkForward:wf.folds.length>=2,
+    frictionModel:friction,
+    methodology:'Expanding chronological training window with non-random forward test blocks. Aggregate test metrics dedupe snapshotId. Two or more folds is only a replication sample gate, not proof of edge or permission to trade.',
+    folds:wf.folds.map(f=>({
+      index:f.index,
+      trainStart:f.trainStart,trainEnd:f.trainEnd,testStart:f.testStart,testEnd:f.testEnd,
+      trainEpisodes:f.train.length,testEpisodes:f.test.length,
+      train:validationMetrics(f.train,wf.minTrainSamples,horizons,friction),
+      test:validationMetrics(f.test,wf.minTestSamples,horizons,friction)
+    })),
+    aggregateTest:validationMetrics(allTest,wf.minTestSamples,horizons,friction),
+    strategyGroups:walkForwardGroupSummary(wf.folds,r=>snapshotOf(r).strategy||'WAIT',minTrainGroup,minTestGroup,horizons,friction),
+    scannerGroups:walkForwardGroupSummary(wf.folds,scannerCombinationKey,minTrainGroup,minTestGroup,horizons,friction)
+  };
+}
+
 function buildEvidenceIntelligence(records=[],opts={}){
   const minSamples=Number.isFinite(Number(opts.minSamples))?Math.max(1,Number(opts.minSamples)):20;
   const horizons=Array.isArray(opts.horizons)&&opts.horizons.length?opts.horizons:DEFAULT_HORIZONS;
@@ -213,20 +349,31 @@ function buildEvidenceIntelligence(records=[],opts={}){
     testFraction:opts.testFraction,
     friction:opts.friction
   });
+  const walkForward=buildWalkForwardValidation(rows,{
+    horizons,
+    minTrainSamples:opts.walkForwardMinTrainSamples??opts.minTrainSamples,
+    minTestSamples:opts.walkForwardMinTestSamples,
+    testWindowSize:opts.walkForwardTestWindowSize,
+    stepSize:opts.walkForwardStepSize,
+    maxFolds:opts.walkForwardMaxFolds,
+    minTrainGroupSamples:opts.walkForwardMinTrainGroupSamples,
+    minTestGroupSamples:opts.walkForwardMinTestGroupSamples,
+    friction:opts.friction
+  });
   return {
-    version:'EVIDENCE_INTELLIGENCE_V3',generatedAt:new Date().toISOString(),researchOnly:true,liveDecisionImpact:false,
+    version:'EVIDENCE_INTELLIGENCE_V4',generatedAt:new Date().toISOString(),researchOnly:true,liveDecisionImpact:false,
     minSamples,measuredEpisodes:rows.length,
     methodology:{population:'MEASURED READY_TO_EXECUTE episode outcomes only',dedupe:'one measured outcome per snapshotId',horizonsMinutes:horizons,
       winDefinition:'horizon return > 0',qualification:'sample-count marker only; not proof of edge or permission to trade',
-      friction:'V3 includes a configurable research friction stress model. Zero-cost defaults remain explicit until broker-specific costs are calibrated.',
-      validation:'chronological holdout only: oldest observations train, newest observations test; no random shuffle and no live-decision impact',
+      friction:'V4 supports calibrated broker/statutory option costs from leg-level execution marks; legacy outcomes without those marks stay unavailable rather than receiving invented costs.',
+      validation:'chronological holdout plus expanding-window walk-forward validation; no random shuffle and no live-decision impact',
       scanner:'Setup Scanner dimensions are observational research labels only; qualification does not permit live trading'},
-    overall:metrics(rows,minSamples,horizons),dimensions,setupGroups,scannerGroups,validation
+    overall:metrics(rows,minSamples,horizons),dimensions,setupGroups,scannerGroups,validation,walkForward
   };
 }
 
 module.exports={
   DEFAULT_HORIZONS,measuredEpisodes,metrics,scannerKey,scannerCombinationKey,
   normalizeFriction,frictionCostPct,applyFriction,chronologicalSplit,buildChronologicalValidation,
-  buildEvidenceIntelligence
+  walkForwardFolds,buildWalkForwardValidation,buildEvidenceIntelligence
 };

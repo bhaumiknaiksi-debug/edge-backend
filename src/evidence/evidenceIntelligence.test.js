@@ -1,6 +1,6 @@
 'use strict';
 const assert=require('assert');
-const {measuredEpisodes,metrics,frictionCostPct,chronologicalSplit,buildEvidenceIntelligence}=require('./evidenceIntelligence');
+const {measuredEpisodes,metrics,frictionCostPct,chronologicalSplit,walkForwardFolds,buildEvidenceIntelligence}=require('./evidenceIntelligence');
 
 function row(id,ret,overrides={}){
   const snapshot={id,timestamp:'2026-09-28T10:15:00+05:30',spot:23000,strategy:'LONG_CALL',dte:2,
@@ -13,8 +13,19 @@ function row(id,ret,overrides={}){
       {type:'VWAP_PULLBACK',direction:'BULLISH',state:'MODERATE',observed:true},
       {type:'MULTI_TIMEFRAME_MOMENTUM',direction:'BULLISH',state:'ALIGNED',observed:true}
     ]},...overrides};
+  const h={15:ret/2,30:ret*0.75,60:ret,120:ret*0.8};
   return {id:id+'|OUTCOME|1',recordType:'OUTCOME',snapshotId:id,attempt:1,snapshot,
-    outcome:{status:'MEASURED',entryValue:100,mfePct:ret+5,maePct:-3,bestMinute:60,horizonsPct:{15:ret/2,30:ret*0.75,60:ret,120:ret*0.8}}};
+    outcome:{
+      status:'MEASURED',entryValue:100,mfePct:ret+5,maePct:-3,bestMinute:60,
+      entryLegMarks:{buyLeg:{contractId:'NIFTY TEST CE',side:'BUY',price:100}},
+      horizonLegMarks:{
+        15:{marks:{buyLeg:100+h[15]}},
+        30:{marks:{buyLeg:100+h[30]}},
+        60:{marks:{buyLeg:100+h[60]}},
+        120:{marks:{buyLeg:100+h[120]}}
+      },
+      horizonsPct:h
+    }};
 }
 
 const rows=[
@@ -37,7 +48,7 @@ assert.strictEqual(intel.dimensions.openingRange.ABOVE.samples,3);
 assert.strictEqual(intel.dimensions.vwapSide.ABOVE.samples,3);
 assert.strictEqual(intel.dimensions.vwapSlope.RISING.samples,3);
 assert.strictEqual(intel.dimensions.relativeVolume.HIGH.samples,3);
-assert.strictEqual(intel.version,'EVIDENCE_INTELLIGENCE_V3');
+assert.strictEqual(intel.version,'EVIDENCE_INTELLIGENCE_V4');
 assert.strictEqual(intel.dimensions.scannerOpeningRange['BULLISH|OUTSIDE_RANGE'].samples,3);
 assert.strictEqual(intel.dimensions.scannerVwapContinuation['BULLISH|ALIGNED'].samples,3);
 assert.strictEqual(intel.dimensions.scannerVwapPullback['BULLISH|MODERATE'].samples,3);
@@ -56,6 +67,36 @@ assert.strictEqual(frictionCostPct(rows[0],{roundTripBpsOnGrossPremium:100,flatR
 const split=chronologicalSplit([rows[2],rows[0],rows[1]],0.34);
 assert.deepStrictEqual(split.train.map(r=>r.snapshotId),['a','b']);
 assert.deepStrictEqual(split.test.map(r=>r.snapshotId),['c']);
+
+const calibrated=buildEvidenceIntelligence(rows,{
+  minSamples:1,minTrainSamples:2,minTestSamples:1,testFraction:0.34,
+  friction:{profileName:'UPSTOX_STANDARD_NSE_OPTIONS_2026'}
+});
+assert.strictEqual(calibrated.validation.frictionModel.mode,'CALIBRATED_PROFILE');
+assert.strictEqual(calibrated.validation.frictionModel.calibratedProfile.brokeragePerExecutedOrderRupees,20);
+assert(calibrated.validation.overall.test.frictionAdjusted.horizons[60].avgReturnPct <
+  calibrated.validation.overall.test.gross.horizons[60].avgReturnPct);
+
+const wfRows=Array.from({length:45},(_,i)=>row('wf'+i,(i%3)-1,{
+  timestamp:new Date(Date.parse('2026-09-01T04:00:00Z')+i*30*60000).toISOString()
+}));
+const wf=walkForwardFolds(wfRows,{minTrainSamples:20,minTestSamples:5,testWindowSize:10,stepSize:10});
+assert.strictEqual(wf.folds.length,3);
+assert.strictEqual(wf.folds[0].train.length,20);
+assert.strictEqual(wf.folds[0].test.length,10);
+const wfIntel=buildEvidenceIntelligence(wfRows,{
+  minSamples:20,
+  friction:{profileName:'UPSTOX_STANDARD_NSE_OPTIONS_2026'},
+  walkForwardMinTrainSamples:20,
+  walkForwardMinTestSamples:5,
+  walkForwardTestWindowSize:10,
+  walkForwardStepSize:10
+});
+assert.strictEqual(wfIntel.walkForward.version,'WALK_FORWARD_V1');
+assert.strictEqual(wfIntel.walkForward.foldCount,3);
+assert.strictEqual(wfIntel.walkForward.enoughForWalkForward,true);
+assert.strictEqual(wfIntel.walkForward.aggregateTest.gross.samples,25);
+assert.strictEqual(wfIntel.walkForward.aggregateTest.frictionAdjusted.horizons[60].measured,25);
 
 // Old evidence without scanner data must remain usable and be labelled unavailable, not invented.
 const legacy=row('legacy',4,{setupScanner:null});
