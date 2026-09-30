@@ -102,6 +102,7 @@ async function findNearestNiftyFuture() {
   }
 
   if (!selected) throw new Error('No active NIFTY futures contract found after current/next/far-month search');
+  console.log('[market context] NIFTY future selected:', selected.trading_symbol || selected.instrument_key, expiryIso(selected.expiry));
   cachedFuture = selected;
   cachedAt = now;
   return cachedFuture;
