@@ -1081,9 +1081,21 @@ app.get('/evidence/snapshots', (req,res) => {
 });
 
 app.get('/evidence/intelligence', (req,res) => {
+  const clamp=(v,lo,hi,fallback)=>{
+    const x=Number(v);
+    return Number.isFinite(x)?Math.max(lo,Math.min(hi,x)):fallback;
+  };
   const requested=parseInt(req.query.minSamples,10);
   const minSamples=Number.isFinite(requested)?Math.max(1,Math.min(1000,requested)):20;
-  res.json(buildEvidenceIntelligence(evidenceSnapshots,{minSamples}));
+  const minTrainSamples=clamp(req.query.minTrainSamples,1,1000,clamp(process.env.EDGE_EVIDENCE_MIN_TRAIN,1,1000,20));
+  const minTestSamples=clamp(req.query.minTestSamples,1,1000,clamp(process.env.EDGE_EVIDENCE_MIN_TEST,1,1000,10));
+  const testFraction=clamp(req.query.testFraction,0.1,0.5,clamp(process.env.EDGE_EVIDENCE_TEST_FRACTION,0.1,0.5,0.30));
+  const roundTripBpsOnGrossPremium=clamp(req.query.frictionBps,0,500,clamp(process.env.EDGE_RESEARCH_FRICTION_BPS,0,500,0));
+  const flatRupeesPerLegRoundTrip=clamp(req.query.flatCostPerLeg,0,1000,clamp(process.env.EDGE_RESEARCH_FLAT_COST_PER_LEG,0,1000,0));
+  res.json(buildEvidenceIntelligence(evidenceSnapshots,{
+    minSamples,minTrainSamples,minTestSamples,testFraction,
+    friction:{roundTripBpsOnGrossPremium,flatRupeesPerLegRoundTrip,lotSize:NIFTY_LOT_SIZE}
+  }));
 });
 
 app.get('/evidence/status', (req,res) => {
