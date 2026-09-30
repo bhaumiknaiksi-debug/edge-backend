@@ -391,6 +391,38 @@ function researchGovernance(overall,validation,walkForward,opts={}){
     interpretation:'REVIEW_READY means the configured descriptive research gates are met. It is not proof of profitability, a calibrated confidence score, or permission for live-decision impact.'
   };
 }
+function candidateRegistry(scannerGroups={},validation={},walkForward={},opts={}){
+  const horizon=Number(opts.governanceHorizon)||60;
+  const holdoutGroups=validation.scannerGroups||{};
+  const wfGroups=walkForward.scannerGroups||{};
+  const frictionConfigured=!!walkForward.frictionModel?.configured;
+  const candidates=Object.keys(scannerGroups).map(key=>{
+    const descriptive=scannerGroups[key]||{};
+    const holdout=holdoutGroups[key]||{};
+    const wf=wfGroups[key]||{};
+    const netHoldout=holdout.test?.frictionAdjusted?.horizons?.[horizon]||{};
+    const stable=wf.stability?.frictionAdjusted?.[horizon]||{};
+    const measured=Number(descriptive.samples||0),validFolds=Number(stable.validFolds||0),positiveFolds=Number(stable.positiveFolds||0);
+    const positiveFoldShare=validFolds?round(positiveFolds/validFolds,4):null;
+    const sampleQualified=!!descriptive.qualified;
+    const holdoutReady=!!holdout.validationReady;
+    const replicated=!!wf.replicatedAcrossFolds;
+    const costSurviving=frictionConfigured&&n(netHoldout.avgReturnPct)>0&&n(stable.medianFoldReturnPct)>0;
+    let status='OBSERVING';
+    if(sampleQualified)status='SAMPLE_QUALIFIED';
+    if(sampleQualified&&holdoutReady)status='HOLDOUT_AVAILABLE';
+    if(sampleQualified&&holdoutReady&&replicated)status='REPLICATED';
+    if(sampleQualified&&holdoutReady&&replicated&&costSurviving)status='RESEARCH_CANDIDATE';
+    return{key,status,researchOnly:true,liveDecisionImpact:false,measuredEpisodes:measured,
+      gates:{sampleQualified,holdoutReady,replicated,frictionConfigured,costSurviving},
+      observed:{holdoutNetReturnPct:n(netHoldout.avgReturnPct),validFolds,positiveFolds,positiveFoldShare,medianNetFoldReturnPct:n(stable.medianFoldReturnPct),worstNetFoldReturnPct:n(stable.worstFoldReturnPct),netDispersionStdDevPct:n(stable.dispersionStdDevPct)}};
+  });
+  const order={RESEARCH_CANDIDATE:0,REPLICATED:1,HOLDOUT_AVAILABLE:2,SAMPLE_QUALIFIED:3,OBSERVING:4};
+  candidates.sort((a,b)=>(order[a.status]-order[b.status])||(b.measuredEpisodes-a.measuredEpisodes)||a.key.localeCompare(b.key));
+  return{version:'RESEARCH_CANDIDATE_REGISTRY_V1',researchOnly:true,liveDecisionImpact:false,horizonMinutes:horizon,
+    methodology:'Scanner combinations are tracked from observation through sample qualification, chronological holdout, walk-forward replication and configured-cost survival. Status is descriptive research triage only; it never promotes or changes a live signal.',
+    counts:candidates.reduce((a,c)=>(a[c.status]=(a[c.status]||0)+1,a),{}),candidates};
+}
 function buildEvidenceIntelligence(records=[],opts={}){
   const minSamples=Number.isFinite(Number(opts.minSamples))?Math.max(1,Number(opts.minSamples)):20;
   const horizons=Array.isArray(opts.horizons)&&opts.horizons.length?opts.horizons:DEFAULT_HORIZONS;
@@ -433,6 +465,7 @@ function buildEvidenceIntelligence(records=[],opts={}){
     friction:opts.friction
   });
   const governance=researchGovernance(metrics(rows,minSamples,horizons),validation,walkForward,opts);
+  const candidates=candidateRegistry(scannerGroups,validation,walkForward,opts);
   return {
     version:'EVIDENCE_INTELLIGENCE_V5',generatedAt:new Date().toISOString(),researchOnly:true,liveDecisionImpact:false,
     minSamples,measuredEpisodes:rows.length,
@@ -441,12 +474,12 @@ function buildEvidenceIntelligence(records=[],opts={}){
       friction:'V4 uses current Upstox standard brokerage plus NSE/SEBI/statutory option charges from leg-level entry/exit marks. Exit execution slippage is a separate configurable stress input and defaults to zero until observed.',
       validation:'chronological holdout plus expanding-window walk-forward validation; no random shuffle and no live-decision impact',
       scanner:'Setup Scanner dimensions are observational research labels only; qualification does not permit live trading'},
-    overall:metrics(rows,minSamples,horizons),dimensions,setupGroups,scannerGroups,validation,walkForward,governance
+    overall:metrics(rows,minSamples,horizons),dimensions,setupGroups,scannerGroups,validation,walkForward,governance,candidates
   };
 }
 
 module.exports={
   DEFAULT_HORIZONS,measuredEpisodes,metrics,scannerKey,scannerCombinationKey,
   normalizeFriction,frictionCostPct,applyFriction,chronologicalSplit,buildChronologicalValidation,
-  walkForwardFolds,walkForwardStability,buildWalkForwardValidation,researchGovernance,buildEvidenceIntelligence
+  walkForwardFolds,walkForwardStability,buildWalkForwardValidation,researchGovernance,candidateRegistry,buildEvidenceIntelligence
 };
