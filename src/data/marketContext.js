@@ -39,26 +39,71 @@ function requestJson(path) {
   });
 }
 
-async function findNearestNiftyFuture() {
-  const now = Date.now();
-  if (cachedFuture && now - cachedAt < CACHE_MS) return cachedFuture;
+function expiryIso(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'number' || /^\d{12,}$/.test(String(value))) {
+    const d = new Date(Number(value));
+    return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0,10);
+  }
+  const s = String(value);
+  return /^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(0,10) : null;
+}
 
+function istDateString(now = Date.now()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit'
+  }).formatToParts(new Date(now));
+  const get = type => parts.find(p => p.type === type)?.value;
+  return get('year') + '-' + get('month') + '-' + get('day');
+}
+
+function selectNearestNiftyFuture(rows = [], now = Date.now()) {
+  const today = istDateString(now);
+  return (rows || [])
+    .filter(x => {
+      if (!x || x.instrument_type !== 'FUT' || x.segment !== 'NSE_FO') return false;
+      const expiry = expiryIso(x.expiry);
+      if (!expiry || expiry < today) return false;
+      const underlying = String(x.underlying_symbol || '').toUpperCase();
+      const name = String(x.name || '').toUpperCase();
+      const symbol = String(x.trading_symbol || '').toUpperCase();
+      return underlying === 'NIFTY' || name === 'NIFTY 50' || symbol.startsWith('NIFTY FUT ');
+    })
+    .sort((a, b) => String(expiryIso(a.expiry)).localeCompare(String(expiryIso(b.expiry))))[0] || null;
+}
+
+async function searchNiftyFutures(query) {
+  // After monthly expiry, a single near_month keyword can temporarily return
+  // no contract. Ask for the current + next two monthly buckets together.
   const q = new URLSearchParams({
-    query: 'NIFTY',
+    query,
     exchanges: 'NSE',
     segments: 'FO',
     instrument_types: 'FUT',
-    expiry: 'near_month',
+    expiry: 'current_month,next_month,far_month',
     page_number: '1',
     records: '30'
   });
   const parsed = await requestJson('/v2/instruments/search?' + q.toString());
-  const rows = (parsed.data || [])
-    .filter(x => x && x.instrument_type === 'FUT' && x.segment === 'NSE_FO')
-    .sort((a, b) => String(a.expiry).localeCompare(String(b.expiry)));
+  return parsed.data || [];
+}
 
-  if (!rows.length) throw new Error('No active NIFTY futures contract found');
-  cachedFuture = rows[0];
+async function findNearestNiftyFuture() {
+  const now = Date.now();
+  if (cachedFuture && now - cachedAt < CACHE_MS) return cachedFuture;
+
+  let rows = await searchNiftyFutures('NIFTY');
+  let selected = selectNearestNiftyFuture(rows, now);
+  if (!selected) {
+    // Free-text matching can vary; the explicit futures phrase is a safe fallback.
+    const fallback = await searchNiftyFutures('NIFTY FUT');
+    rows = rows.concat(fallback);
+    selected = selectNearestNiftyFuture(rows, now);
+  }
+
+  if (!selected) throw new Error('No active NIFTY futures contract found after current/next/far-month search');
+  console.log('[market context] NIFTY future selected:', selected.trading_symbol || selected.instrument_key, expiryIso(selected.expiry));
+  cachedFuture = selected;
   cachedAt = now;
   return cachedFuture;
 }
@@ -156,4 +201,4 @@ async function fetchMarketContext() {
   };
 }
 
-module.exports = { fetchMarketContext, findNearestNiftyFuture };
+module.exports = { fetchMarketContext, findNearestNiftyFuture, selectNearestNiftyFuture, expiryIso, istDateString };
