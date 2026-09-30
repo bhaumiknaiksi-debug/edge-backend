@@ -1090,11 +1090,18 @@ app.get('/evidence/intelligence', (req,res) => {
   const minTrainSamples=clamp(req.query.minTrainSamples,1,1000,clamp(process.env.EDGE_EVIDENCE_MIN_TRAIN,1,1000,20));
   const minTestSamples=clamp(req.query.minTestSamples,1,1000,clamp(process.env.EDGE_EVIDENCE_MIN_TEST,1,1000,10));
   const testFraction=clamp(req.query.testFraction,0.1,0.5,clamp(process.env.EDGE_EVIDENCE_TEST_FRACTION,0.1,0.5,0.30));
+  const frictionProfile=String(req.query.frictionProfile||process.env.EDGE_RESEARCH_FRICTION_PROFILE||'UPSTOX_STANDARD_NSE_OPTIONS_2026');
   const roundTripBpsOnGrossPremium=clamp(req.query.frictionBps,0,500,clamp(process.env.EDGE_RESEARCH_FRICTION_BPS,0,500,0));
   const flatRupeesPerLegRoundTrip=clamp(req.query.flatCostPerLeg,0,1000,clamp(process.env.EDGE_RESEARCH_FLAT_COST_PER_LEG,0,1000,0));
+  const walkForwardMinTrainSamples=clamp(req.query.wfMinTrain,1,1000,clamp(process.env.EDGE_WF_MIN_TRAIN,1,1000,20));
+  const walkForwardMinTestSamples=clamp(req.query.wfMinTest,1,1000,clamp(process.env.EDGE_WF_MIN_TEST,1,1000,5));
+  const walkForwardTestWindowSize=clamp(req.query.wfTestWindow,1,1000,clamp(process.env.EDGE_WF_TEST_WINDOW,1,1000,10));
+  const walkForwardStepSize=clamp(req.query.wfStep,1,1000,clamp(process.env.EDGE_WF_STEP,1,1000,10));
+  const walkForwardMaxFolds=clamp(req.query.wfMaxFolds,1,50,clamp(process.env.EDGE_WF_MAX_FOLDS,1,50,12));
   res.json(buildEvidenceIntelligence(evidenceSnapshots,{
     minSamples,minTrainSamples,minTestSamples,testFraction,
-    friction:{roundTripBpsOnGrossPremium,flatRupeesPerLegRoundTrip,lotSize:NIFTY_LOT_SIZE}
+    walkForwardMinTrainSamples,walkForwardMinTestSamples,walkForwardTestWindowSize,walkForwardStepSize,walkForwardMaxFolds,
+    friction:{profileName:frictionProfile,roundTripBpsOnGrossPremium,flatRupeesPerLegRoundTrip,lotSize:NIFTY_LOT_SIZE}
   }));
 });
 
