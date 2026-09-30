@@ -284,12 +284,12 @@ function walkForwardStability(foldResults=[],horizons=DEFAULT_HORIZONS){
       medianFoldReturnPct:median(values),
       worstFoldReturnPct:values.length?round(Math.min(...values)):null,
       dispersionStdDevPct:populationStdDev(values),
-      measuredTestSamples:measuredSamples,
-      sampleCoveragePct:totalTestSamples?round(measuredSamples/totalTestSamples*100):null
+      eligibleMeasuredTestSamples:measuredSamples,
+      eligibleSampleCoveragePct:totalTestSamples?round(measuredSamples/totalTestSamples*100):null
     }];
   }));
   return{
-    definition:'Fold return is each eligible forward-test block average return. Dispersion is population standard deviation across valid fold-average returns. Sample coverage is measured horizon samples divided by all forward-test samples for this scope.',
+    definition:'Fold return is each eligible forward-test block average return. Dispersion is population standard deviation across valid fold-average returns. Eligible-sample coverage is measured horizon samples from eligible folds divided by all forward-test samples for this scope; fold coverage separately reports eligibility across folds.',
     totalFolds,
     eligibleFolds:eligible.length,
     foldCoveragePct:totalFolds?round(eligible.length/totalFolds*100):null,
