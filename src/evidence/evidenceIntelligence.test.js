@@ -106,6 +106,22 @@ assert.strictEqual(wfIntel.walkForward.foldCount,3);
 assert.strictEqual(wfIntel.walkForward.enoughForWalkForward,true);
 assert.strictEqual(wfIntel.walkForward.aggregateTest.gross.samples,25);
 assert.strictEqual(wfIntel.walkForward.aggregateTest.frictionAdjusted.horizons[60].measured,25);
+assert.strictEqual(wfIntel.walkForward.stability.totalFolds,3);
+assert.strictEqual(wfIntel.walkForward.stability.eligibleFolds,3);
+assert.strictEqual(wfIntel.walkForward.stability.foldCoveragePct,100);
+assert.strictEqual(wfIntel.walkForward.stability.gross[60].validFolds,3);
+assert.strictEqual(wfIntel.walkForward.stability.gross[60].positiveFolds,2);
+assert.strictEqual(wfIntel.walkForward.stability.gross[60].eligibleMeasuredTestSamples,25);
+assert.strictEqual(wfIntel.walkForward.stability.gross[60].eligibleSampleCoveragePct,100);
+assert.strictEqual(wfIntel.walkForward.stability.gross[60].medianFoldReturnPct,0.1);
+assert.strictEqual(wfIntel.walkForward.stability.gross[60].worstFoldReturnPct,-0.1);
+assert.strictEqual(wfIntel.walkForward.stability.gross[60].dispersionStdDevPct,0.12);
+assert.strictEqual(wfIntel.walkForward.stability.frictionAdjusted[60].validFolds,3);
+assert.ok(wfIntel.walkForward.stability.definition.includes('population standard deviation'));
+const longCallWf=wfIntel.walkForward.strategyGroups.LONG_CALL;
+assert.strictEqual(longCallWf.stability.totalFolds,3);
+assert.strictEqual(longCallWf.stability.eligibleFolds,3);
+assert.strictEqual(longCallWf.stability.gross[60].validFolds,3);
 
 // Old evidence without scanner data must remain usable and be labelled unavailable, not invented.
 const legacy=row('legacy',4,{setupScanner:null});
