@@ -84,6 +84,15 @@ const wf=walkForwardFolds(wfRows,{minTrainSamples:20,minTestSamples:5,testWindow
 assert.strictEqual(wf.folds.length,3);
 assert.strictEqual(wf.folds[0].train.length,20);
 assert.strictEqual(wf.folds[0].test.length,10);
+// A custom step smaller than the test window must not create overlapping folds.
+const disjoint=walkForwardFolds(wfRows,{minTrainSamples:20,minTestSamples:5,testWindowSize:10,stepSize:5});
+assert.strictEqual(disjoint.stepSize,10);
+for(let i=1;i<disjoint.folds.length;i++){
+  const prev=new Set(disjoint.folds[i-1].test.map(r=>r.snapshotId));
+  assert.strictEqual(disjoint.folds[i].test.some(r=>prev.has(r.snapshotId)),false);
+}
+// Slippage-only legacy stress must be non-zero rather than silently ignored.
+assert(frictionCostPct(rows[0],{profileName:'NONE',slippageBps:100,lotSize:65})>0);
 const wfIntel=buildEvidenceIntelligence(wfRows,{
   minSamples:20,
   friction:{profileName:'UPSTOX_STANDARD_NSE_OPTIONS_2026'},
