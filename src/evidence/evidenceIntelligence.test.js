@@ -152,4 +152,10 @@ const missingHorizon=row('missing',7);
 missingHorizon.outcome.horizonsPct[60]=null;
 assert.strictEqual(metrics([missingHorizon],1).horizons[60].measured,0);
 assert.strictEqual(intel.methodology.qualification.includes('not proof of edge'),true);
+
+assert.strictEqual(wfIntel.candidates.version,'RESEARCH_CANDIDATE_REGISTRY_V1');
+assert.strictEqual(wfIntel.candidates.researchOnly,true);
+assert.strictEqual(wfIntel.candidates.liveDecisionImpact,false);
+assert.ok(Array.isArray(wfIntel.candidates.candidates));
+assert.ok(wfIntel.candidates.candidates.every(function(c){return c.liveDecisionImpact===false;}));
 console.log('EDGE evidence intelligence tests passed');
