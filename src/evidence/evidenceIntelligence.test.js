@@ -116,7 +116,7 @@ assert.strictEqual(wfIntel.governance.liveDecisionImpact,false);
 assert.strictEqual(wfIntel.governance.gates.sampleSufficient,true);
 assert.strictEqual(wfIntel.governance.gates.holdoutReady,true);
 assert.strictEqual(wfIntel.governance.gates.replicated,true);
-assert.strictEqual(wfIntel.governance.status,'ACCUMULATING_VALIDATION');
+assert.strictEqual(wfIntel.governance.status,'REPLICATED_RESEARCH');
 assert.ok(wfIntel.governance.interpretation.includes('not proof of profitability'));
 const insufficient=buildEvidenceIntelligence(rows,{minSamples:20,governanceMinMeasured:20});
 assert.strictEqual(insufficient.governance.status,'INSUFFICIENT_DATA');
