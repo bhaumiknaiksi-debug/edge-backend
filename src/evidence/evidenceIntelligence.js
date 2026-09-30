@@ -72,8 +72,9 @@ function normalizeFriction(opts={}){
   const calibratedProfile=getProfile(profileName);
   const roundTripBpsOnGrossPremium=Math.max(0,n(opts.roundTripBpsOnGrossPremium)??0);
   const flatRupeesPerLegRoundTrip=Math.max(0,n(opts.flatRupeesPerLegRoundTrip)??0);
+  const slippageBps=Math.max(0,n(opts.slippageBps)??0);
   const lotSize=Math.max(1,n(opts.lotSize)??65);
-  const stressConfigured=roundTripBpsOnGrossPremium>0||flatRupeesPerLegRoundTrip>0;
+  const stressConfigured=roundTripBpsOnGrossPremium>0||flatRupeesPerLegRoundTrip>0||slippageBps>0;
   return {
     configured:!!calibratedProfile||stressConfigured,
     mode:calibratedProfile?'CALIBRATED_PROFILE':stressConfigured?'STRESS':'NONE',
@@ -95,6 +96,7 @@ function normalizeFriction(opts={}){
     }:null,
     roundTripBpsOnGrossPremium,
     flatRupeesPerLegRoundTrip,
+    slippageBps,
     lotSize,
     basis:calibratedProfile
       ?'calibrated broker/statutory option charges applied to leg-level entry and horizon exit marks'
@@ -105,7 +107,7 @@ function frictionCostPct(row,friction={},horizon=null){
   const model=normalizeFriction(friction);
   if(model.mode==='CALIBRATED_PROFILE'){
     if(horizon===null||horizon===undefined)return null;
-    const exact=calibratedRoundTripCost(row,horizon,model.profileName);
+    const exact=calibratedRoundTripCost(row,horizon,model.profileName,{slippageBps:model.slippageBps});
     return exact.available?exact.costPct:null;
   }
   if(model.mode==='NONE')return 0;
@@ -365,7 +367,7 @@ function buildEvidenceIntelligence(records=[],opts={}){
     minSamples,measuredEpisodes:rows.length,
     methodology:{population:'MEASURED READY_TO_EXECUTE episode outcomes only',dedupe:'one measured outcome per snapshotId',horizonsMinutes:horizons,
       winDefinition:'horizon return > 0',qualification:'sample-count marker only; not proof of edge or permission to trade',
-      friction:'V4 supports calibrated broker/statutory option costs from leg-level execution marks; legacy outcomes without those marks stay unavailable rather than receiving invented costs.',
+      friction:'V4 uses current Upstox standard brokerage plus NSE/SEBI/statutory option charges from leg-level entry/exit marks. Exit execution slippage is a separate configurable stress input and defaults to zero until observed.',
       validation:'chronological holdout plus expanding-window walk-forward validation; no random shuffle and no live-decision impact',
       scanner:'Setup Scanner dimensions are observational research labels only; qualification does not permit live trading'},
     overall:metrics(rows,minSamples,horizons),dimensions,setupGroups,scannerGroups,validation,walkForward

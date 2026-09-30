@@ -1,6 +1,6 @@
 'use strict';
 
-// Calibrated one-lot research cost profiles for NSE equity options.
+// Calibrated research cost profiles for NSE equity options.
 // Rates are intentionally isolated from live execution logic.
 const PROFILES = Object.freeze({
   UPSTOX_STANDARD_NSE_OPTIONS_2026: Object.freeze({
@@ -15,14 +15,16 @@ const PROFILES = Object.freeze({
     sebiPerCroreRupees:10,
     stampDutyBuyPct:0.003,
     gstPct:18,
-    ipftPerCroreRupees:0.01,
+    ipftPerCroreRupees:50,
     lotSize:65,
-    lots:1,
+    lots:null,
     assumptions:[
-      'one lot per research episode',
+      'uses recorded recommendedLots when available; otherwise falls back to a one-lot research baseline',
       'each option leg entry and exit is treated as a separately executed order',
       'brokerage uses the standard Upstox flat Rs20 equity-options schedule',
-      'exit marks are aligned one-minute candle closes; bid/ask exit slippage is not yet estimated',
+      'exchange charge uses NSE equity-options premium turnover rate effective 1 March 2026',
+      'IPFT uses Upstox client charge of Rs0.50 per lakh of equity-options premium turnover',
+      'exit marks are aligned one-minute candle closes; execution slippage can be stress-tested separately but is not claimed as calibrated',
       'exercise/assignment STT is excluded because research horizons model an exit transaction, not expiry exercise'
     ]
   })
@@ -61,7 +63,7 @@ function optionOrderCharges({premium,side,quantity,profile}={}){
   };
 }
 
-function calibratedRoundTripCost(row,horizon,profileName='UPSTOX_STANDARD_NSE_OPTIONS_2026'){
+function calibratedRoundTripCost(row,horizon,profileName='UPSTOX_STANDARD_NSE_OPTIONS_2026',opts={}){
   const profile=getProfile(profileName);
   if(!profile)return{available:false,reason:'PROFILE_DISABLED',profile:null};
   const outcome=row?.outcome||{};
@@ -72,9 +74,11 @@ function calibratedRoundTripCost(row,horizon,profileName='UPSTOX_STANDARD_NSE_OP
   const exits=exitContainer?.marks||exitContainer;
   if(!entries||!exits)return{available:false,reason:'LEG_MARKS_UNAVAILABLE',profile:profile.name};
   const lotSize=n(row?.snapshot?.tradeLegs?.lotSize)??profile.lotSize;
-  const lots=profile.lots||1;
+  const recordedLots=n(row?.snapshot?.position?.recommendedLots);
+  const lots=recordedLots!==null&&recordedLots>=1?recordedLots:(profile.lots||1);
   const quantity=lotSize*lots;
-  let total=0;
+  const slippageBps=Math.max(0,n(opts.slippageBps)??0);
+  let total=0,slippageRupees=0;
   const legs={};
   for(const [name,entry] of Object.entries(entries)){
     const side=entry?.side,entryPx=n(entry?.price),exitPx=n(exits?.[name]);
@@ -83,15 +87,18 @@ function calibratedRoundTripCost(row,horizon,profileName='UPSTOX_STANDARD_NSE_OP
     const exitSide=sideOpposite(side);
     const exitCharges=optionOrderCharges({premium:exitPx,side:exitSide,quantity,profile});
     if(!entryCharges||!exitCharges)return{available:false,reason:'CHARGE_CALCULATION_FAILED',profile:profile.name};
-    const legTotal=entryCharges.totalRupees+exitCharges.totalRupees;
-    total+=legTotal;
-    legs[name]={entrySide:side,exitSide,entryPremium:entryPx,exitPremium:exitPx,entryCharges,exitCharges,totalRupees:round(legTotal,4)};
+    const legSlippage=(entryCharges.turnoverRupees+exitCharges.turnoverRupees)*slippageBps/10000;
+    const legTotal=entryCharges.totalRupees+exitCharges.totalRupees+legSlippage;
+    total+=legTotal; slippageRupees+=legSlippage;
+    legs[name]={entrySide:side,exitSide,entryPremium:entryPx,exitPremium:exitPx,entryCharges,exitCharges,slippageRupees:round(legSlippage,4),totalRupees:round(legTotal,4)};
   }
   const denominatorRupees=entryValue*quantity;
   return {
     available:true,
     profile:profile.name,
-    quantity,
+    lotSize,lots,quantity,
+    slippageBps,
+    slippageRupees:round(slippageRupees,4),
     totalRupees:round(total,4),
     denominatorRupees:round(denominatorRupees,2),
     costPct:round(total/denominatorRupees*100,4),

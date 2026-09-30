@@ -9,6 +9,7 @@ assert.strictEqual(profile.brokeragePerExecutedOrderRupees,20);
 assert.strictEqual(profile.sttSellPct,0.15);
 assert.strictEqual(profile.exchangeTransactionPct,0.03552);
 assert.strictEqual(profile.stampDutyBuyPct,0.003);
+assert.strictEqual(profile.ipftPerCroreRupees,50);
 
 const buy=optionOrderCharges({premium:100,side:'BUY',quantity:65,profile});
 const sell=optionOrderCharges({premium:110,side:'SELL',quantity:65,profile});
@@ -20,7 +21,7 @@ assert(sell.sttRupees>0);
 assert.strictEqual(sell.stampDutyRupees,0);
 
 const row={
-  snapshot:{strategy:'LONG_CALL',tradeLegs:{lotSize:65,buyLeg:{contractId:'X'}}},
+  snapshot:{strategy:'LONG_CALL',tradeLegs:{lotSize:65,buyLeg:{contractId:'X'}},position:{recommendedLots:2}},
   outcome:{
     status:'MEASURED',
     entryValue:100,
@@ -32,8 +33,13 @@ const row={
 const cost=calibratedRoundTripCost(row,60);
 assert.strictEqual(cost.available,true);
 assert.strictEqual(cost.profile,'UPSTOX_STANDARD_NSE_OPTIONS_2026');
-assert(cost.totalRupees>63&&cost.totalRupees<65);
-assert(cost.costPct>0.97&&cost.costPct<1.00);
+assert.strictEqual(cost.lots,2);
+assert.strictEqual(cost.quantity,130);
+assert(cost.totalRupees>80&&cost.totalRupees<82);
+assert(cost.costPct>0.62&&cost.costPct<0.63);
+const slipped=calibratedRoundTripCost(row,60,'UPSTOX_STANDARD_NSE_OPTIONS_2026',{slippageBps:10});
+assert(slipped.totalRupees>cost.totalRupees);
+assert(slipped.slippageRupees>0);
 
 // Legacy outcomes without leg-level horizon marks must not be assigned fake calibrated costs.
 const legacy={snapshot:row.snapshot,outcome:{status:'MEASURED',entryValue:100,horizonsPct:{60:10}}};

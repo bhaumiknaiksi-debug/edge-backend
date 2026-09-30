@@ -1016,6 +1016,7 @@ async function poll() {
         entryStatus: result.decision?.entry?.status,
         entry: result.decision?.entry,
         risk: result.decision?.risk,
+        position: result.decision?.position,
         orchestrationStatus: result.decision?.orchestration?.status,
         orchestration: result.decision?.orchestration,
         features: result.market?.features,
@@ -1093,6 +1094,7 @@ app.get('/evidence/intelligence', (req,res) => {
   const frictionProfile=String(req.query.frictionProfile||process.env.EDGE_RESEARCH_FRICTION_PROFILE||'UPSTOX_STANDARD_NSE_OPTIONS_2026');
   const roundTripBpsOnGrossPremium=clamp(req.query.frictionBps,0,500,clamp(process.env.EDGE_RESEARCH_FRICTION_BPS,0,500,0));
   const flatRupeesPerLegRoundTrip=clamp(req.query.flatCostPerLeg,0,1000,clamp(process.env.EDGE_RESEARCH_FLAT_COST_PER_LEG,0,1000,0));
+  const slippageBps=clamp(req.query.slippageBps,0,500,clamp(process.env.EDGE_RESEARCH_SLIPPAGE_BPS,0,500,0));
   const walkForwardMinTrainSamples=clamp(req.query.wfMinTrain,1,1000,clamp(process.env.EDGE_WF_MIN_TRAIN,1,1000,20));
   const walkForwardMinTestSamples=clamp(req.query.wfMinTest,1,1000,clamp(process.env.EDGE_WF_MIN_TEST,1,1000,5));
   const walkForwardTestWindowSize=clamp(req.query.wfTestWindow,1,1000,clamp(process.env.EDGE_WF_TEST_WINDOW,1,1000,10));
@@ -1101,7 +1103,7 @@ app.get('/evidence/intelligence', (req,res) => {
   res.json(buildEvidenceIntelligence(evidenceSnapshots,{
     minSamples,minTrainSamples,minTestSamples,testFraction,
     walkForwardMinTrainSamples,walkForwardMinTestSamples,walkForwardTestWindowSize,walkForwardStepSize,walkForwardMaxFolds,
-    friction:{profileName:frictionProfile,roundTripBpsOnGrossPremium,flatRupeesPerLegRoundTrip,lotSize:NIFTY_LOT_SIZE}
+    friction:{profileName:frictionProfile,roundTripBpsOnGrossPremium,flatRupeesPerLegRoundTrip,slippageBps,lotSize:NIFTY_LOT_SIZE}
   }));
 });
 
