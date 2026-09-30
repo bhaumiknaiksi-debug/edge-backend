@@ -10,6 +10,10 @@ assert.strictEqual(out.status,'MEASURED');
 assert(out.mfePct>28&&out.mfePct<29);
 assert(out.maePct<0);
 assert.strictEqual(out.bestMinute,60);
+assert.strictEqual(out.entryLegMarks.buyLeg.side,'BUY');
+assert.strictEqual(out.entryLegMarks.buyLeg.price,101);
+assert.strictEqual(out.horizonLegMarks[60].marks.buyLeg,130);
+assert.strictEqual(out.bestLegMarks.buyLeg,130);
 const key=evidenceKey(snapshot); assert(key.includes('BULLISH|CHEAP|4_7DTE|MORNING|LONG_CALL'));
 const rows=Array.from({length:20},()=>({snapshot,evidenceKey:key,outcome:out}));
 const s=summarizeEvidence(rows);assert.strictEqual(s[key].qualified,true);assert.strictEqual(s[key].samples,20);
@@ -32,3 +36,12 @@ assert(Math.abs(spreadOut.horizonsPct[30]-20)<0.001);
 
 // Excursions after the requested 120-minute study window must not contaminate MFE.
 assert(out.mfePct<100);
+
+// Missing executable quote data must stay missing; null must never become numeric zero.
+const missingEntry=measureOutcome({
+  snapshot:{timestamp:'2026-09-25T10:00:00+05:30',strategy:'LONG_CALL',tradeLegs:{buyLeg:{contractId:'MISSING',ask:null,bid:null,premium:null}}},
+  candlesByContract:{MISSING:[{timestamp:'2026-09-25T10:15:00+05:30',close:10}]},
+  horizons:[15]
+});
+assert.strictEqual(missingEntry.status,'UNAVAILABLE');
+assert.strictEqual(missingEntry.reason,'NO_EXECUTABLE_ENTRY_PRICE');
