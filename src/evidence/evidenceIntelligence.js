@@ -5,7 +5,7 @@ const { setupFeatureTags, setupEvidenceKey } = require('./setupEvidence');
 
 const DEFAULT_HORIZONS=[15,30,60,120];
 
-function n(v){const x=Number(v);return Number.isFinite(x)?x:null;}
+function n(v){if(v===null||v===undefined||v==='')return null;const x=Number(v);return Number.isFinite(x)?x:null;}
 function round(v,dp=2){return Number(Number(v).toFixed(dp));}
 function avg(xs){return xs.length?round(xs.reduce((a,b)=>a+b,0)/xs.length):null;}
 function median(xs){if(!xs.length)return null;const a=[...xs].sort((x,y)=>x-y),m=Math.floor(a.length/2);return round(a.length%2?a[m]:(a[m-1]+a[m])/2);}
