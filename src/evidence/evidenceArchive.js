@@ -64,7 +64,7 @@ function defaultRequest({ method, url, headers, body }) {
 
 function createEvidenceArchive({ env = process.env, objectKey = env.R2_OBJECT_KEY || DEFAULT_KEY, request = defaultRequest, now = () => new Date() } = {}) {
   const config = credentialsFromEnv(env);
-  let lastBackup = null, lastRestore = null, lastError = null, recordsBackedUp = 0, timer = null, running = false;
+  let lastBackup = null, lastRestore = null, lastVerification = null, lastError = null, recordsBackedUp = 0, timer = null, running = false;
 
   function objectUrl() {
     const base = new URL(config.endpoint);
@@ -112,15 +112,36 @@ function createEvidenceArchive({ env = process.env, objectKey = env.R2_OBJECT_KE
       return { backedUp: false, reason: 'ERROR', error: err.message };
     } finally { running = false; }
   }
+  async function verify(records) {
+    const expected = Array.isArray(records) ? records : [];
+    const backupResult = await backup(expected);
+    if (!backupResult.backedUp) {
+      lastVerification = { timestamp: now().toISOString(), ok: false, stage: 'BACKUP', expectedRecords: expected.length, error: backupResult.error || backupResult.reason || 'BACKUP_FAILED' };
+      return lastVerification;
+    }
+    const restored = await restore();
+    if (!restored.restored) {
+      lastVerification = { timestamp: now().toISOString(), ok: false, stage: 'RESTORE', expectedRecords: expected.length, error: restored.error || restored.reason || 'RESTORE_FAILED' };
+      return lastVerification;
+    }
+    const expectedIds = new Set(expected.map(r => r?.id).filter(Boolean).map(String));
+    const restoredIds = new Set(restored.records.map(r => r?.id).filter(Boolean).map(String));
+    const missingIds = [...expectedIds].filter(id => !restoredIds.has(id));
+    const ok = restored.records.length === expected.length && missingIds.length === 0;
+    lastVerification = { timestamp: now().toISOString(), ok, stage: 'ROUND_TRIP', expectedRecords: expected.length, restoredRecords: restored.records.length, missingIds: missingIds.slice(0, 10) };
+    if (!ok) lastError = 'R2 verification mismatch';
+    return lastVerification;
+  }
+
   function start(getRecords, intervalMs = Number(env.R2_BACKUP_INTERVAL_MS) || DEFAULT_INTERVAL_MS) {
     if (!configured(config) || timer) return;
     timer = setInterval(() => backup(getRecords()), intervalMs);
     timer.unref?.();
   }
   function status() {
-    return { configured: configured(config), provider: 'CLOUDFLARE_R2', bucket: config.bucket || null, objectKey, lastBackup, lastRestore, lastError, recordsBackedUp, running };
+    return { configured: configured(config), provider: 'CLOUDFLARE_R2', bucket: config.bucket || null, objectKey, lastBackup, lastRestore, lastVerification, lastError, recordsBackedUp, running };
   }
-  return { restore, backup, start, status };
+  return { restore, backup, verify, start, status };
 }
 
 module.exports = { createEvidenceArchive, credentialsFromEnv, configured, signedHeaders };
