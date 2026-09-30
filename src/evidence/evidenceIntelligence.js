@@ -377,14 +377,15 @@ function researchGovernance(overall,validation,walkForward,opts={}){
   const positiveFoldShare=validFolds?round(positiveFolds/validFolds,4):null;
   const sampleSufficient=measured>=minMeasured;
   const replicated=validFolds>=minValidFolds;
-  const costAdjustedStable=replicated&&positiveFoldShare!==null&&positiveFoldShare>=minPositiveFoldShare&&n(net.medianFoldReturnPct)>0&&n(net.worstFoldReturnPct)!==null;
+  const frictionConfigured=!!walkForward?.frictionModel?.configured;
+  const costAdjustedStable=frictionConfigured&&replicated&&positiveFoldShare!==null&&positiveFoldShare>=minPositiveFoldShare&&n(net.medianFoldReturnPct)>0&&n(net.worstFoldReturnPct)!==null;
   let status='INSUFFICIENT_DATA';
   if(sampleSufficient)status='ACCUMULATING_VALIDATION';
   if(sampleSufficient&&holdoutReady&&replicated)status='REPLICATED_RESEARCH';
   if(sampleSufficient&&holdoutReady&&costAdjustedStable)status='REVIEW_READY';
   return{
     version:'RESEARCH_GOVERNANCE_V1',researchOnly:true,liveDecisionImpact:false,status,horizonMinutes:horizon,
-    gates:{sampleSufficient,holdoutReady,replicated,costAdjustedStable},
+    gates:{sampleSufficient,holdoutReady,replicated,frictionConfigured,costAdjustedStable},
     observed:{measuredEpisodes:measured,validFolds,positiveFolds,positiveFoldShare,medianNetFoldReturnPct:n(net.medianFoldReturnPct),worstNetFoldReturnPct:n(net.worstFoldReturnPct),netDispersionStdDevPct:n(net.dispersionStdDevPct)},
     thresholds:{minMeasuredEpisodes:minMeasured,minValidFolds,minPositiveFoldShare},
     interpretation:'REVIEW_READY means the configured descriptive research gates are met. It is not proof of profitability, a calibrated confidence score, or permission for live-decision impact.'
