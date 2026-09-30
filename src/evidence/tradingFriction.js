@@ -11,11 +11,11 @@ const PROFILES = Object.freeze({
     calibratedAsOf:'2026-09-30',
     brokeragePerExecutedOrderRupees:20,
     sttSellPct:0.15,
-    exchangeTransactionPct:0.03552,
+    exchangeTransactionPct:0.03553,
     sebiPerCroreRupees:10,
     stampDutyBuyPct:0.003,
     gstPct:18,
-    ipftPerCroreRupees:50,
+    ipftPerCroreRupees:0.01,
     lotSize:65,
     lots:null,
     assumptions:[
@@ -23,7 +23,7 @@ const PROFILES = Object.freeze({
       'each option leg entry and exit is treated as a separately executed order',
       'brokerage uses the standard Upstox flat Rs20 equity-options schedule',
       'exchange charge uses NSE equity-options premium turnover rate effective 1 March 2026',
-      'IPFT uses Upstox client charge of Rs0.50 per lakh of equity-options premium turnover',
+      'IPFT uses the current Upstox-published Rs0.01 per crore premium-turnover rate after combination with transaction charges',
       'exit marks are aligned one-minute candle closes; execution slippage can be stress-tested separately but is not claimed as calibrated',
       'exercise/assignment STT is excluded because research horizons model an exit transaction, not expiry exercise'
     ]
