@@ -1161,6 +1161,10 @@ async function restoreEvidenceArchive() {
     const seeded = await evidenceArchive.backup(evidenceSnapshots);
     if (!seeded.backedUp) console.error('[evidence archive] initial backup failed:', seeded.error || seeded.reason);
   }
+  if (evidenceArchive.status().configured && evidenceSnapshots.length) {
+    const verification = await evidenceArchive.verify(evidenceSnapshots.slice());
+    console.log('[evidence archive] startup round-trip verification', JSON.stringify(verification));
+  }
   evidenceArchive.start(() => evidenceSnapshots.slice());
   console.log('[evidence archive] status', JSON.stringify(evidenceArchive.status()));
 }
