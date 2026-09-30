@@ -1,6 +1,6 @@
 'use strict';
 
-function n(v){const x=Number(v);return Number.isFinite(x)?x:null;}
+function n(v){if(v===null||v===undefined||v==='')return null;const x=Number(v);return Number.isFinite(x)?x:null;}
 function round(v,dp=2){return Number(Number(v).toFixed(dp));}
 
 function bucketDte(dte){const d=n(dte);if(d===null)return'UNKNOWN';if(d<=0)return'0DTE';if(d<=3)return'1_3DTE';if(d<=7)return'4_7DTE';return'8PLUS_DTE';}
@@ -51,6 +51,25 @@ function entryValue(strategy,legs){
   }
   return null;
 }
+function entrySides(strategy){
+  if(strategy==='LONG_CALL'||strategy==='LONG_PUT')return{buyLeg:'BUY'};
+  if(strategy==='BULL_CALL_SPREAD'||strategy==='BEAR_PUT_SPREAD')return{buyLeg:'BUY',sellLeg:'SELL'};
+  if(strategy==='BULL_PUT_SPREAD'||strategy==='BEAR_CALL_SPREAD')return{sellLeg:'SELL',buyLeg:'BUY'};
+  if(strategy==='IRON_CONDOR')return{ceShort:'SELL',ceLong:'BUY',peShort:'SELL',peLong:'BUY'};
+  return{};
+}
+function entryLegMarks(strategy,legs){
+  const sides=entrySides(strategy),out={};
+  for(const [name,side] of Object.entries(sides)){
+    const leg=legs?.[name],price=legEntry(leg,side);
+    if(!leg?.contractId||price===null)continue;
+    out[name]={contractId:leg.contractId,side,price:round(price,4)};
+  }
+  return out;
+}
+function legMarksAt(names,aligned,i){
+  return Object.fromEntries(names.map(name=>[name,round(markFromCandle(aligned[name]?.[i]),4)]).filter(([,v])=>Number.isFinite(v)));
+}
 function pnlPct(strategy,entry,value){
   if(entry===null||value===null||entry<=0)return null;
   const credit=['BULL_PUT_SPREAD','BEAR_CALL_SPREAD','IRON_CONDOR'].includes(strategy);
@@ -82,17 +101,33 @@ function measureOutcome({snapshot,candlesByContract={},horizons=[15,30,60,120]})
   if(cutoff<0)return{status:'UNAVAILABLE',reason:'INCOMPLETE_HORIZON',entryValue:round(entry),observedThroughMinute:round((commonTimes[commonTimes.length-1]-snapshotMs)/60000,0),horizonsPct:{}};
   const studyTimes=commonTimes.slice(0,cutoff+1);
   const aligned=Object.fromEntries(names.map(name=>[name,studyTimes.map(ts=>maps[name].get(ts))]));
-  let mfe=-Infinity,mae=Infinity,bestMinute=null,worstMinute=null;
-  const horizonResults={};
+  let mfe=-Infinity,mae=Infinity,bestMinute=null,worstMinute=null,bestLegMarks=null,worstLegMarks=null;
+  const horizonResults={},horizonLegMarks={};
   for(let i=0;i<studyTimes.length;i++){
     const v=strategyValue(strategy,legs,aligned,i),p=pnlPct(strategy,entry,v); if(p===null)continue;
     const mins=Math.max(0,(studyTimes[i]-snapshotMs)/60000);
-    if(p>mfe){mfe=p;bestMinute=round(mins,0);} if(p<mae){mae=p;worstMinute=round(mins,0);}
-    for(const h of horizons) if(horizonResults[h]===undefined&&mins>=h) horizonResults[h]=round(p);
+    if(p>mfe){mfe=p;bestMinute=round(mins,0);bestLegMarks=legMarksAt(names,aligned,i);}
+    if(p<mae){mae=p;worstMinute=round(mins,0);worstLegMarks=legMarksAt(names,aligned,i);}
+    for(const h of horizons) if(horizonResults[h]===undefined&&mins>=h){
+      horizonResults[h]=round(p);
+      horizonLegMarks[h]={timestamp:new Date(studyTimes[i]).toISOString(),marks:legMarksAt(names,aligned,i)};
+    }
   }
   if(!Number.isFinite(mfe)||!Number.isFinite(mae))return{status:'UNAVAILABLE',reason:'NO_VALID_MARKS'};
   if(horizonResults[maxRequested]===undefined)return{status:'UNAVAILABLE',reason:'INCOMPLETE_HORIZON',entryValue:round(entry),observedThroughMinute:studyTimes.length?round((studyTimes[studyTimes.length-1]-snapshotMs)/60000,0):null,horizonsPct:horizonResults};
-  return{status:'MEASURED',entryValue:round(entry),mfePct:round(mfe),maePct:round(mae),bestMinute,worstMinute,horizonsPct:horizonResults};
+  return{
+    status:'MEASURED',
+    entryValue:round(entry),
+    entryLegMarks:entryLegMarks(strategy,legs),
+    horizonLegMarks,
+    mfePct:round(mfe),
+    maePct:round(mae),
+    bestMinute,
+    worstMinute,
+    bestLegMarks,
+    worstLegMarks,
+    horizonsPct:horizonResults
+  };
 }
 function summarizeEvidence(records,minSamples=20){
   const groups={};
@@ -106,4 +141,4 @@ function summarizeEvidence(records,minSamples=20){
   }
   return summary;
 }
-module.exports={bucketDte,bucketTime,evidenceKey,measureOutcome,summarizeEvidence};
+module.exports={bucketDte,bucketTime,evidenceKey,entrySides,entryLegMarks,measureOutcome,summarizeEvidence};
