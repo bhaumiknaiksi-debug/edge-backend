@@ -10,6 +10,11 @@ assert.strictEqual(out.status,'MEASURED');
 assert(out.mfePct>28&&out.mfePct<29);
 assert(out.maePct<0);
 assert.strictEqual(out.bestMinute,60);
+assert.strictEqual(out.entryLegPrices.buyLeg.side,'BUY');
+assert.strictEqual(out.entryLegPrices.buyLeg.price,101);
+assert.strictEqual(out.horizonLegPrices[60].buyLeg.side,'SELL');
+assert.strictEqual(out.horizonLegPrices[60].buyLeg.price,130);
+assert.ok(out.horizonTimestamps[60]);
 assert.strictEqual(out.entryLegMarks.buyLeg.side,'BUY');
 assert.strictEqual(out.entryLegMarks.buyLeg.price,101);
 assert.strictEqual(out.horizonLegMarks[60].marks.buyLeg,130);
@@ -25,6 +30,12 @@ const spreadCandles={S:[{timestamp:'2026-09-25T10:15:00+05:30',close:90},{timest
 const spreadOut=measureOutcome({snapshot:spreadSnap,candlesByContract:spreadCandles,horizons:[30]});
 assert.strictEqual(spreadOut.status,'MEASURED');
 assert.strictEqual(spreadOut.bestMinute,30);
+assert.strictEqual(spreadOut.entryLegPrices.sellLeg.side,'SELL');
+assert.strictEqual(spreadOut.entryLegPrices.sellLeg.price,100);
+assert.strictEqual(spreadOut.entryLegPrices.buyLeg.side,'BUY');
+assert.strictEqual(spreadOut.entryLegPrices.buyLeg.price,50);
+assert.strictEqual(spreadOut.horizonLegPrices[30].sellLeg.side,'BUY');
+assert.strictEqual(spreadOut.horizonLegPrices[30].buyLeg.side,'SELL');
 
 const incomplete=measureOutcome({snapshot,candlesByContract:{'NIFTY TEST CE':[{timestamp:'2026-09-25T10:15:00+05:30',close:110}]},horizons:[15,30]});
 assert.strictEqual(incomplete.status,'UNAVAILABLE');
