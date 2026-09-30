@@ -40,6 +40,7 @@ assert(cost.costPct>0.61&&cost.costPct<0.63);
 const slipped=calibratedRoundTripCost(row,60,'UPSTOX_STANDARD_NSE_OPTIONS_2026',{slippageBps:10});
 assert(slipped.totalRupees>cost.totalRupees);
 assert(slipped.slippageRupees>0);
+assert.strictEqual(slipped.slippageRupees,Number((110*130*10/10000).toFixed(4)));
 
 // Legacy outcomes without leg-level horizon marks must not be assigned fake calibrated costs.
 const legacy={snapshot:row.snapshot,outcome:{status:'MEASURED',entryValue:100,horizonsPct:{60:10}}};
