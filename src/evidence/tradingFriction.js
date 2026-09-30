@@ -87,7 +87,9 @@ function calibratedRoundTripCost(row,horizon,profileName='UPSTOX_STANDARD_NSE_OP
     const exitSide=sideOpposite(side);
     const exitCharges=optionOrderCharges({premium:exitPx,side:exitSide,quantity,profile});
     if(!entryCharges||!exitCharges)return{available:false,reason:'CHARGE_CALCULATION_FAILED',profile:profile.name};
-    const legSlippage=(entryCharges.turnoverRupees+exitCharges.turnoverRupees)*slippageBps/10000;
+    // Entry marks already use executable ask/bid. Slippage stress is therefore
+    // applied only to the modeled horizon exit turnover.
+    const legSlippage=exitCharges.turnoverRupees*slippageBps/10000;
     const legTotal=entryCharges.totalRupees+exitCharges.totalRupees+legSlippage;
     total+=legTotal; slippageRupees+=legSlippage;
     legs[name]={entrySide:side,exitSide,entryPremium:entryPx,exitPremium:exitPx,entryCharges,exitCharges,slippageRupees:round(legSlippage,4),totalRupees:round(legTotal,4)};
