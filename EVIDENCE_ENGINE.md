@@ -26,6 +26,8 @@ BULLISH|CHEAP|4_7DTE|MORNING|LONG_CALL
 
 This allows future calibration to answer questions such as whether a particular strategy/regime/DTE/session combination historically had positive 60-minute expectancy, how ugly its typical adverse excursion was, and when favourable excursion tended to peak.
 
-## Anti-overfit rule
+## Validation and anti-overfit rule
 
-Evidence is descriptive until sample thresholds and out-of-sample validation are satisfied. Future strategy promotion should use chronological train/validation splits rather than optimizing and grading on the same observations.
+Evidence remains descriptive/research-only. EDGE now applies chronological holdout validation, walk-forward replication, calibrated friction, fold-stability reporting, research governance and a research-only candidate registry. These are methodology controls, not proof of profitability.
+
+One READY_TO_EXECUTE episode is one trade hypothesis. Its 15/30/60/120-minute measurements are correlated horizons, not independent trades. Report distinct trading days alongside episode counts. New research questions must follow RESEARCH_PREREGISTRATION.md; post-hoc subgroups cannot be promoted from the same data used to discover them.
