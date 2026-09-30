@@ -39,3 +39,9 @@ node -e "const fs=require('fs'); const {runReplay}=require('./src/replay/replayE
 ## Interpretation
 
 Replay output is a validation report, not proof of profitability. It reports what EDGE's rules would have allowed from the supplied snapshots. It does not estimate slippage, taxes, latency, fills, or future P&L unless those fields are explicitly added to the dataset.
+
+## Replay is not the evidence pipeline
+
+Replay remains useful for deterministic rule regression. Profitability research is handled separately by persisted live evidence: READY_TO_EXECUTE episode capture → future-outcome harvesting → calibrated friction → chronological holdout → walk-forward stability → governance → research-only candidate registry. None of those stages authorizes a live trade automatically.
+
+Do not count multiple outcome horizons from one episode as independent trades.
