@@ -365,6 +365,31 @@ function buildWalkForwardValidation(rows=[],opts={}){
   };
 }
 
+function researchGovernance(overall,validation,walkForward,opts={}){
+  const horizon=Number(opts.governanceHorizon)||60;
+  const minMeasured=Math.max(1,n(opts.governanceMinMeasured)??20);
+  const minValidFolds=Math.max(2,n(opts.governanceMinValidFolds)??3);
+  const minPositiveFoldShare=Math.min(1,Math.max(0,n(opts.governanceMinPositiveFoldShare)??0.5));
+  const measured=Number(overall?.samples||0);
+  const holdoutReady=!!validation?.enoughForHoldout;
+  const net=walkForward?.stability?.frictionAdjusted?.[horizon]||{};
+  const validFolds=Number(net.validFolds||0),positiveFolds=Number(net.positiveFolds||0);
+  const positiveFoldShare=validFolds?round(positiveFolds/validFolds,4):null;
+  const sampleSufficient=measured>=minMeasured;
+  const replicated=validFolds>=minValidFolds;
+  const costAdjustedStable=replicated&&positiveFoldShare!==null&&positiveFoldShare>=minPositiveFoldShare&&n(net.medianFoldReturnPct)>0&&n(net.worstFoldReturnPct)!==null;
+  let status='INSUFFICIENT_DATA';
+  if(sampleSufficient)status='ACCUMULATING_VALIDATION';
+  if(sampleSufficient&&holdoutReady&&replicated)status='REPLICATED_RESEARCH';
+  if(sampleSufficient&&holdoutReady&&costAdjustedStable)status='REVIEW_READY';
+  return{
+    version:'RESEARCH_GOVERNANCE_V1',researchOnly:true,liveDecisionImpact:false,status,horizonMinutes:horizon,
+    gates:{sampleSufficient,holdoutReady,replicated,costAdjustedStable},
+    observed:{measuredEpisodes:measured,validFolds,positiveFolds,positiveFoldShare,medianNetFoldReturnPct:n(net.medianFoldReturnPct),worstNetFoldReturnPct:n(net.worstFoldReturnPct),netDispersionStdDevPct:n(net.dispersionStdDevPct)},
+    thresholds:{minMeasuredEpisodes:minMeasured,minValidFolds,minPositiveFoldShare},
+    interpretation:'REVIEW_READY means the configured descriptive research gates are met. It is not proof of profitability, a calibrated confidence score, or permission for live-decision impact.'
+  };
+}
 function buildEvidenceIntelligence(records=[],opts={}){
   const minSamples=Number.isFinite(Number(opts.minSamples))?Math.max(1,Number(opts.minSamples)):20;
   const horizons=Array.isArray(opts.horizons)&&opts.horizons.length?opts.horizons:DEFAULT_HORIZONS;
@@ -406,20 +431,21 @@ function buildEvidenceIntelligence(records=[],opts={}){
     minTestGroupSamples:opts.walkForwardMinTestGroupSamples,
     friction:opts.friction
   });
+  const governance=researchGovernance(metrics(rows,minSamples,horizons),validation,walkForward,opts);
   return {
-    version:'EVIDENCE_INTELLIGENCE_V4',generatedAt:new Date().toISOString(),researchOnly:true,liveDecisionImpact:false,
+    version:'EVIDENCE_INTELLIGENCE_V5',generatedAt:new Date().toISOString(),researchOnly:true,liveDecisionImpact:false,
     minSamples,measuredEpisodes:rows.length,
     methodology:{population:'MEASURED READY_TO_EXECUTE episode outcomes only',dedupe:'one measured outcome per snapshotId',horizonsMinutes:horizons,
       winDefinition:'horizon return > 0',qualification:'sample-count marker only; not proof of edge or permission to trade',
       friction:'V4 uses current Upstox standard brokerage plus NSE/SEBI/statutory option charges from leg-level entry/exit marks. Exit execution slippage is a separate configurable stress input and defaults to zero until observed.',
       validation:'chronological holdout plus expanding-window walk-forward validation; no random shuffle and no live-decision impact',
       scanner:'Setup Scanner dimensions are observational research labels only; qualification does not permit live trading'},
-    overall:metrics(rows,minSamples,horizons),dimensions,setupGroups,scannerGroups,validation,walkForward
+    overall:metrics(rows,minSamples,horizons),dimensions,setupGroups,scannerGroups,validation,walkForward,governance
   };
 }
 
 module.exports={
   DEFAULT_HORIZONS,measuredEpisodes,metrics,scannerKey,scannerCombinationKey,
   normalizeFriction,frictionCostPct,applyFriction,chronologicalSplit,buildChronologicalValidation,
-  walkForwardFolds,walkForwardStability,buildWalkForwardValidation,buildEvidenceIntelligence
+  walkForwardFolds,walkForwardStability,buildWalkForwardValidation,researchGovernance,buildEvidenceIntelligence
 };
