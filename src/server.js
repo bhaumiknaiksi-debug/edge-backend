@@ -19,6 +19,7 @@ const { setupFeatureTags, setupEvidenceKey } = require('./evidence/setupEvidence
 const { createOutcomeHarvester } = require('./evidence/outcomeHarvester');
 const { buildEvidenceIntelligence } = require('./evidence/evidenceIntelligence');
 const { createEvidenceArchive } = require('./evidence/evidenceArchive');
+const { buildEvidenceHealth } = require('./evidence/evidenceHealth');
 
 const http = require('http');
 const https = require('https');
@@ -1031,7 +1032,7 @@ async function poll() {
       evidenceSnapshot.evidenceKey = evidenceKey(evidenceSnapshot);
       evidenceSnapshot.setupFeatureTags = setupFeatureTags(evidenceSnapshot);
       evidenceSnapshot.setupEvidenceKey = setupEvidenceKey(evidenceSnapshot);
-      evidenceStore.append(evidenceSnapshot);
+      if (evidenceStore.append(evidenceSnapshot) === false) throw new Error('EVIDENCE_STORE_APPEND_FAILED');
       evidenceSnapshots.push(evidenceSnapshot);
       if (evidenceSnapshots.length > EVIDENCE_LIMIT) evidenceSnapshots.shift();
 
@@ -1044,7 +1045,7 @@ async function poll() {
       ].join('|');
       if (decisionFingerprint !== lastDecisionFingerprint) {
         const transition = { ...evidenceSnapshot, id: evidenceSnapshot.id + '|TRANSITION', recordType: 'DECISION_TRANSITION' };
-        evidenceStore.append(transition);
+        if (evidenceStore.append(transition) === false) throw new Error('EVIDENCE_TRANSITION_APPEND_FAILED');
         lastDecisionFingerprint = decisionFingerprint;
       }
     }
@@ -1112,6 +1113,20 @@ app.get('/evidence/status', (req,res) => {
   res.json({ total:evidenceSnapshots.length, counts, storage:evidenceStore.status(), archive:evidenceArchive.status(), harvester:outcomeHarvester.getStatus(), lastDecisionFingerprint });
 });
 
+app.get('/evidence/health', (req,res) => {
+  res.json(buildEvidenceHealth({
+    rows:evidenceSnapshots,
+    storage:evidenceStore.status(),
+    archive:evidenceArchive.status(),
+    harvester:outcomeHarvester.getStatus()
+  }));
+});
+
+app.post('/evidence/archive/verify', async (req,res) => {
+  const result = await evidenceArchive.verify(evidenceSnapshots.slice());
+  res.status(result.ok ? 200 : 503).json({ ...result, archive:evidenceArchive.status() });
+});
+
 app.post('/evidence/harvest', async (req,res) => {
   const status = await outcomeHarvester.run();
   res.json(status);
@@ -1147,6 +1162,7 @@ async function restoreEvidenceArchive() {
     if (!seeded.backedUp) console.error('[evidence archive] initial backup failed:', seeded.error || seeded.reason);
   }
   evidenceArchive.start(() => evidenceSnapshots.slice());
+  console.log('[evidence archive] status', JSON.stringify(evidenceArchive.status()));
 }
 
 let shuttingDown = false;
