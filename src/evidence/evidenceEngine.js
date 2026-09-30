@@ -20,6 +20,14 @@ function legEntry(leg, side){
   return bid??premium;
 }
 function markFromCandle(c){return n(c?.close);}
+function legSide(strategy,name){
+  if(strategy==='LONG_CALL'||strategy==='LONG_PUT')return name==='buyLeg'?'BUY':null;
+  if(strategy==='BULL_CALL_SPREAD'||strategy==='BEAR_PUT_SPREAD')return name==='buyLeg'?'BUY':name==='sellLeg'?'SELL':null;
+  if(strategy==='BULL_PUT_SPREAD'||strategy==='BEAR_CALL_SPREAD')return name==='sellLeg'?'SELL':name==='buyLeg'?'BUY':null;
+  if(strategy==='IRON_CONDOR')return (name==='ceShort'||name==='peShort')?'SELL':(name==='ceLong'||name==='peLong')?'BUY':null;
+  return null;
+}
+function oppositeSide(side){return side==='BUY'?'SELL':side==='SELL'?'BUY':null;}
 function buildInstrumentMarks(tradeLegs, candlesByContract, timestamp){
   const out={};
   for(const [name,leg] of Object.entries(tradeLegs||{})){
@@ -36,6 +44,38 @@ function strategyValue(strategy,legs,marks,i){
   if(strategy==='BULL_PUT_SPREAD'||strategy==='BEAR_CALL_SPREAD'){const a=px('sellLeg'),b=px('buyLeg');return a===null||b===null?null:a-b;}
   if(strategy==='IRON_CONDOR'){const a=px('ceShort'),b=px('ceLong'),c=px('peShort'),d=px('peLong');return[a,b,c,d].some(x=>x===null)?null:(a-b)+(c-d);}
   return null;
+}
+function entryLegMarks(strategy,legs){
+  const out={};
+  for(const [name,leg] of Object.entries(legs||{})){
+    if(!leg||!leg.contractId)continue;
+    const side=legSide(strategy,name); if(!side)continue;
+    const price=legEntry(leg,side);
+    if(price===null)continue;
+    out[name]={contractId:leg.contractId,instrumentKey:leg.instrumentKey||null,side,price:round(price)};
+  }
+  return out;
+}
+function horizonLegMarks(strategy,legs,aligned,studyTimes,horizons){
+  const out={};
+  for(const h of horizons){
+    let idx=-1;
+    for(let i=0;i<studyTimes.length;i++){
+      const mins=Math.max(0,(studyTimes[i]-studyTimes[0])/60000);
+      if(mins>=h){idx=i;break;}
+    }
+    if(idx<0)continue;
+    const marks={};
+    for(const [name,leg] of Object.entries(legs||{})){
+      if(!leg||!leg.contractId)continue;
+      const entrySide=legSide(strategy,name); if(!entrySide)continue;
+      const price=markFromCandle(aligned[name]?.[idx]);
+      if(price===null)continue;
+      marks[name]={contractId:leg.contractId,instrumentKey:leg.instrumentKey||null,side:oppositeSide(entrySide),price:round(price)};
+    }
+    out[h]={timestamp:new Date(studyTimes[idx]).toISOString(),marks};
+  }
+  return out;
 }
 function entryValue(strategy,legs){
   if(strategy==='LONG_CALL'||strategy==='LONG_PUT')return legEntry(legs.buyLeg,'BUY');
