@@ -262,6 +262,41 @@ function walkForwardFolds(rows=[],opts={}){
   }
   return{minTrainSamples,minTestSamples,testWindowSize,stepSize,maxFolds,folds:folds.slice(-maxFolds)};
 }
+function populationStdDev(xs){
+  if(!xs.length)return null;
+  const mean=xs.reduce((a,b)=>a+b,0)/xs.length;
+  return round(Math.sqrt(xs.reduce((sum,x)=>sum+((x-mean)**2),0)/xs.length));
+}
+function walkForwardStability(foldResults=[],horizons=DEFAULT_HORIZONS){
+  const totalFolds=foldResults.length;
+  const totalTestSamples=foldResults.reduce((sum,f)=>sum+Number(f.testSamples||0),0);
+  const eligible=foldResults.filter(f=>f.eligible!==false&&f.test);
+  const summarize=mode=>Object.fromEntries(horizons.map(h=>{
+    const valid=eligible.map(f=>({
+      samples:Number(f.test?.[mode]?.horizons?.[h]?.measured||0),
+      value:n(f.test?.[mode]?.horizons?.[h]?.avgReturnPct)
+    })).filter(x=>x.samples>0&&x.value!==null);
+    const values=valid.map(x=>x.value);
+    const measuredSamples=valid.reduce((sum,x)=>sum+x.samples,0);
+    return [h,{
+      validFolds:valid.length,
+      positiveFolds:values.filter(v=>v>0).length,
+      medianFoldReturnPct:median(values),
+      worstFoldReturnPct:values.length?round(Math.min(...values)):null,
+      dispersionStdDevPct:populationStdDev(values),
+      measuredTestSamples:measuredSamples,
+      sampleCoveragePct:totalTestSamples?round(measuredSamples/totalTestSamples*100):null
+    }];
+  }));
+  return{
+    definition:'Fold return is each eligible forward-test block average return. Dispersion is population standard deviation across valid fold-average returns. Sample coverage is measured horizon samples divided by all forward-test samples for this scope.',
+    totalFolds,
+    eligibleFolds:eligible.length,
+    foldCoveragePct:totalFolds?round(eligible.length/totalFolds*100):null,
+    gross:summarize('gross'),
+    frictionAdjusted:summarize('frictionAdjusted')
+  };
+}
 function walkForwardGroupSummary(folds,keyFn,minTrainGroup,minTestGroup,horizons,friction){
   const keys=new Set();
   for(const fold of folds){
@@ -287,6 +322,7 @@ function walkForwardGroupSummary(folds,keyFn,minTrainGroup,minTestGroup,horizons
       eligibleFolds,
       replicatedAcrossFolds:eligibleFolds>=2,
       aggregateTest:validationMetrics(unique,minTestGroup,horizons,friction),
+      stability:walkForwardStability(foldResults,horizons),
       folds:foldResults
     };
   }
@@ -299,6 +335,13 @@ function buildWalkForwardValidation(rows=[],opts={}){
   const minTrainGroup=Math.max(1,n(opts.minTrainGroupSamples)??Math.min(10,wf.minTrainSamples));
   const minTestGroup=Math.max(1,n(opts.minTestGroupSamples)??Math.min(3,wf.minTestSamples));
   const allTest=uniqueBySnapshot(wf.folds.flatMap(f=>f.test));
+  const renderedFolds=wf.folds.map(f=>({
+    index:f.index,eligible:true,
+    trainStart:f.trainStart,trainEnd:f.trainEnd,testStart:f.testStart,testEnd:f.testEnd,
+    trainEpisodes:f.train.length,testEpisodes:f.test.length,testSamples:f.test.length,
+    train:validationMetrics(f.train,wf.minTrainSamples,horizons,friction),
+    test:validationMetrics(f.test,wf.minTestSamples,horizons,friction)
+  }));
   return{
     version:'WALK_FORWARD_V1',
     researchOnly:true,
@@ -314,14 +357,9 @@ function buildWalkForwardValidation(rows=[],opts={}){
     enoughForWalkForward:wf.folds.length>=2,
     frictionModel:friction,
     methodology:'Expanding chronological training window with non-random forward test blocks. Aggregate test metrics dedupe snapshotId. Two or more folds is only a replication sample gate, not proof of edge or permission to trade.',
-    folds:wf.folds.map(f=>({
-      index:f.index,
-      trainStart:f.trainStart,trainEnd:f.trainEnd,testStart:f.testStart,testEnd:f.testEnd,
-      trainEpisodes:f.train.length,testEpisodes:f.test.length,
-      train:validationMetrics(f.train,wf.minTrainSamples,horizons,friction),
-      test:validationMetrics(f.test,wf.minTestSamples,horizons,friction)
-    })),
+    folds:renderedFolds.map(({eligible,testSamples,...f})=>f),
     aggregateTest:validationMetrics(allTest,wf.minTestSamples,horizons,friction),
+    stability:walkForwardStability(renderedFolds,horizons),
     strategyGroups:walkForwardGroupSummary(wf.folds,r=>snapshotOf(r).strategy||'WAIT',minTrainGroup,minTestGroup,horizons,friction),
     scannerGroups:walkForwardGroupSummary(wf.folds,scannerCombinationKey,minTrainGroup,minTestGroup,horizons,friction)
   };
@@ -383,5 +421,5 @@ function buildEvidenceIntelligence(records=[],opts={}){
 module.exports={
   DEFAULT_HORIZONS,measuredEpisodes,metrics,scannerKey,scannerCombinationKey,
   normalizeFriction,frictionCostPct,applyFriction,chronologicalSplit,buildChronologicalValidation,
-  walkForwardFolds,buildWalkForwardValidation,buildEvidenceIntelligence
+  walkForwardFolds,walkForwardStability,buildWalkForwardValidation,buildEvidenceIntelligence
 };
