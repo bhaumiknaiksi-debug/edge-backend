@@ -22,9 +22,15 @@ Output defaults to:
 
 The expired-contract APIs require an Upstox Plus subscription. citeturn2search0turn2search2
 
-## Why this is not yet a full historical signal backtest
+## Why expired candles alone are not a full historical signal backtest
 
 The current live EDGE strike-selection layer uses option Greeks and bid/ask for execution-quality checks. Historical expired candles provide OHLC/OI/volume, but not those historical quote/Greek fields. Therefore the replay system must not manufacture them.
 
 For a true apples-to-apples EDGE backtest, use recorded EDGE snapshots containing the full option chain and then join each decision to subsequent historical contract candles for outcome measurement.
 
+
+## Current evidence pipeline
+
+EDGE no longer relies on replay as its profitability evidence. Live READY_TO_EXECUTE episodes are persisted with their executable quote context, harvested against later contract candles, and evaluated through chronological holdout, walk-forward replication, friction-adjusted stability, research governance and the research-only candidate registry. The limiting factor is accumulated measured episodes and distinct trading days, not the absence of validation machinery.
+
+The 15/30/60/120-minute measurements from one READY episode are correlated horizons of one episode; they are not four independent trades.
