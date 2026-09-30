@@ -51,6 +51,32 @@ function entryValue(strategy,legs){
   }
   return null;
 }
+function legSides(strategy){
+  if(strategy==='LONG_CALL'||strategy==='LONG_PUT')return{buyLeg:'BUY'};
+  if(strategy==='BULL_CALL_SPREAD'||strategy==='BEAR_PUT_SPREAD')return{buyLeg:'BUY',sellLeg:'SELL'};
+  if(strategy==='BULL_PUT_SPREAD'||strategy==='BEAR_CALL_SPREAD')return{sellLeg:'SELL',buyLeg:'BUY'};
+  if(strategy==='IRON_CONDOR')return{ceShort:'SELL',ceLong:'BUY',peShort:'SELL',peLong:'BUY'};
+  return{};
+}
+function opposite(side){return side==='BUY'?'SELL':side==='SELL'?'BUY':null;}
+function buildEntryLegPrices(strategy,legs){
+  const sides=legSides(strategy),out={};
+  for(const [name,side] of Object.entries(sides)){
+    const leg=legs?.[name],price=legEntry(leg,side);
+    if(!leg||price===null)continue;
+    out[name]={contractId:leg.contractId||null,side,price:round(price,4)};
+  }
+  return out;
+}
+function buildExitLegPrices(strategy,legs,aligned,i){
+  const sides=legSides(strategy),out={};
+  for(const [name,entrySide] of Object.entries(sides)){
+    const price=markFromCandle(aligned[name]?.[i]);
+    if(price===null)continue;
+    out[name]={contractId:legs?.[name]?.contractId||null,side:opposite(entrySide),price:round(price,4)};
+  }
+  return out;
+}
 function entrySides(strategy){
   if(strategy==='LONG_CALL'||strategy==='LONG_PUT')return{buyLeg:'BUY'};
   if(strategy==='BULL_CALL_SPREAD'||strategy==='BEAR_PUT_SPREAD')return{buyLeg:'BUY',sellLeg:'SELL'};
