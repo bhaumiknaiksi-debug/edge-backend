@@ -71,5 +71,8 @@ assert.strictEqual(measuredEpisodes([...rows,{recordType:'OUTCOME',snapshotId:'x
 
 // Qualification is descriptive sample gating only.
 assert.strictEqual(metrics(rows,4).qualified,false);
+const missingHorizon=row('missing',7);
+missingHorizon.outcome.horizonsPct[60]=null;
+assert.strictEqual(metrics([missingHorizon],1).horizons[60].measured,0);
 assert.strictEqual(intel.methodology.qualification.includes('not proof of edge'),true);
 console.log('EDGE evidence intelligence tests passed');
