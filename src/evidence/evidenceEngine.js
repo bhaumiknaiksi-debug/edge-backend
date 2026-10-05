@@ -79,7 +79,7 @@ function summarizeEvidence(records,minSamples=20){
   for(const r of records||[]){if(r.outcome?.status!=='MEASURED')continue;const k=r.evidenceKey||evidenceKey(r.snapshot||r);(groups[k]??=[]).push(r.outcome);}
   const summary={};
   for(const [k,rows] of Object.entries(groups)){
-    const vals=rows.map(x=>x.horizonsPct?.60).filter(Number.isFinite);
+    const vals=rows.map(x=>x.horizonsPct?.[60]).filter(Number.isFinite);
     const mfe=rows.map(x=>x.mfePct).filter(Number.isFinite),mae=rows.map(x=>x.maePct).filter(Number.isFinite),holds=rows.map(x=>x.bestMinute).filter(Number.isFinite);
     const avg=a=>a.length?round(a.reduce((x,y)=>x+y,0)/a.length):null;
     summary[k]={samples:rows.length,qualified:rows.length>=minSamples,winRate60m:vals.length?round(vals.filter(x=>x>0).length/vals.length*100):null,avgReturn60mPct:avg(vals),avgMfePct:avg(mfe),avgMaePct:avg(mae),avgBestMinute:avg(holds)};
