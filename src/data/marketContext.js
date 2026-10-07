@@ -1,7 +1,8 @@
 'use strict';
 
 const https = require('https');
-const { buildSetupObservability } = require('../engine/setupObservability');
+const { buildSetupObservability, normalizeCandles } = require('../engine/setupObservability');
+const { buildCprContext } = require('../engine/cprEngine');
 const { buildChartIntelligence } = require('../engine/chartIntelligence');
 
 const API_BASE = 'https://api.upstox.com';
@@ -132,7 +133,7 @@ async function fetchMarketContext() {
 
   const todayIso = istDateString();
   const historyTo = shiftIsoDate(todayIso, -1);
-  const historyFrom = shiftIsoDate(todayIso, -14);
+  const historyFrom = shiftIsoDate(todayIso, -60);
   const [quote, thirty, intraday5, intraday15, intraday30, historicalDaily, futureIntraday5] = await Promise.all([
     requestJson('/v3/market-quote/quotes?instrument_key=' + encodeURIComponent(keys)),
     requestJson('/v3/market-quote/ohlc?instrument_key=' + encodeURIComponent(INDEX_KEY) + '&interval=I30'),
@@ -178,6 +179,9 @@ async function fetchMarketContext() {
     future5m: futureIntraday5?.data?.candles || []
   });
 
+  const historicalDailyRows = normalizeCandles(historicalDaily?.data?.candles || []);
+  const cprContext = buildCprContext({ historicalDaily: historicalDailyRows, todayIso, spot });
+
   // Research-only deterministic chart reading. This is descriptive evidence
   // and does not affect live regime, strategy, setup, or execution gates.
   const chartIntelligence = buildChartIntelligence({
@@ -187,7 +191,8 @@ async function fetchMarketContext() {
     historicalDaily: historicalDaily?.data?.candles || [],
     setupFeatures,
     sessionHigh: Number(indexOhlc.high) || null,
-    sessionLow: Number(indexOhlc.low) || null
+    sessionLow: Number(indexOhlc.low) || null,
+    cprContext
   });
 
   let futuresBuildUp = 'UNAVAILABLE';
@@ -210,6 +215,7 @@ async function fetchMarketContext() {
     trend30mPct,
     indiaVix: Number.isFinite(indiaVix) ? indiaVix : null,
     setupFeatures,
+    cprContext,
     chartIntelligence,
     futures: {
       instrumentKey: future.instrument_key,
