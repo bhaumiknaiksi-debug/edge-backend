@@ -2,6 +2,7 @@
 
 const https = require('https');
 const { buildSetupObservability } = require('../engine/setupObservability');
+const { buildChartIntelligence } = require('../engine/chartIntelligence');
 
 const API_BASE = 'https://api.upstox.com';
 const INDEX_KEY = 'NSE_INDEX|Nifty 50';
@@ -166,6 +167,14 @@ async function fetchMarketContext() {
     future5m: futureIntraday5?.data?.candles || []
   });
 
+  // Research-only deterministic chart reading. This is descriptive evidence
+  // and does not affect live regime, strategy, setup, or execution gates.
+  const chartIntelligence = buildChartIntelligence({
+    index5m: intraday5?.data?.candles || [],
+    index15m: intraday15?.data?.candles || [],
+    setupFeatures
+  });
+
   let futuresBuildUp = 'UNAVAILABLE';
   if (Number.isFinite(futuresPriceChangePct) && Number.isFinite(futuresOIChangePct)) {
     if (futuresPriceChangePct > 0 && futuresOIChangePct > 0) futuresBuildUp = 'LONG_BUILDUP';
@@ -186,6 +195,7 @@ async function fetchMarketContext() {
     trend30mPct,
     indiaVix: Number.isFinite(indiaVix) ? indiaVix : null,
     setupFeatures,
+    chartIntelligence,
     futures: {
       instrumentKey: future.instrument_key,
       tradingSymbol: future.trading_symbol,
