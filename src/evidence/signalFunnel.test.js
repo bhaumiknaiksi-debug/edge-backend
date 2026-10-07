@@ -24,4 +24,6 @@ assert.equal(out.tierCounts.A,1);
 assert.equal(out.tierCounts.B,1);
 assert.equal(out.tierCounts.C,1);
 assert.equal(out.nearReadyCount,2);
+assert.equal(out.version,'SIGNAL_FUNNEL_V2');
+assert.ok(Array.isArray(out.researchDiagnostics));
 console.log('signalFunnel tests passed');
