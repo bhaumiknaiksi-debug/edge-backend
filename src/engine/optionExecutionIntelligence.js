@@ -80,6 +80,11 @@ function primaryLeg(plan){
   const l=plan?.legs||{};
   return l.buyLeg||l.sellLeg||l.peShort||l.ceShort||l.peLong||l.ceLong||null;
 }
+function expectedPrimaryPremiumTrend(strategy){
+  if(['BULL_CALL_SPREAD','BEAR_PUT_SPREAD','LONG_CALL','LONG_PUT'].includes(strategy))return'BULLISH';
+  if(['BULL_PUT_SPREAD','BEAR_CALL_SPREAD'].includes(strategy))return'BEARISH';
+  return'UNRESOLVED';
+}
 async function buildOptionExecutionIntelligence({candidatePlans=null,token='' }={}){
   const plans=candidatePlans?.plans||{};
   const unique=new Map();
@@ -108,7 +113,11 @@ async function buildOptionExecutionIntelligence({candidatePlans=null,token='' }=
     if(!p?.available){out[tier]={available:false};continue;}
     const legs=planLegs(p).map(x=>({role:x.name,contractId:x.leg.contractId||null,instrumentKey:x.leg.instrumentKey,oneMinute:data.get(x.leg.instrumentKey)?.one||null,fiveMinute:data.get(x.leg.instrumentKey)?.five||null,error:data.get(x.leg.instrumentKey)?.error||null}));
     const primary=primaryLeg(p);
-    out[tier]={available:legs.some(x=>x.fiveMinute?.available),strategy:p.strategy||null,primaryContractId:primary?.contractId||null,legs};
+    const primaryRow=primary?data.get(primary.instrumentKey):null;
+    const actualTrend=primaryRow?.five?.structure?.state||'UNAVAILABLE';
+    const expectedTrend=expectedPrimaryPremiumTrend(p.strategy);
+    const thesisAlignment=expectedTrend==='UNRESOLVED'||!['BULLISH','BEARISH'].includes(actualTrend)?'UNRESOLVED':actualTrend===expectedTrend?'AGREES':'CONTRADICTS';
+    out[tier]={available:legs.some(x=>x.fiveMinute?.available),strategy:p.strategy||null,primaryContractId:primary?.contractId||null,expectedPrimaryPremiumTrend:expectedTrend,thesisAlignment,legs};
   }
   return{
     version:'OPTION_EXECUTION_INTELLIGENCE_V1',researchOnly:true,liveDecisionImpact:false,
@@ -116,4 +125,4 @@ async function buildOptionExecutionIntelligence({candidatePlans=null,token='' }=
     tiers:out
   };
 }
-module.exports={buildOptionExecutionIntelligence,analyseCandles,ema,rsi,premiumVwap};
+module.exports={buildOptionExecutionIntelligence,analyseCandles,ema,rsi,premiumVwap,expectedPrimaryPremiumTrend};
