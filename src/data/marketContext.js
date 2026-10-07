@@ -58,6 +58,12 @@ function istDateString(now = Date.now()) {
   return get('year') + '-' + get('month') + '-' + get('day');
 }
 
+function shiftIsoDate(iso, days) {
+  const d = new Date(String(iso) + 'T12:00:00Z');
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
 function selectNearestNiftyFuture(rows = [], now = Date.now()) {
   const today = istDateString(now);
   return (rows || [])
@@ -124,11 +130,16 @@ async function fetchMarketContext() {
   const future = await findNearestNiftyFuture();
   const keys = [INDEX_KEY, future.instrument_key, VIX_KEY].join(',');
 
-  const [quote, thirty, intraday5, intraday15, futureIntraday5] = await Promise.all([
+  const todayIso = istDateString();
+  const historyTo = shiftIsoDate(todayIso, -1);
+  const historyFrom = shiftIsoDate(todayIso, -14);
+  const [quote, thirty, intraday5, intraday15, intraday30, historicalDaily, futureIntraday5] = await Promise.all([
     requestJson('/v3/market-quote/quotes?instrument_key=' + encodeURIComponent(keys)),
     requestJson('/v3/market-quote/ohlc?instrument_key=' + encodeURIComponent(INDEX_KEY) + '&interval=I30'),
     requestJson('/v3/historical-candle/intraday/' + encodeURIComponent(INDEX_KEY) + '/minutes/5').catch(() => ({data:{candles:[]}})),
     requestJson('/v3/historical-candle/intraday/' + encodeURIComponent(INDEX_KEY) + '/minutes/15').catch(() => ({data:{candles:[]}})),
+    requestJson('/v3/historical-candle/intraday/' + encodeURIComponent(INDEX_KEY) + '/minutes/30').catch(() => ({data:{candles:[]}})),
+    requestJson('/v3/historical-candle/' + encodeURIComponent(INDEX_KEY) + '/days/1/' + historyTo + '/' + historyFrom).catch(() => ({data:{candles:[]}})),
     requestJson('/v3/historical-candle/intraday/' + encodeURIComponent(future.instrument_key) + '/minutes/5').catch(() => ({data:{candles:[]}}))
   ]);
 
@@ -172,7 +183,11 @@ async function fetchMarketContext() {
   const chartIntelligence = buildChartIntelligence({
     index5m: intraday5?.data?.candles || [],
     index15m: intraday15?.data?.candles || [],
-    setupFeatures
+    index30m: intraday30?.data?.candles || [],
+    historicalDaily: historicalDaily?.data?.candles || [],
+    setupFeatures,
+    sessionHigh: Number(indexOhlc.high) || null,
+    sessionLow: Number(indexOhlc.low) || null
   });
 
   let futuresBuildUp = 'UNAVAILABLE';
@@ -211,4 +226,4 @@ async function fetchMarketContext() {
   };
 }
 
-module.exports = { fetchMarketContext, findNearestNiftyFuture, selectNearestNiftyFuture, expiryIso, istDateString };
+module.exports = { fetchMarketContext, findNearestNiftyFuture, selectNearestNiftyFuture, expiryIso, istDateString, shiftIsoDate };
