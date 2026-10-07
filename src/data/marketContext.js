@@ -12,6 +12,8 @@ const VIX_KEY = 'NSE_INDEX|India VIX';
 let cachedFuture = null;
 let cachedAt = 0;
 const CACHE_MS = 15 * 60 * 1000;
+let cachedDailyHistory = null;
+let cachedDailyHistoryDate = null;
 
 function requestJson(path) {
   return new Promise((resolve, reject) => {
@@ -63,6 +65,16 @@ function shiftIsoDate(iso, days) {
   const d = new Date(String(iso) + 'T12:00:00Z');
   d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString().slice(0, 10);
+}
+
+async function fetchHistoricalDailyCached(todayIso) {
+  if (cachedDailyHistoryDate === todayIso && cachedDailyHistory) return cachedDailyHistory;
+  const historyTo = shiftIsoDate(todayIso, -1);
+  const historyFrom = shiftIsoDate(todayIso, -60);
+  const parsed = await requestJson('/v3/historical-candle/' + encodeURIComponent(INDEX_KEY) + '/days/1/' + historyTo + '/' + historyFrom);
+  cachedDailyHistory = parsed;
+  cachedDailyHistoryDate = todayIso;
+  return parsed;
 }
 
 function selectNearestNiftyFuture(rows = [], now = Date.now()) {
@@ -132,15 +144,13 @@ async function fetchMarketContext() {
   const keys = [INDEX_KEY, future.instrument_key, VIX_KEY].join(',');
 
   const todayIso = istDateString();
-  const historyTo = shiftIsoDate(todayIso, -1);
-  const historyFrom = shiftIsoDate(todayIso, -60);
   const [quote, thirty, intraday5, intraday15, intraday30, historicalDaily, futureIntraday5] = await Promise.all([
     requestJson('/v3/market-quote/quotes?instrument_key=' + encodeURIComponent(keys)),
     requestJson('/v3/market-quote/ohlc?instrument_key=' + encodeURIComponent(INDEX_KEY) + '&interval=I30'),
     requestJson('/v3/historical-candle/intraday/' + encodeURIComponent(INDEX_KEY) + '/minutes/5').catch(() => ({data:{candles:[]}})),
     requestJson('/v3/historical-candle/intraday/' + encodeURIComponent(INDEX_KEY) + '/minutes/15').catch(() => ({data:{candles:[]}})),
     requestJson('/v3/historical-candle/intraday/' + encodeURIComponent(INDEX_KEY) + '/minutes/30').catch(() => ({data:{candles:[]}})),
-    requestJson('/v3/historical-candle/' + encodeURIComponent(INDEX_KEY) + '/days/1/' + historyTo + '/' + historyFrom).catch(() => ({data:{candles:[]}})),
+    fetchHistoricalDailyCached(todayIso).catch(() => ({data:{candles:[]}})),
     requestJson('/v3/historical-candle/intraday/' + encodeURIComponent(future.instrument_key) + '/minutes/5').catch(() => ({data:{candles:[]}}))
   ]);
 
@@ -232,4 +242,4 @@ async function fetchMarketContext() {
   };
 }
 
-module.exports = { fetchMarketContext, findNearestNiftyFuture, selectNearestNiftyFuture, expiryIso, istDateString, shiftIsoDate };
+module.exports = { fetchMarketContext, findNearestNiftyFuture, selectNearestNiftyFuture, expiryIso, istDateString, shiftIsoDate, fetchHistoricalDailyCached };
