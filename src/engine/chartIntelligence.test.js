@@ -46,7 +46,7 @@ assert.equal(gap.state,'GAP_UP');
 
 const sweepCandles=require('./setupObservability').normalizeCandles([
  candle(iso(0),100,101,99,100),
- candle(iso(1),100,103,99.5,100.5)
+ candle(iso(1),100,105,99.5,100.5)
 ]);
 const ev=levelEvents(sweepCandles,[{name:'TEST_HIGH',value:102}],1);
 assert.ok(ev.some(x=>x.type==='LIQUIDITY_SWEEP_HIGH'));
