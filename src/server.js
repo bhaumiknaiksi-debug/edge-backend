@@ -21,6 +21,7 @@ const { evidenceKey } = require('./evidence/evidenceEngine');
 const { createEvidenceStore } = require('./evidence/evidenceStore');
 const { setupFeatureTags, setupEvidenceKey } = require('./evidence/setupEvidence');
 const { createOutcomeHarvester } = require('./evidence/outcomeHarvester');
+const { createResearchCandidateHarvester } = require('./evidence/researchCandidateHarvester');
 const { buildEvidenceIntelligence } = require('./evidence/evidenceIntelligence');
 const { createEvidenceArchive } = require('./evidence/evidenceArchive');
 const { buildEvidenceHealth } = require('./evidence/evidenceHealth');
@@ -100,6 +101,7 @@ const evidenceSnapshots = evidenceStore.load();
 const evidenceArchive = createEvidenceArchive();
 let lastDecisionFingerprint = null;
 const outcomeHarvester = createOutcomeHarvester({ store: evidenceStore, snapshots: evidenceSnapshots, token: UPSTOX_TOKEN });
+const researchCandidateHarvester = createResearchCandidateHarvester({ store: evidenceStore, snapshots: evidenceSnapshots, token: UPSTOX_TOKEN });
 
 // --- Market hours ---
 // NSE F&O regular market: 09:15-15:40 IST; F&O pre-open: 09:00-09:15 IST.
@@ -1171,7 +1173,7 @@ app.get('/evidence/intelligence', (req,res) => {
 
 app.get('/evidence/status', (req,res) => {
   const counts = evidenceSnapshots.reduce((a,r)=>{a[r.recordType||'UNKNOWN']=(a[r.recordType||'UNKNOWN']||0)+1;return a;},{});
-  res.json({ total:evidenceSnapshots.length, counts, storage:evidenceStore.status(), archive:evidenceArchive.status(), harvester:outcomeHarvester.getStatus(), lastDecisionFingerprint });
+  res.json({ total:evidenceSnapshots.length, counts, storage:evidenceStore.status(), archive:evidenceArchive.status(), harvester:outcomeHarvester.getStatus(), researchCandidateHarvester:researchCandidateHarvester.getStatus(), lastDecisionFingerprint });
 });
 
 app.get('/evidence/health', (req,res) => {
@@ -1190,7 +1192,8 @@ app.post('/evidence/archive/verify', async (req,res) => {
 
 app.post('/evidence/harvest', async (req,res) => {
   const status = await outcomeHarvester.run();
-  res.json(status);
+  const research = await researchCandidateHarvester.run();
+  res.json({authoritative:status,researchCandidates:research});
 });
 
 app.get('/history', (req, res) => {
@@ -1249,5 +1252,6 @@ server.listen(PORT, async () => {
   console.log('[upstox] expiry URL constructed:', probeUrl.toString());
   await restoreEvidenceArchive();
   outcomeHarvester.start();
+  researchCandidateHarvester.start();
   poll();
 });
