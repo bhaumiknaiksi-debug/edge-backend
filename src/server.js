@@ -14,6 +14,8 @@ const { buildPositionPlan } = require('./engine/positionSizingEngine');
 const { buildDecisionOrchestration } = require('./engine/decisionOrchestrator');
 const { buildSignalTier } = require('./engine/signalTier');
 const { buildResearchCandidatePlans } = require('./engine/candidatePlanEngine');
+const { buildGammaConcentration } = require('./engine/gammaConcentration');
+const { buildOptionExecutionIntelligence } = require('./engine/optionExecutionIntelligence');
 const { buildVolatilityContext } = require('./engine/volatilityEngine');
 const { evidenceKey } = require('./evidence/evidenceEngine');
 const { createEvidenceStore } = require('./evidence/evidenceStore');
@@ -247,6 +249,7 @@ function analyse(chain, expiryDate, marketContext = null) {
     const peTheta = pe?.option_greeks?.theta || 0;
     const ceVega = ce?.option_greeks?.vega || 0;
     const ceGamma = ce?.option_greeks?.gamma || 0;
+    const peGamma = pe?.option_greeks?.gamma || 0;
     const ceBid = ce?.market_data?.bid_price || 0;
     const ceAsk = ce?.market_data?.ask_price || 0;
     const peBid = pe?.market_data?.bid_price || 0;
@@ -263,7 +266,7 @@ function analyse(chain, expiryDate, marketContext = null) {
       ceOI, peOI, ceLTP, peLTP,
       ceDelta, peDelta,
       ceIV, peIV, ceTheta, peTheta,
-      ceVega, ceGamma,
+      ceVega, ceGamma, peGamma,
       ceSpread, peSpread,
       cePrevOI: ce?.market_data?.prev_oi || 0,
       pePrevOI: pe?.market_data?.prev_oi || 0,
@@ -694,6 +697,10 @@ function analyse(chain, expiryDate, marketContext = null) {
     trend30mPct: marketContext?.trend30mPct
   });
 
+  // Unsigned gamma concentration research only. This deliberately does not
+  // infer dealer positioning or a zero-gamma flip from open interest.
+  const gammaConcentration = buildGammaConcentration(strikes, spot);
+
   // --- Phase 5/6 execution pipeline ---
   // Entry is evaluated only after real market-structure walls are known.
   const entryPlan = buildEntryPlan({
@@ -970,7 +977,7 @@ function analyse(chain, expiryDate, marketContext = null) {
       }
     },
     intel: { maxPain, ceWritingZone, peWritingZone, ceBuildup: ceBuildup.length, peBuildup: peBuildup.length,
-      oiClusters: alphas.map(s => s.strike), optionFlow },
+      oiClusters: alphas.map(s => s.strike), optionFlow, gammaConcentration },
     warnings,
     explain: { factors, signalGrade, thesis, counterarguments, invalidation },
     expectedMove: { points: expectedMovePts, low: emLow, high: emHigh, strikeSafety },
@@ -1013,6 +1020,18 @@ async function poll() {
     }
     const result = analyse(chain, nearestExpiry, marketContext);
     if (result) {
+      try {
+        result.decision.optionExecutionIntelligence = await buildOptionExecutionIntelligence({
+          candidatePlans: result.decision?.researchCandidatePlans || null,
+          token: UPSTOX_TOKEN
+        });
+      } catch (optionChartErr) {
+        console.error('[option execution intelligence]', optionChartErr.message);
+        result.decision.optionExecutionIntelligence = {
+          version:'OPTION_EXECUTION_INTELLIGENCE_V1',researchOnly:true,liveDecisionImpact:false,
+          available:false,error:optionChartErr.message
+        };
+      }
       lastResult = result;
       lastFetchTime = Date.now();
       fetchErrorCount = 0;
@@ -1059,6 +1078,8 @@ async function poll() {
         chartIntelligence: result.market?.chartIntelligence || null,
         signalTier: result.decision?.signalTier || null,
         researchCandidatePlans: result.decision?.researchCandidatePlans || null,
+        optionExecutionIntelligence: result.decision?.optionExecutionIntelligence || null,
+        gammaConcentration: result.intel?.gammaConcentration || null,
         optionFlow: result.intel?.optionFlow,
         pcr: result.pcr,
         maxPain: result.maxPain,
