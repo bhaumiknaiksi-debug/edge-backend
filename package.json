@@ -7,7 +7,7 @@
     "test": "node src/engine/vnext.test.js",
     "test:replay": "node src/replay/replayEngine.test.js",
     "test:evidence": "node src/evidence/evidenceEngine.test.js",
-    "test:all": "node src/engine/vnext.test.js && node src/engine/setupObservability.test.js && node src/engine/setupScanner.test.js && node src/engine/cprEngine.test.js && node src/engine/chartIntelligence.test.js && node src/engine/signalTier.test.js && node src/engine/candidatePlanEngine.test.js && node src/engine/gammaConcentration.test.js && node src/engine/optionExecutionIntelligence.test.js && node src/data/marketContext.test.js && node src/evidence/setupEvidence.test.js && node src/evidence/outcomeHarvester.test.js && node src/replay/replayEngine.test.js && node src/evidence/evidenceEngine.test.js && node src/evidence/tradingFriction.test.js && node src/evidence/evidenceIntelligence.test.js && node src/evidence/signalFunnel.test.js && node src/evidence/evidenceArchive.test.js && node src/evidence/evidenceHealth.test.js",
+    "test:all": "node src/engine/vnext.test.js && node src/engine/setupObservability.test.js && node src/engine/setupScanner.test.js && node src/engine/cprEngine.test.js && node src/engine/chartIntelligence.test.js && node src/engine/signalTier.test.js && node src/engine/candidatePlanEngine.test.js && node src/engine/gammaConcentration.test.js && node src/engine/optionExecutionIntelligence.test.js && node src/data/marketContext.test.js && node src/evidence/setupEvidence.test.js && node src/evidence/outcomeHarvester.test.js && node src/evidence/researchCandidateHarvester.test.js && node src/replay/replayEngine.test.js && node src/evidence/evidenceEngine.test.js && node src/evidence/tradingFriction.test.js && node src/evidence/evidenceIntelligence.test.js && node src/evidence/signalFunnel.test.js && node src/evidence/priceActionResearch.test.js && node src/evidence/evidenceArchive.test.js && node src/evidence/evidenceHealth.test.js",
     "test:setup": "node src/engine/setupObservability.test.js",
     "test:setup-evidence": "node src/evidence/setupEvidence.test.js",
     "test:harvester": "node src/evidence/outcomeHarvester.test.js",
@@ -24,7 +24,9 @@
     "test:candidate-plans": "node src/engine/candidatePlanEngine.test.js",
     "test:cpr": "node src/engine/cprEngine.test.js",
     "test:gamma": "node src/engine/gammaConcentration.test.js",
-    "test:option-execution": "node src/engine/optionExecutionIntelligence.test.js"
+    "test:option-execution": "node src/engine/optionExecutionIntelligence.test.js",
+    "test:research-candidates": "node src/evidence/researchCandidateHarvester.test.js",
+    "test:price-action": "node src/evidence/priceActionResearch.test.js"
   },
   "dependencies": {
     "express": "^4.18.0"
