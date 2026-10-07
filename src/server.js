@@ -26,6 +26,7 @@ const { buildEvidenceIntelligence } = require('./evidence/evidenceIntelligence')
 const { createEvidenceArchive } = require('./evidence/evidenceArchive');
 const { buildEvidenceHealth } = require('./evidence/evidenceHealth');
 const { buildSignalFunnel } = require('./evidence/signalFunnel');
+const { buildPriceActionResearch } = require('./evidence/priceActionResearch');
 
 const http = require('http');
 const https = require('https');
@@ -1143,6 +1144,10 @@ app.get('/evidence/snapshots', (req,res) => {
 
 app.get('/evidence/signal-funnel', (req,res) => {
   res.json(buildSignalFunnel(evidenceSnapshots));
+});
+
+app.get('/evidence/price-action', (req,res) => {
+  res.json(buildPriceActionResearch(evidenceSnapshots));
 });
 
 app.get('/evidence/intelligence', (req,res) => {
