@@ -51,11 +51,8 @@ function researchDiagnostics(row) {
   if(Array.isArray(chart?.levelEvents)&&chart.levelEvents.some(e=>e.type==='FAILED_BREAKDOWN'))out.push('FAILED_BREAKDOWN_OBSERVED');
   const opt=row?.optionExecutionIntelligence?.tiers||{};
   const primary=(opt.A?.available?opt.A:opt.B?.available?opt.B:opt.C?.available?opt.C:null);
-  const leg=primary?.legs?.find(x=>x.contractId===primary.primaryContractId)||primary?.legs?.[0];
-  const s=leg?.fiveMinute?.structure?.state;
-  if(dir==='BULLISH'&&s==='BEARISH')out.push('OPTION_PREMIUM_CONFLICT');
-  if(dir==='BEARISH'&&s==='BEARISH')out.push('OPTION_PREMIUM_CONFLICT');
-  if(primary&&!primary.available)out.push('OPTION_CHART_UNAVAILABLE');
+  if(primary?.thesisAlignment==='CONTRADICTS')out.push('OPTION_PREMIUM_CONFLICT');
+  if(primary&&primary.available===false)out.push('OPTION_CHART_UNAVAILABLE');
   return [...new Set(out)];
 }
 
