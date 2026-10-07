@@ -1,0 +1,10 @@
+'use strict';
+const assert=require('assert');
+const {candidateEpisodeStarts,syntheticSnapshot,eligibleCandidate,createResearchCandidateHarvester}=require('./researchCandidateHarvester');
+const old=new Date(Date.now()-130*60000).toISOString();
+const plan={available:true,strategy:'LONG_CALL',legs:{buyLeg:{contractId:'NIFTY X CE',instrumentKey:'k',strike:22000,type:'CE',ask:100,bid:99,premium:99.5}}};
+const snap={id:'s1',recordType:'POLL_SNAPSHOT',timestamp:old,researchCandidatePlans:{plans:{B:plan,C:{...plan,strategy:'LONG_PUT',legs:{buyLeg:{...plan.legs.buyLeg,contractId:'NIFTY X PE',instrumentKey:'p',type:'PE'}}}}}};
+assert.ok(candidateEpisodeStarts([snap],'B').has('s1'));assert.ok(syntheticSnapshot(snap,'B'));assert.equal(eligibleCandidate(snap,'B'),true);
+const records=[snap];const store={append:r=>{records.push(r);return true;}};
+const h=createResearchCandidateHarvester({store,snapshots:records,token:'x',harvest:async()=>({status:'MEASURED',horizonsPct:{120:1},mfePct:2,maePct:-1})});
+h.run().then(st=>{assert.equal(st.measured.B,1);assert.equal(st.measured.C,1);console.log('researchCandidateHarvester tests passed');}).catch(e=>{throw e;});
