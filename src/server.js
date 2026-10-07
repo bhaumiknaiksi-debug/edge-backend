@@ -13,6 +13,7 @@ const { buildManagementPlan } = require('./engine/managementEngine');
 const { buildPositionPlan } = require('./engine/positionSizingEngine');
 const { buildDecisionOrchestration } = require('./engine/decisionOrchestrator');
 const { buildSignalTier } = require('./engine/signalTier');
+const { buildResearchCandidatePlans } = require('./engine/candidatePlanEngine');
 const { buildVolatilityContext } = require('./engine/volatilityEngine');
 const { evidenceKey } = require('./evidence/evidenceEngine');
 const { createEvidenceStore } = require('./evidence/evidenceStore');
@@ -761,6 +762,19 @@ function analyse(chain, expiryDate, marketContext = null) {
     regime
   });
 
+  // Three concrete candidate expressions for research/UX. A is the exact
+  // authoritative structure; B/C are counterfactual research candidates only.
+  const researchCandidatePlans = buildResearchCandidatePlans({
+    strikes,
+    regime,
+    strategy,
+    tradeLegs,
+    orchestration,
+    expiryDate,
+    lotSize: NIFTY_LOT_SIZE,
+    chartIntelligence: marketContext?.chartIntelligence || null
+  });
+
   // Research-only signal journey. Tier A mirrors the existing authoritative
   // READY_TO_EXECUTE state; B/C never authorize execution.
   const signalTier = buildSignalTier({
@@ -941,6 +955,7 @@ function analyse(chain, expiryDate, marketContext = null) {
       position: positionPlan,
       orchestration,
       signalTier,
+      researchCandidatePlans,
       waitReason: orchestration.status === 'READY_TO_EXECUTE' ? null :
         (entryPlan?.reason || setup?.blockers?.join(', ') || orchestration?.blockers?.join(', ') || 'Waiting for qualification gates.'),
       regime: {
@@ -1043,6 +1058,7 @@ async function poll() {
         setupScanner: result.market?.setupScanner || null,
         chartIntelligence: result.market?.chartIntelligence || null,
         signalTier: result.decision?.signalTier || null,
+        researchCandidatePlans: result.decision?.researchCandidatePlans || null,
         optionFlow: result.intel?.optionFlow,
         pcr: result.pcr,
         maxPain: result.maxPain,

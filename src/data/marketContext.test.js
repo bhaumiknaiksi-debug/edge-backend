@@ -1,10 +1,11 @@
 'use strict';
 
 const assert = require('assert');
-const { selectNearestNiftyFuture, expiryIso, istDateString } = require('./marketContext');
+const { selectNearestNiftyFuture, expiryIso, istDateString, shiftIsoDate } = require('./marketContext');
 
 const now = new Date('2026-09-30T02:45:00Z').getTime();
 assert.strictEqual(istDateString(now), '2026-09-30');
+assert.strictEqual(shiftIsoDate('2026-10-01', -1), '2026-09-30');
 
 const rows = [
   {instrument_type:'FUT',segment:'NSE_FO',underlying_symbol:'NIFTY',expiry:'2026-09-29',instrument_key:'expired',trading_symbol:'NIFTY FUT 29 SEP 26'},

@@ -7,7 +7,7 @@
     "test": "node src/engine/vnext.test.js",
     "test:replay": "node src/replay/replayEngine.test.js",
     "test:evidence": "node src/evidence/evidenceEngine.test.js",
-    "test:all": "node src/engine/vnext.test.js && node src/engine/setupObservability.test.js && node src/engine/setupScanner.test.js && node src/engine/chartIntelligence.test.js && node src/engine/signalTier.test.js && node src/data/marketContext.test.js && node src/evidence/setupEvidence.test.js && node src/evidence/outcomeHarvester.test.js && node src/replay/replayEngine.test.js && node src/evidence/evidenceEngine.test.js && node src/evidence/tradingFriction.test.js && node src/evidence/evidenceIntelligence.test.js && node src/evidence/signalFunnel.test.js && node src/evidence/evidenceArchive.test.js && node src/evidence/evidenceHealth.test.js",
+    "test:all": "node src/engine/vnext.test.js && node src/engine/setupObservability.test.js && node src/engine/setupScanner.test.js && node src/engine/chartIntelligence.test.js && node src/engine/signalTier.test.js && node src/engine/candidatePlanEngine.test.js && node src/data/marketContext.test.js && node src/evidence/setupEvidence.test.js && node src/evidence/outcomeHarvester.test.js && node src/replay/replayEngine.test.js && node src/evidence/evidenceEngine.test.js && node src/evidence/tradingFriction.test.js && node src/evidence/evidenceIntelligence.test.js && node src/evidence/signalFunnel.test.js && node src/evidence/evidenceArchive.test.js && node src/evidence/evidenceHealth.test.js",
     "test:setup": "node src/engine/setupObservability.test.js",
     "test:setup-evidence": "node src/evidence/setupEvidence.test.js",
     "test:harvester": "node src/evidence/outcomeHarvester.test.js",
@@ -20,7 +20,8 @@
     "test:health": "node src/evidence/evidenceHealth.test.js",
     "test:chart": "node src/engine/chartIntelligence.test.js",
     "test:signal-tier": "node src/engine/signalTier.test.js",
-    "test:signal-funnel": "node src/evidence/signalFunnel.test.js"
+    "test:signal-funnel": "node src/evidence/signalFunnel.test.js",
+    "test:candidate-plans": "node src/engine/candidatePlanEngine.test.js"
   },
   "dependencies": {
     "express": "^4.18.0"
