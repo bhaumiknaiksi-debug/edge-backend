@@ -5,6 +5,45 @@ const { normalizeCandles, atr } = require('./setupObservability');
 function n(v){const x=Number(v);return Number.isFinite(x)?x:null;}
 function round(v,dp=3){return Number(Number(v).toFixed(dp));}
 function pct(a,b){return Number.isFinite(a)&&Number.isFinite(b)&&b!==0?((a-b)/b)*100:null;}
+function ema(values,period){
+  const xs=(values||[]).filter(Number.isFinite);if(xs.length<period)return null;
+  const k=2/(period+1);let out=xs.slice(0,period).reduce((a,b)=>a+b,0)/period;
+  for(const x of xs.slice(period))out=(x*k)+(out*(1-k));return out;
+}
+function rsi(values,period=5){
+  const xs=(values||[]).filter(Number.isFinite);if(xs.length<period+1)return null;
+  const d=[];for(let i=1;i<xs.length;i++)d.push(xs[i]-xs[i-1]);
+  const sample=d.slice(-period),g=sample.reduce((a,x)=>a+Math.max(0,x),0)/period,l=sample.reduce((a,x)=>a+Math.max(0,-x),0)/period;
+  if(l===0)return 100;const rs=g/l;return 100-(100/(1+rs));
+}
+function adx(candles,period=14){
+  if(!candles||candles.length<period*2+1)return null;
+  const tr=[],plus=[],minus=[];
+  for(let i=1;i<candles.length;i++){
+    const a=candles[i],p=candles[i-1],up=a.high-p.high,down=p.low-a.low;
+    tr.push(Math.max(a.high-a.low,Math.abs(a.high-p.close),Math.abs(a.low-p.close)));
+    plus.push(up>down&&up>0?up:0);minus.push(down>up&&down>0?down:0);
+  }
+  const smooth=(arr,start)=>arr.slice(start,start+period).reduce((a,b)=>a+b,0);
+  const dx=[];
+  for(let start=0;start+period<=tr.length;start++){
+    const trs=smooth(tr,start),ps=smooth(plus,start),ms=smooth(minus,start);
+    if(!trs)continue;const pdi=100*ps/trs,mdi=100*ms/trs,den=pdi+mdi;
+    dx.push(den?100*Math.abs(pdi-mdi)/den:0);
+  }
+  if(dx.length<period)return null;
+  return dx.slice(-period).reduce((a,b)=>a+b,0)/period;
+}
+function candleGeometry(candles){
+  if(!candles||candles.length<2)return{available:false};
+  const c=candles.at(-1),p=candles.at(-2),range=Math.max(c.high-c.low,0.0001),body=Math.abs(c.close-c.open),upper=c.high-Math.max(c.open,c.close),lower=Math.min(c.open,c.close)-c.low;
+  const prevBodyHigh=Math.max(p.open,p.close),prevBodyLow=Math.min(p.open,p.close),bodyHigh=Math.max(c.open,c.close),bodyLow=Math.min(c.open,c.close);
+  return{available:true,direction:c.close>c.open?'BULLISH':c.close<c.open?'BEARISH':'DOJI',bodyPctOfRange:round(body/range*100,1),upperWickToBody:round(upper/Math.max(body,0.01),2),lowerWickToBody:round(lower/Math.max(body,0.01),2),
+    closeLocationPct:round((c.close-c.low)/range*100,1),insideBar:c.high<=p.high&&c.low>=p.low,outsideBar:c.high>p.high&&c.low<p.low,
+    bullishEngulfing:c.close>c.open&&p.close<p.open&&bodyHigh>=prevBodyHigh&&bodyLow<=prevBodyLow,
+    bearishEngulfing:c.close<c.open&&p.close>p.open&&bodyHigh>=prevBodyHigh&&bodyLow<=prevBodyLow};
+}
+
 
 function directionFromCloses(candles,lookback=4){
   if(!candles||candles.length<3)return{direction:'UNAVAILABLE',changePct:null};
@@ -135,14 +174,24 @@ function buildStory(x){
   if(x.vwap.side==='ABOVE'&&x.vwap.slope==='RISING')story.push('Price is above a rising futures-VWAP proxy.');
   if(x.vwap.side==='BELOW'&&x.vwap.slope==='FALLING')story.push('Price is below a falling futures-VWAP proxy.');
   if(x.levelEvents.length){const e=x.levelEvents[0];story.push(e.type.replace(/_/g,' ').toLowerCase()+' around '+e.level.replace(/_/g,' ').toLowerCase()+'.');}
+  if(x.cpr?.daily)story.push('Daily CPR is '+String(x.cpr.daily.widthClass||'unclassified').replace(/_/g,' ').toLowerCase()+', '+String(x.cpr.daily.alignment||'').toLowerCase()+', with price '+String(x.cpr.daily.location||'').replace(/_/g,' ').toLowerCase()+'.');
+  if(x.technicals?.trendStrength!=='UNAVAILABLE')story.push('ADX trend-strength context is '+String(x.technicals.trendStrength).toLowerCase()+'.');
   if(x.channel.fiveMinute.state!=='UNAVAILABLE')story.push('5-minute regression context: '+x.channel.fiveMinute.state.replace(/_/g,' ').toLowerCase()+', price in the '+x.channel.fiveMinute.position.replace(/_/g,' ').toLowerCase()+'.');
   if(!story.length)story.push('Chart structure is mixed or not mature enough for a clean discretionary-style read.');
   return{headline:x.verdict==='BULLISH'?'Price action leans bullish.':x.verdict==='BEARISH'?'Price action leans bearish.':x.verdict==='CONFLICTED'?'Price action is conflicted.':x.verdict==='NEUTRAL'?'Price action is balanced.':'Price-action context is incomplete.',points:story.slice(0,7)};
 }
-function buildChartIntelligence({index5m=[],index15m=[],index30m=[],historicalDaily=[],setupFeatures=null,sessionHigh=null,sessionLow=null}={}){
+function buildChartIntelligence({index5m=[],index15m=[],index30m=[],historicalDaily=[],setupFeatures=null,sessionHigh=null,sessionLow=null,cprContext=null}={}){
   const five=normalizeCandles(index5m),fifteen=normalizeCandles(index15m),thirty=normalizeCandles(index30m),daily=normalizeCandles(historicalDaily);
   const s5=structure(five),s15=structure(fifteen),s30=structure(thirty),t5=directionFromCloses(five),t15=directionFromCloses(fifteen),t30=directionFromCloses(thirty);
   const levels=levelState(five),vwap=vwapRead(setupFeatures),pressure=candlePressure(five),part=participation(setupFeatures),atr5=atr(five,14);
+  const closes5=five.map(x=>x.close),ema9=ema(closes5,9),ema21=ema(closes5,21),rsi5=rsi(closes5,5),adx14=adx(five,14),geometry=candleGeometry(five);
+  const technicals={
+    ema:{ema9:ema9===null?null:round(ema9,2),ema21:ema21===null?null:round(ema21,2),state:ema9===null||ema21===null?'UNAVAILABLE':ema9>ema21?'EMA9_ABOVE_21':ema9<ema21?'EMA9_BELOW_21':'EMA_EQUAL',separationPct:ema9!==null&&ema21?round((ema9-ema21)/ema21*100,3):null},
+    rsi5:rsi5===null?null:round(rsi5,2),
+    adx14:adx14===null?null:round(adx14,2),
+    trendStrength:adx14===null?'UNAVAILABLE':adx14>=25?'STRONG':adx14<20?'WEAK':'MODERATE',
+    candle:geometry
+  };
   const prev=previousDay(daily),gap=gapStructure(five,prev),keyLevels=meaningfulLevels({setupFeatures,prevDay:prev,sessionHigh,sessionLow,structure5m:s5});
   const events=levelEvents(five,keyLevels,atr5),zones=supplyDemandZones(five,atr5);
   const channel={fiveMinute:regressionChannel(five,20),fifteenMinute:regressionChannel(fifteen,16),thirtyMinute:regressionChannel(thirty,12)};
@@ -156,9 +205,9 @@ function buildChartIntelligence({index5m=[],index15m=[],index30m=[],historicalDa
   events.slice(0,4).forEach(e=>vote(e.type,e.direction));
   const bull=votes.filter(v=>v.direction==='BULLISH').length,bear=votes.filter(v=>v.direction==='BEARISH').length;
   let verdict='UNAVAILABLE';if(votes.length){if(bull&&bear&&Math.abs(bull-bear)<=2)verdict='CONFLICTED';else if(bull>bear)verdict='BULLISH';else if(bear>bull)verdict='BEARISH';else verdict='NEUTRAL';}
-  const result={version:'CHART_INTELLIGENCE_V2',researchOnly:true,liveDecisionImpact:false,methodology:'Deterministic multi-timeframe OHLCV price-action research. Heuristics describe structure; they are not a probability of profit.',verdict,bullishVotes:bull,bearishVotes:bear,evidenceCount:votes.length,
-    structure:{fiveMinute:s5,fifteenMinute:s15,thirtyMinute:s30},trend:{fiveMinute:t5,fifteenMinute:t15,thirtyMinute:t30},levels,vwap,momentum:pressure,participation:part,
+  const result={version:'CHART_INTELLIGENCE_V3',researchOnly:true,liveDecisionImpact:false,methodology:'Deterministic multi-timeframe OHLCV price-action research with contextual candles, adaptive CPR, EMA/RSI/ADX descriptors, VWAP and participation. These are research observations, not probabilities or live gates.',verdict,bullishVotes:bull,bearishVotes:bear,evidenceCount:votes.length,
+    structure:{fiveMinute:s5,fifteenMinute:s15,thirtyMinute:s30},trend:{fiveMinute:t5,fifteenMinute:t15,thirtyMinute:t30},levels,vwap,momentum:pressure,participation:part,technicals,cpr:cprContext||null,
     previousDay:prev,gap,keyLevels,levelEvents:events,supplyDemandZones:zones,channel,votes,dataCoverage:{index5m:five.length,index15m:fifteen.length,index30m:thirty.length,historicalDaily:daily.length,previousDayAvailable:!!prev}};
   result.story=buildStory(result);return result;
 }
-module.exports={buildChartIntelligence,structure,levelState,candlePressure,regressionChannel,gapStructure,levelEvents,supplyDemandZones};
+module.exports={buildChartIntelligence,structure,levelState,candlePressure,regressionChannel,gapStructure,levelEvents,supplyDemandZones,ema,rsi,adx,candleGeometry};

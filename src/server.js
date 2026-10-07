@@ -14,15 +14,19 @@ const { buildPositionPlan } = require('./engine/positionSizingEngine');
 const { buildDecisionOrchestration } = require('./engine/decisionOrchestrator');
 const { buildSignalTier } = require('./engine/signalTier');
 const { buildResearchCandidatePlans } = require('./engine/candidatePlanEngine');
+const { buildGammaConcentration } = require('./engine/gammaConcentration');
+const { buildOptionExecutionIntelligence } = require('./engine/optionExecutionIntelligence');
 const { buildVolatilityContext } = require('./engine/volatilityEngine');
 const { evidenceKey } = require('./evidence/evidenceEngine');
 const { createEvidenceStore } = require('./evidence/evidenceStore');
 const { setupFeatureTags, setupEvidenceKey } = require('./evidence/setupEvidence');
 const { createOutcomeHarvester } = require('./evidence/outcomeHarvester');
+const { createResearchCandidateHarvester } = require('./evidence/researchCandidateHarvester');
 const { buildEvidenceIntelligence } = require('./evidence/evidenceIntelligence');
 const { createEvidenceArchive } = require('./evidence/evidenceArchive');
 const { buildEvidenceHealth } = require('./evidence/evidenceHealth');
 const { buildSignalFunnel } = require('./evidence/signalFunnel');
+const { buildPriceActionResearch } = require('./evidence/priceActionResearch');
 
 const http = require('http');
 const https = require('https');
@@ -98,6 +102,7 @@ const evidenceSnapshots = evidenceStore.load();
 const evidenceArchive = createEvidenceArchive();
 let lastDecisionFingerprint = null;
 const outcomeHarvester = createOutcomeHarvester({ store: evidenceStore, snapshots: evidenceSnapshots, token: UPSTOX_TOKEN });
+const researchCandidateHarvester = createResearchCandidateHarvester({ store: evidenceStore, snapshots: evidenceSnapshots, token: UPSTOX_TOKEN });
 
 // --- Market hours ---
 // NSE F&O regular market: 09:15-15:40 IST; F&O pre-open: 09:00-09:15 IST.
@@ -247,6 +252,7 @@ function analyse(chain, expiryDate, marketContext = null) {
     const peTheta = pe?.option_greeks?.theta || 0;
     const ceVega = ce?.option_greeks?.vega || 0;
     const ceGamma = ce?.option_greeks?.gamma || 0;
+    const peGamma = pe?.option_greeks?.gamma || 0;
     const ceBid = ce?.market_data?.bid_price || 0;
     const ceAsk = ce?.market_data?.ask_price || 0;
     const peBid = pe?.market_data?.bid_price || 0;
@@ -263,7 +269,7 @@ function analyse(chain, expiryDate, marketContext = null) {
       ceOI, peOI, ceLTP, peLTP,
       ceDelta, peDelta,
       ceIV, peIV, ceTheta, peTheta,
-      ceVega, ceGamma,
+      ceVega, ceGamma, peGamma,
       ceSpread, peSpread,
       cePrevOI: ce?.market_data?.prev_oi || 0,
       pePrevOI: pe?.market_data?.prev_oi || 0,
@@ -694,6 +700,10 @@ function analyse(chain, expiryDate, marketContext = null) {
     trend30mPct: marketContext?.trend30mPct
   });
 
+  // Unsigned gamma concentration research only. This deliberately does not
+  // infer dealer positioning or a zero-gamma flip from open interest.
+  const gammaConcentration = buildGammaConcentration(strikes, spot);
+
   // --- Phase 5/6 execution pipeline ---
   // Entry is evaluated only after real market-structure walls are known.
   const entryPlan = buildEntryPlan({
@@ -970,7 +980,7 @@ function analyse(chain, expiryDate, marketContext = null) {
       }
     },
     intel: { maxPain, ceWritingZone, peWritingZone, ceBuildup: ceBuildup.length, peBuildup: peBuildup.length,
-      oiClusters: alphas.map(s => s.strike), optionFlow },
+      oiClusters: alphas.map(s => s.strike), optionFlow, gammaConcentration },
     warnings,
     explain: { factors, signalGrade, thesis, counterarguments, invalidation },
     expectedMove: { points: expectedMovePts, low: emLow, high: emHigh, strikeSafety },
@@ -1013,6 +1023,18 @@ async function poll() {
     }
     const result = analyse(chain, nearestExpiry, marketContext);
     if (result) {
+      try {
+        result.decision.optionExecutionIntelligence = await buildOptionExecutionIntelligence({
+          candidatePlans: result.decision?.researchCandidatePlans || null,
+          token: UPSTOX_TOKEN
+        });
+      } catch (optionChartErr) {
+        console.error('[option execution intelligence]', optionChartErr.message);
+        result.decision.optionExecutionIntelligence = {
+          version:'OPTION_EXECUTION_INTELLIGENCE_V1',researchOnly:true,liveDecisionImpact:false,
+          available:false,error:optionChartErr.message
+        };
+      }
       lastResult = result;
       lastFetchTime = Date.now();
       fetchErrorCount = 0;
@@ -1059,6 +1081,8 @@ async function poll() {
         chartIntelligence: result.market?.chartIntelligence || null,
         signalTier: result.decision?.signalTier || null,
         researchCandidatePlans: result.decision?.researchCandidatePlans || null,
+        optionExecutionIntelligence: result.decision?.optionExecutionIntelligence || null,
+        gammaConcentration: result.intel?.gammaConcentration || null,
         optionFlow: result.intel?.optionFlow,
         pcr: result.pcr,
         maxPain: result.maxPain,
@@ -1122,6 +1146,10 @@ app.get('/evidence/signal-funnel', (req,res) => {
   res.json(buildSignalFunnel(evidenceSnapshots));
 });
 
+app.get('/evidence/price-action', (req,res) => {
+  res.json(buildPriceActionResearch(evidenceSnapshots));
+});
+
 app.get('/evidence/intelligence', (req,res) => {
   const clamp=(v,lo,hi,fallback)=>{
     const x=Number(v);
@@ -1150,7 +1178,7 @@ app.get('/evidence/intelligence', (req,res) => {
 
 app.get('/evidence/status', (req,res) => {
   const counts = evidenceSnapshots.reduce((a,r)=>{a[r.recordType||'UNKNOWN']=(a[r.recordType||'UNKNOWN']||0)+1;return a;},{});
-  res.json({ total:evidenceSnapshots.length, counts, storage:evidenceStore.status(), archive:evidenceArchive.status(), harvester:outcomeHarvester.getStatus(), lastDecisionFingerprint });
+  res.json({ total:evidenceSnapshots.length, counts, storage:evidenceStore.status(), archive:evidenceArchive.status(), harvester:outcomeHarvester.getStatus(), researchCandidateHarvester:researchCandidateHarvester.getStatus(), lastDecisionFingerprint });
 });
 
 app.get('/evidence/health', (req,res) => {
@@ -1169,7 +1197,8 @@ app.post('/evidence/archive/verify', async (req,res) => {
 
 app.post('/evidence/harvest', async (req,res) => {
   const status = await outcomeHarvester.run();
-  res.json(status);
+  const research = await researchCandidateHarvester.run();
+  res.json({authoritative:status,researchCandidates:research});
 });
 
 app.get('/history', (req, res) => {
@@ -1228,5 +1257,6 @@ server.listen(PORT, async () => {
   console.log('[upstox] expiry URL constructed:', probeUrl.toString());
   await restoreEvidenceArchive();
   outcomeHarvester.start();
+  researchCandidateHarvester.start();
   poll();
 });

@@ -24,9 +24,10 @@ const out=buildChartIntelligence({
    vwap:{available:true,distancePct:0.4,slope:0.1,value:22540},
    volume:{relativeVolume:1.3}
  },
- sessionHigh:22680,sessionLow:22495
+ sessionHigh:22680,sessionLow:22495,
+ cprContext:{daily:{widthClass:'ADAPTIVE_NARROW',alignment:'ASCENDING',location:'ABOVE_TC'},weekly:{location:'ABOVE_TC'}}
 });
-assert.equal(out.version,'CHART_INTELLIGENCE_V2');
+assert.equal(out.version,'CHART_INTELLIGENCE_V3');
 assert.equal(out.researchOnly,true);
 assert.equal(out.liveDecisionImpact,false);
 assert.ok(out.structure.thirtyMinute);
@@ -37,6 +38,10 @@ assert.ok(Array.isArray(out.supplyDemandZones));
 assert.ok(Array.isArray(out.levelEvents));
 assert.equal(out.vwap.side,'ABOVE');
 assert.equal(out.participation.state,'ABOVE_RECENT_AVERAGE');
+assert.ok(out.technicals);
+assert.ok(out.technicals.ema);
+assert.ok(['STRONG','MODERATE','WEAK','UNAVAILABLE'].includes(out.technicals.trendStrength));
+assert.equal(out.cpr.daily.widthClass,'ADAPTIVE_NARROW');
 
 const ch=regressionChannel(require('./setupObservability').normalizeCandles(index5m),20);
 assert.equal(ch.state,'RISING_CHANNEL');
@@ -51,4 +56,4 @@ const sweepCandles=require('./setupObservability').normalizeCandles([
 const ev=levelEvents(sweepCandles,[{name:'TEST_HIGH',value:102}],1);
 assert.ok(ev.some(x=>x.type==='LIQUIDITY_SWEEP_HIGH'));
 
-console.log('chartIntelligence V2 tests passed');
+console.log('chartIntelligence V3 tests passed');
