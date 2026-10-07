@@ -22,7 +22,8 @@ function contractId(expiry,strike,type) {
 function quote(row,type) {
   if (!row) return null;
   const p = type === 'CE' ? 'ce' : 'pe';
-  const delta = type === 'CE' ? n(row.ceDelta) : Math.abs(n(row.peDelta) || 0);
+  const rawDelta = type === 'CE' ? n(row.ceDelta) : n(row.peDelta);
+  const delta = rawDelta === null ? null : (type === 'CE' ? rawDelta : Math.abs(rawDelta));
   const ltp=n(row[p+'LTP']), bid=n(row[p+'Bid']), ask=n(row[p+'Ask']);
   const instrumentKey=row[p+'InstrumentKey'] || null;
   if (ltp===null || ltp<=0) return null;
