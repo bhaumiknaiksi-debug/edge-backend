@@ -1,0 +1,67 @@
+name: Keep EDGE collecting during NSE session
+
+on:
+  schedule:
+    # GitHub cron is UTC. Run frequently, then gate precisely using Asia/Kolkata time.
+    # 03:00-10:59 UTC covers the full 09:15-15:40 IST market session.
+    - cron: '*/5 3-10 * * 1-5'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: edge-market-session-keepalive
+  cancel-in-progress: false
+
+jobs:
+  keep-edge-awake:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Check NSE session window
+        id: session
+        shell: bash
+        run: |
+          set -euo pipefail
+          now="$(TZ=Asia/Kolkata date +%H%M)"
+          weekday="$(TZ=Asia/Kolkata date +%u)"
+          echo "ist_time=$now" >> "$GITHUB_OUTPUT"
+
+          if [ "$weekday" -gt 5 ] || [ "$now" -lt 0915 ] || [ "$now" -gt 1545 ]; then
+            echo "active=false" >> "$GITHUB_OUTPUT"
+            echo "Outside EDGE collection window (IST $now)."
+          else
+            echo "active=true" >> "$GITHUB_OUTPUT"
+            echo "Inside EDGE collection window (IST $now)."
+          fi
+
+      - name: Wake backend and confirm collector
+        if: steps.session.outputs.active == 'true'
+        shell: bash
+        env:
+          EDGE_URL: https://edge-backend-r1ng.onrender.com
+        run: |
+          set -euo pipefail
+
+          echo "Waking EDGE backend..."
+          curl             --fail             --silent             --show-error             --max-time 90             --retry 2             --retry-delay 5             "$EDGE_URL/"             | tee /tmp/edge-status.json
+
+          echo
+          echo "Checking evidence health..."
+          curl             --fail             --silent             --show-error             --max-time 60             --retry 2             --retry-delay 5             "$EDGE_URL/evidence/health"             | tee /tmp/evidence-health.json
+
+      - name: Post-close harvest and durability proof
+        if: steps.session.outputs.active == 'true' && steps.session.outputs.ist_time >= '1540'
+        shell: bash
+        env:
+          EDGE_URL: https://edge-backend-r1ng.onrender.com
+        run: |
+          set -euo pipefail
+
+          echo "Running post-close outcome harvest..."
+          curl             --fail             --silent             --show-error             --max-time 120             --retry 2             --retry-delay 5             -X POST             "$EDGE_URL/evidence/harvest"             | tee /tmp/harvest.json
+
+          echo
+          echo "Running archive round-trip verification..."
+          curl             --fail             --silent             --show-error             --max-time 120             --retry 2             --retry-delay 5             -X POST             "$EDGE_URL/evidence/archive/verify"             | tee /tmp/archive-verify.json
