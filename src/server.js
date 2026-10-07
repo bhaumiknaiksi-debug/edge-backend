@@ -12,6 +12,7 @@ const { buildRiskPlan } = require('./engine/riskEngine');
 const { buildManagementPlan } = require('./engine/managementEngine');
 const { buildPositionPlan } = require('./engine/positionSizingEngine');
 const { buildDecisionOrchestration } = require('./engine/decisionOrchestrator');
+const { buildSignalTier } = require('./engine/signalTier');
 const { buildVolatilityContext } = require('./engine/volatilityEngine');
 const { evidenceKey } = require('./evidence/evidenceEngine');
 const { createEvidenceStore } = require('./evidence/evidenceStore');
@@ -20,6 +21,7 @@ const { createOutcomeHarvester } = require('./evidence/outcomeHarvester');
 const { buildEvidenceIntelligence } = require('./evidence/evidenceIntelligence');
 const { createEvidenceArchive } = require('./evidence/evidenceArchive');
 const { buildEvidenceHealth } = require('./evidence/evidenceHealth');
+const { buildSignalFunnel } = require('./evidence/signalFunnel');
 
 const http = require('http');
 const https = require('https');
@@ -759,6 +761,20 @@ function analyse(chain, expiryDate, marketContext = null) {
     regime
   });
 
+  // Research-only signal journey. Tier A mirrors the existing authoritative
+  // READY_TO_EXECUTE state; B/C never authorize execution.
+  const signalTier = buildSignalTier({
+    orchestration,
+    setup,
+    entry: entryPlan,
+    risk: riskPlan,
+    position: positionPlan,
+    strategy,
+    regime,
+    marketPhase: getMarketPhase(),
+    chartIntelligence: marketContext?.chartIntelligence || null
+  });
+
   // --- Single-leg trade plan (entry / stop-loss / target in premium points, delta approximation) ---
   if (tradeLegs && (strategy === 'LONG_CALL' || strategy === 'LONG_PUT') && tradeLegs.buyLeg) {
     const entryPrem = parseFloat(tradeLegs.buyLeg.premium);
@@ -924,6 +940,7 @@ function analyse(chain, expiryDate, marketContext = null) {
       management: managementPlan,
       position: positionPlan,
       orchestration,
+      signalTier,
       waitReason: orchestration.status === 'READY_TO_EXECUTE' ? null :
         (entryPlan?.reason || setup?.blockers?.join(', ') || orchestration?.blockers?.join(', ') || 'Waiting for qualification gates.'),
       regime: {
@@ -949,7 +966,8 @@ function analyse(chain, expiryDate, marketContext = null) {
       features: marketFeatures,
       regime,
       context: marketContext,
-      setupScanner
+      setupScanner,
+      chartIntelligence: marketContext?.chartIntelligence || null
     }
   };
 }
@@ -1023,6 +1041,8 @@ async function poll() {
         features: result.market?.features,
         setupFeatures: result.market?.context?.setupFeatures || null,
         setupScanner: result.market?.setupScanner || null,
+        chartIntelligence: result.market?.chartIntelligence || null,
+        signalTier: result.decision?.signalTier || null,
         optionFlow: result.intel?.optionFlow,
         pcr: result.pcr,
         maxPain: result.maxPain,
@@ -1080,6 +1100,10 @@ app.get('/api/v1/market/status', (req, res) => res.json({ phase: getMarketPhase(
 app.get('/evidence/snapshots', (req,res) => {
   const limit=Math.min(EVIDENCE_LIMIT,parseInt(req.query.limit,10)||100);
   res.json({count:Math.min(limit,evidenceSnapshots.length),total:evidenceSnapshots.length,storage:evidenceStore.status(),entries:evidenceSnapshots.slice(-limit)});
+});
+
+app.get('/evidence/signal-funnel', (req,res) => {
+  res.json(buildSignalFunnel(evidenceSnapshots));
 });
 
 app.get('/evidence/intelligence', (req,res) => {
