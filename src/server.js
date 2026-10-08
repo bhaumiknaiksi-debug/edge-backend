@@ -138,14 +138,17 @@ function getMinutesRemainingIST() {
 function getNextOpenIST() {
   const now = new Date();
   const ist = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
-  const day = ist.getDay();
-  let daysAhead = 1;
-  if (day === 5) daysAhead = 3;
-  if (day === 6) daysAhead = 2;
-  const next = new Date(ist);
-  next.setDate(ist.getDate() + daysAhead);
-  next.setHours(9, 15, 0, 0);
-  return next;
+  for (let offset = 0; offset < 14; offset++) {
+    const candidate = new Date(ist);
+    candidate.setDate(ist.getDate() + offset);
+    candidate.setHours(9, 15, 0, 0);
+    const day = candidate.getDay();
+    const iso = candidate.getFullYear() + '-' + String(candidate.getMonth() + 1).padStart(2, '0') + '-' + String(candidate.getDate()).padStart(2, '0');
+    const tradingDay = day !== 0 && day !== 6 && !NSE_FO_HOLIDAYS_2026.has(iso);
+    if (!tradingDay) continue;
+    if (offset > 0 || candidate > ist) return candidate;
+  }
+  return null;
 }
 
 // --- Upstox: get nearest expiry ---
@@ -1133,7 +1136,17 @@ const dataHandler = (req, res) => {
 app.get('/data', dataHandler);
 app.get('/analysis', dataHandler);
 app.get('/api/v1/dashboard', dataHandler);
-app.get('/api/v1/market/status', (req, res) => res.json({ phase: getMarketPhase(), tokenExpired }));
+app.get('/api/v1/market/status', (req, res) => {
+  const nextOpen = getNextOpenIST();
+  res.json({
+    phase: getMarketPhase(),
+    tokenExpired,
+    serverTime: new Date().toISOString(),
+    lastFetch: lastFetchTime,
+    minutesRemaining: getMinutesRemainingIST(),
+    nextOpen: nextOpen ? nextOpen.toISOString() : null
+  });
+});
 
 // History endpoint - last N poll snapshots for session grading
 // Query: ?limit=N (default 100, max HISTORY_LIMIT), ?since=ISO (filter by timestamp)
