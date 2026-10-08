@@ -111,6 +111,9 @@ function buildWebPush(env = process.env, dependencies = {}) {
   let setupError = null;
   let queue = Promise.resolve();
   let lastManualTest = 0;
+  let firstSuccessfulObservation = true;
+  let lastInitAttemptAt = 0;
+  let initPromise = null;
   const sender = dependencies.sender || webpush;
 
   if (required) {
@@ -149,8 +152,18 @@ function buildWebPush(env = process.env, dependencies = {}) {
     }
     return ready;
   };
-  const initialized = initialize();
-  const usable = async () => Boolean(await initialized && ready);
+  async function usable() {
+    if (!pool) return false;
+    if (ready) return true;
+    if (initPromise) return initPromise;
+    // Transient PostgreSQL downtime must not leave Web Push disabled forever.
+    if (Date.now() - lastInitAttemptAt < 15000) return false;
+    lastInitAttemptAt = Date.now();
+    initPromise = initialize().finally(() => { initPromise = null; });
+    return initPromise;
+  }
+  // Start an initial attempt, and permit later retries after a failure.
+  void usable();
 
   function authorized(req) {
     const header = String(req.headers.authorization || '');
@@ -238,6 +251,7 @@ function buildWebPush(env = process.env, dependencies = {}) {
     if (!current) return;
     const client = await pool.connect();
     let previous = null;
+    const isFirst = firstSuccessfulObservation;
     try {
       await client.query('BEGIN');
       await client.query(`INSERT INTO edge_push_state(state_id,payload)
@@ -246,6 +260,7 @@ function buildWebPush(env = process.env, dependencies = {}) {
       previous = row.rows[0]?.payload || null;
       await client.query("UPDATE edge_push_state SET payload=$1::jsonb,observed_at=NOW() WHERE state_id='latest'", [JSON.stringify(current)]);
       await client.query('COMMIT');
+      firstSuccessfulObservation = false;
     } catch (error) {
       await client.query('ROLLBACK').catch(() => {});
       throw error;
@@ -253,6 +268,9 @@ function buildWebPush(env = process.env, dependencies = {}) {
       client.release();
     }
 
+    // Even a quick restart with an existing database row starts with a
+    // baseline, never a retroactive ready/invalidation notification.
+    if (isFirst) return;
     if (!settings.autoAlerts) return;
     const event = makeTransition(previous, current);
     if (!event) return;
@@ -268,7 +286,7 @@ function buildWebPush(env = process.env, dependencies = {}) {
     });
   }
 
-  return { routes, onSuccessfulPoll, initialize: () => initialized, configStatus: async () => ({
+  return { routes, onSuccessfulPoll, initialize: () => usable(), configStatus: async () => ({
     enabled: await usable(), autoAlerts: settings.autoAlerts, setupError
   }) };
 }
