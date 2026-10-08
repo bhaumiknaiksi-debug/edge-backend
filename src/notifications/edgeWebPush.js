@@ -284,6 +284,7 @@ function buildWebPush(env = process.env, dependencies = {}) {
     queue = queue.then(() => observe(result)).catch(() => {
       // Push errors may never break the authoritative EDGE polling/evidence pipeline.
     });
+    return queue; // Allows deterministic tests; production fire-and-forgets.
   }
 
   return { routes, onSuccessfulPoll, initialize: () => usable(), configStatus: async () => ({
