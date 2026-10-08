@@ -13,6 +13,9 @@ function isLiveDataFresh(lastFetchMs, nowMs = Date.now()) {
 
 function dashboardAvailability(phase, lastResult, lastFetchMs, nowMs = Date.now()) {
   if (!lastResult) return { ok: false, reason: 'NO_DATA_YET' };
+  if (phase === 'OPEN' && lastResult?.market?.phase !== 'OPEN') {
+    return { ok: false, reason: 'NON_LIVE_MARKET_SNAPSHOT' };
+  }
   if (phase === 'OPEN' && !isLiveDataFresh(lastFetchMs, nowMs)) {
     return { ok: false, reason: 'STALE_MARKET_DATA' };
   }
