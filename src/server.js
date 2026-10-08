@@ -24,6 +24,7 @@ const { createOutcomeHarvester } = require('./evidence/outcomeHarvester');
 const { createResearchCandidateHarvester } = require('./evidence/researchCandidateHarvester');
 const { buildEvidenceIntelligence } = require('./evidence/evidenceIntelligence');
 const { createEvidenceArchive } = require('./evidence/evidenceArchive');
+const { buildWebPush } = require('./notifications/edgeWebPush');
 const { buildEvidenceHealth } = require('./evidence/evidenceHealth');
 const { buildSignalFunnel } = require('./evidence/signalFunnel');
 const { buildPriceActionResearch } = require('./evidence/priceActionResearch');
@@ -34,6 +35,7 @@ const express = require('express');
 
 const app = express();
 app.use(express.json());
+const edgeWebPush = buildWebPush();
 
 const ALLOWED_ORIGINS = (process.env.EDGE_ALLOWED_ORIGINS || 'https://edge-backend-mbcs.vercel.app,http://localhost:3000,capacitor://localhost,http://localhost')
   .split(',').map(s => s.trim()).filter(Boolean);
@@ -47,6 +49,9 @@ app.use((req, res, next) => {
   if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
 });
+
+// Web Push routes must be registered AFTER CORS middleware for iPhone PWA access.
+edgeWebPush.routes(app);
 
 const PORT = process.env.PORT || 10000;
 const UPSTOX_TOKEN = process.env.UPSTOX_ACCESS_TOKEN || '';
@@ -1111,6 +1116,8 @@ async function poll() {
         if (evidenceStore.append(transition) === false) throw new Error('EVIDENCE_TRANSITION_APPEND_FAILED');
         lastDecisionFingerprint = decisionFingerprint;
       }
+      // Presentation-only alert producer. Never affects signal generation, evidence or trade gates.
+      edgeWebPush.onSuccessfulPoll(result);
     }
     backoffMs = 30000;
   } catch (err) {
