@@ -25,6 +25,7 @@ const { createResearchCandidateHarvester } = require('./evidence/researchCandida
 const { buildEvidenceIntelligence } = require('./evidence/evidenceIntelligence');
 const { createEvidenceArchive } = require('./evidence/evidenceArchive');
 const { buildWebPush } = require('./notifications/edgeWebPush');
+const { dashboardAvailability, isLiveDataFresh } = require('./health/marketFreshness');
 const { buildEvidenceHealth } = require('./evidence/evidenceHealth');
 const { buildSignalFunnel } = require('./evidence/signalFunnel');
 const { buildPriceActionResearch } = require('./evidence/priceActionResearch');
@@ -1137,7 +1138,16 @@ app.get('/', (req, res) => {
 });
 
 const dataHandler = (req, res) => {
-  if (!lastResult) return res.status(503).json({ error: 'No data yet', phase: getMarketPhase(), tokenExpired, lastError });
+  res.setHeader('Cache-Control', 'no-store');
+  const phase = getMarketPhase();
+  const availability = dashboardAvailability(phase, lastResult, lastFetchTime);
+  if (!availability.ok) return res.status(503).json({
+    error: availability.reason,
+    phase,
+    lastFetch: lastFetchTime,
+    tokenExpired,
+    lastError
+  });
   res.json(lastResult);
 };
 app.get('/data', dataHandler);
@@ -1150,6 +1160,7 @@ app.get('/api/v1/market/status', (req, res) => {
     tokenExpired,
     serverTime: new Date().toISOString(),
     lastFetch: lastFetchTime,
+    liveDataFresh: isLiveDataFresh(lastFetchTime),
     minutesRemaining: getMinutesRemainingIST(),
     nextOpen: nextOpen ? nextOpen.toISOString() : null
   });
