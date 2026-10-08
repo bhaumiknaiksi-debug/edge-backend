@@ -1,0 +1,34 @@
+# Temporary maintenance workflow; removed from PR after lockfile regenerated.
+name: Generate EDGE Web Push lockfile
+on:
+  pull_request:
+    paths:
+      - "package.json"
+      - ".github/workflows/temp-push-lockfile.yml"
+permissions:
+  contents: write
+jobs:
+  update-lockfile:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          persist-credentials: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Regenerate lockfile with no install scripts
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+      - name: Commit regenerated lockfile into PR
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package-lock.json
+          if git diff --cached --quiet; then
+            echo "Already up to date"
+          else
+            git commit -m "Sync Web Push dependency lockfile"
+            git push origin HEAD:${{ github.head_ref }}
+          fi
