@@ -26,6 +26,7 @@ const { buildEvidenceIntelligence } = require('./evidence/evidenceIntelligence')
 const { createEvidenceArchive } = require('./evidence/evidenceArchive');
 const { buildWebPush } = require('./notifications/edgeWebPush');
 const { dashboardAvailability, isLiveDataFresh } = require('./health/marketFreshness');
+const { nextMarketOpenIST } = require('./health/marketClock');
 const { buildEvidenceHealth } = require('./evidence/evidenceHealth');
 const { buildSignalFunnel } = require('./evidence/signalFunnel');
 const { buildPriceActionResearch } = require('./evidence/priceActionResearch');
@@ -142,19 +143,7 @@ function getMinutesRemainingIST() {
 }
 
 function getNextOpenIST() {
-  const now = new Date();
-  const ist = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
-  for (let offset = 0; offset < 14; offset++) {
-    const candidate = new Date(ist);
-    candidate.setDate(ist.getDate() + offset);
-    candidate.setHours(9, 15, 0, 0);
-    const day = candidate.getDay();
-    const iso = candidate.getFullYear() + '-' + String(candidate.getMonth() + 1).padStart(2, '0') + '-' + String(candidate.getDate()).padStart(2, '0');
-    const tradingDay = day !== 0 && day !== 6 && !NSE_FO_HOLIDAYS_2026.has(iso);
-    if (!tradingDay) continue;
-    if (offset > 0 || candidate > ist) return candidate;
-  }
-  return null;
+  return nextMarketOpenIST(new Date(), NSE_FO_HOLIDAYS_2026);
 }
 
 // --- Upstox: get nearest expiry ---
