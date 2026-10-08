@@ -36,7 +36,6 @@ const express = require('express');
 const app = express();
 app.use(express.json());
 const edgeWebPush = buildWebPush();
-edgeWebPush.routes(app);
 
 const ALLOWED_ORIGINS = (process.env.EDGE_ALLOWED_ORIGINS || 'https://edge-backend-mbcs.vercel.app,http://localhost:3000,capacitor://localhost,http://localhost')
   .split(',').map(s => s.trim()).filter(Boolean);
@@ -50,6 +49,9 @@ app.use((req, res, next) => {
   if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
 });
+
+// Web Push routes must be registered AFTER CORS middleware for iPhone PWA access.
+edgeWebPush.routes(app);
 
 const PORT = process.env.PORT || 10000;
 const UPSTOX_TOKEN = process.env.UPSTOX_ACCESS_TOKEN || '';
