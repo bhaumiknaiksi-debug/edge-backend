@@ -53,3 +53,87 @@ const stale = summarizeDecision(decision('READY_TO_EXECUTE', true, 'OPEN', new D
 assert.equal(stale, null, 'No stale market signal');
 assert.equal(makeTransition({ ...waiting, observedAt: new Date(Date.now()-180000).toISOString() }, ready), null, 'No stale transition');
 console.log('EDGE Web Push security and authoritative transition tests PASS');
+
+async function integration() {
+  const previousWaiting = summarizeDecision(decision('WAIT_FOR_TRIGGER', false));
+  const fake = {
+    current: previousWaiting,
+    sends: [],
+    pool: null,
+    failInitialization: false
+  };
+  const client = {
+    async query(sql, params) {
+      if (sql === 'BEGIN' || sql === 'COMMIT' || sql === 'ROLLBACK') return { rows: [] };
+      if (sql.includes('INSERT INTO edge_push_state')) {
+        if (!fake.current) fake.current = JSON.parse(params[0]);
+        return { rowCount: 1, rows: [] };
+      }
+      if (sql.includes("SELECT payload FROM edge_push_state")) {
+        return { rows: [{ payload: fake.current }], rowCount: 1 };
+      }
+      if (sql.includes('UPDATE edge_push_state')) {
+        fake.current = JSON.parse(params[0]);
+        return { rowCount: 1, rows: [] };
+      }
+      throw new Error('unexpected PG statement: ' + sql);
+    },
+    release() {}
+  };
+  fake.pool = {
+    async query(sql) {
+      if (fake.failInitialization && sql.includes('CREATE TABLE')) throw new Error('database temporarily offline');
+      if (sql.includes('CREATE TABLE')) return { rows: [] };
+      if (sql.includes('SELECT endpoint_hash, subscription FROM edge_push_subscriptions')) {
+        return { rows: [{ endpoint_hash: 'hash', subscription: base }] };
+      }
+      throw new Error('unexpected pool statement: ' + sql);
+    },
+    async connect() { return client; }
+  };
+  const sender = {
+    setVapidDetails() {},
+    async sendNotification(_sub, payload) {
+      fake.sends.push(JSON.parse(payload));
+      return { statusCode: 201 };
+    }
+  };
+  const env = {
+    EDGE_PUSH_VAPID_PUBLIC_KEY: 'A'.repeat(87),
+    EDGE_PUSH_VAPID_PRIVATE_KEY: 'B'.repeat(43),
+    EDGE_PUSH_VAPID_SUBJECT: 'mailto:edge@example.com',
+    EDGE_PUSH_OWNER_TOKEN: 'z'.repeat(32),
+    EDGE_PUSH_DATABASE_URL: 'postgresql://localhost/fake',
+    EDGE_PUSH_AUTO_ALERTS: 'true'
+  };
+  const { buildWebPush } = require('./edgeWebPush');
+  const manager = buildWebPush(env, { pool: fake.pool, sender });
+  assert.equal(await manager.initialize(), true);
+  await manager.onSuccessfulPoll(decision('READY_TO_EXECUTE', true));
+  assert.equal(fake.sends.length, 0, 'First successful poll after restart must not send a retroactive READY notification');
+  await manager.onSuccessfulPoll(decision('WAIT_FOR_TRIGGER', false));
+  assert.equal(fake.sends.length, 1, 'Fresh READY invalidation should notify exactly once');
+  assert.equal(fake.sends[0].type, 'READY_INVALIDATED');
+  await manager.onSuccessfulPoll(decision('WAIT_FOR_TRIGGER', false));
+  assert.equal(fake.sends.length, 1, 'Stable state must not emit duplicates');
+  await manager.onSuccessfulPoll(decision('READY_TO_EXECUTE', true));
+  assert.equal(fake.sends.length, 2);
+  assert.equal(fake.sends[1].type, 'EXECUTION_READY');
+
+  // Retry logic must reinitialize successfully after transient storage downtime.
+  fake.failInitialization = true;
+  const second = buildWebPush(env, { pool: fake.pool, sender });
+  assert.equal(await second.initialize(), false);
+  fake.failInitialization = false;
+  const realDateNow = Date.now;
+  try {
+    const baseTime = realDateNow();
+    Date.now = () => baseTime + 16000;
+    assert.equal(await second.initialize(), true, 'Push storage should retry after a transient outage');
+  } finally {
+    Date.now = realDateNow;
+  }
+  console.log('EDGE Web Push persistence, restart and retry tests PASS');
+}
+integration().catch(error => { console.error(error); process.exitCode = 1; });
+
