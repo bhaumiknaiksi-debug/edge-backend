@@ -35,7 +35,7 @@ const express = require('express');
 const app = express();
 app.use(express.json());
 
-const ALLOWED_ORIGINS = (process.env.EDGE_ALLOWED_ORIGINS || 'https://edge-backend-mbcs.vercel.app,http://localhost:3000')
+const ALLOWED_ORIGINS = (process.env.EDGE_ALLOWED_ORIGINS || 'https://edge-backend-mbcs.vercel.app,http://localhost:3000,capacitor://localhost,http://localhost')
   .split(',').map(s => s.trim()).filter(Boolean);
 app.use((req, res, next) => {
   const origin = req.headers.origin;
