@@ -1,0 +1,56 @@
+name: EDGE free-tier market-hours heartbeat
+
+# Best-effort market-session availability, NOT a reliable push transport.
+# GitHub may delay or drop scheduled workflows. Render may still recycle free instances.
+on:
+  schedule:
+    - cron: '*/10 3-10 * * 1-5'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: edge-market-heartbeat
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Check only during Indian trading hours
+        shell: bash
+        env:
+          EDGE_MARKET_STATUS_URL: https://edge-backend-r1ng.onrender.com/api/v1/market/status
+        run: |
+          set -euo pipefail
+          weekday=$(TZ=Asia/Kolkata date +%u)
+          clock=$(TZ=Asia/Kolkata date +%H%M)
+          if (( weekday > 5 || 10#$clock < 900 || 10#$clock > 1540 )); then
+            echo "Outside weekday market window in IST; skipping."
+            exit 0
+          fi
+          # A single GET wakes an idle Render service without touching trade APIs.
+          # Do not call /api/v1/dashboard or execution endpoints.
+          response="$(mktemp)"
+          code="$(curl --silent --show-error --location --retry 1 --retry-delay 2 \
+            --connect-timeout 15 --max-time 110 \
+            --output "$response" --write-out '%{http_code}' "$EDGE_MARKET_STATUS_URL")"
+          if [[ "$code" != "200" ]]; then
+            echo "EDGE status HTTP $code"
+            exit 1
+          fi
+          node -e '
+            const fs = require("node:fs");
+            const x = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            if (!x.serverTime || !["OPEN","PRE_OPEN","CLOSED"].includes(x.phase)) process.exit(1);
+            const age = Math.abs(Date.now() - Date.parse(x.serverTime));
+            if (!Number.isFinite(age) || age > 120000) process.exit(1);
+            console.log("EDGE HTTP reachable. Market phase:", x.phase,
+              "dataFresh:", x.liveDataFresh, "lastFetch:", x.lastFetch);
+            if (x.phase === "OPEN" && x.liveDataFresh !== true) {
+              console.error("EDGE reachable, but live market data is stale.");
+              process.exitCode = 1;
+            }
+          ' "$response"
