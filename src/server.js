@@ -265,6 +265,7 @@ function analyse(chain, expiryDate, marketContext = null) {
       strike: s.strike_price,
       pcr: s.pcr || (peOI / (ceOI || 1)),
       ceOI, peOI, ceLTP, peLTP,
+      ceBid, ceAsk, peBid, peAsk,
       ceDelta, peDelta,
       ceIV, peIV, ceTheta, peTheta,
       ceVega, ceGamma, peGamma,
