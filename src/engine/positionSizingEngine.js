@@ -63,7 +63,8 @@ function buildPositionPlan({
   account = {},
   marketPhase = 'CLOSED',
   dailyLossRupees = 0,
-  openRiskRupees = 0
+  openRiskRupees = 0,
+  budget
 }) {
   if (!strategy || strategy === 'WAIT' || !tradeLegs) {
     return { status: 'UNAVAILABLE', reason: 'No qualified trade structure.' };
@@ -76,6 +77,8 @@ function buildPositionPlan({
   if (marketPhase !== 'OPEN') {
     return { status: 'CONDITIONAL', reason: 'Sizing is defined but market is not OPEN.', marketPhase };
   }
+
+  if (budget !== undefined) return ledgerPosition({strategy,tradeLegs,risk,budget});
 
   const maxRisk = maxRiskForAccount(account);
   const dailyLimit = n(account?.dailyLossLimitRupees);
@@ -140,4 +143,27 @@ function buildPositionPlan({
   };
 }
 
+
+function ledgerPosition({strategy,tradeLegs,risk,budget}) {
+  const blocked = reason => ({status:'BLOCKED',reason,recommendedLots:0,actualRiskRupees:0});
+  if (!budget || budget.error || !budget.confirmed) return blocked('Confirm today’s trade log matches your broker before entry.');
+  if (budget.locked || !(budget.availableRisk > 0)) return blocked('Daily loss allowance is exhausted or reserved by open trades.');
+  if (!Number.isFinite(Date.parse(budget.checkedAt)) || Date.now()-Date.parse(budget.checkedAt)>60000) return blocked('Trade log is stale. Refresh before entry.');
+  const lotSize=n(tradeLegs.lotSize), perLot=lotRisk(strategy,tradeLegs,risk);
+  if(!lotSize||!perLot)return blocked('Risk per lot is unavailable.');
+  const debitStrategies=['LONG_CALL','LONG_PUT','BULL_CALL_SPREAD','BEAR_PUT_SPREAD'];
+  if(!debitStrategies.includes(strategy))return blocked('Broker margin for this credit strategy is unverified; capital fit cannot be established.');
+  const buy=n(tradeLegs.buyLeg?.ask),sell=tradeLegs.sellLeg?n(tradeLegs.sellLeg.bid):0;
+  if(!(buy>0)||sell===null||buy<=sell)return blocked('Executable debit quote is unavailable.');
+  const debit=buy-sell;
+  // A visible conservative estimate, not a broker fee quote or guaranteed loss cap.
+  const costsPerLot=100;
+  const quoteRisk = strategy.startsWith('LONG_') ? (buy-n(risk.stop?.value))*lotSize : debit*lotSize;
+  const riskPerLot=round(Math.max(perLot.rupees,quoteRisk)+costsPerLot);
+  const capitalPerLot=round(debit*lotSize+costsPerLot);
+  const riskBudget=Math.min(1000,budget.availableRisk),capitalBudget=Math.min(10000,budget.availableCapital);
+  const lots=Math.floor(Math.min(riskBudget/riskPerLot,capitalBudget/capitalPerLot));
+  if(lots<1)return {...blocked('One lot exceeds remaining capital or planned loss allowance.'),riskPerLotRupees:riskPerLot,capitalPerLotRupees:capitalPerLot};
+  return {status:'READY',model:'MANUAL_LEDGER_RISK',recommendedLots:lots,lotSize,actualRiskRupees:round(lots*riskPerLot),riskPerLotRupees:riskPerLot,availableRiskRupees:riskBudget,capitalRequiredRupees:round(lots*capitalPerLot),availableCapitalRupees:capitalBudget,estimatedCostsRupees:costsPerLot*lots,rule:'Planned stop risk plus ₹100 per lot cost/slippage reserve. Actual fills can exceed planned loss. Manual records must include all open positions.'};
+}
 module.exports = { buildPositionPlan };

@@ -18,6 +18,9 @@ const { buildGammaConcentration } = require('./engine/gammaConcentration');
 const { buildOptionExecutionIntelligence } = require('./engine/optionExecutionIntelligence');
 const { buildVolatilityContext } = require('./engine/volatilityEngine');
 const { evidenceKey } = require('./evidence/evidenceEngine');
+const { createDatabase } = require('./storage/database');
+const { createPostgresEvidenceStore } = require('./evidence/postgresEvidenceStore');
+const { createLedger } = require('./trading/ledger');
 const { createEvidenceStore } = require('./evidence/evidenceStore');
 const { setupFeatureTags, setupEvidenceKey } = require('./evidence/setupEvidence');
 const { createOutcomeHarvester } = require('./evidence/outcomeHarvester');
@@ -38,6 +41,9 @@ const express = require('express');
 const app = express();
 app.use(express.json());
 const edgeWebPush = buildWebPush();
+const dataPool = createDatabase();
+let ledgerEpoch = 0;
+const ledger = createLedger({getPlan:()=>lastResult?{timestamp:lastResult.timestamp,strategy:lastResult.decision?.strategy,entry:lastResult.decision?.entry,risk:lastResult.decision?.risk,position:lastResult.decision?.position,orchestration:lastResult.decision?.orchestration}:null,pool:dataPool,ownerToken:process.env.EDGE_PUSH_OWNER_TOKEN,onChange:()=>{ledgerEpoch++;lastResult=null;lastFetchTime=0;}});
 
 const ALLOWED_ORIGINS = (process.env.EDGE_ALLOWED_ORIGINS || 'https://edge-backend-mbcs.vercel.app,http://localhost:3000,capacitor://localhost,http://localhost')
   .split(',').map(s => s.trim()).filter(Boolean);
@@ -54,6 +60,7 @@ app.use((req, res, next) => {
 
 // Web Push routes must be registered AFTER CORS middleware for iPhone PWA access.
 edgeWebPush.routes(app);
+ledger.routes(app);
 
 const PORT = process.env.PORT || 10000;
 const UPSTOX_TOKEN = process.env.UPSTOX_ACCESS_TOKEN || '';
@@ -104,8 +111,9 @@ let lastError = null;
 const HISTORY_LIMIT = 500;
 const history = [];
 const EVIDENCE_LIMIT = 10000;
-const evidenceStore = createEvidenceStore({ limit: EVIDENCE_LIMIT });
-const evidenceSnapshots = evidenceStore.load();
+const localEvidenceStore = createEvidenceStore({ limit: EVIDENCE_LIMIT });
+const evidenceStore = dataPool ? createPostgresEvidenceStore({pool:dataPool,limit:EVIDENCE_LIMIT}) : localEvidenceStore;
+const evidenceSnapshots = dataPool ? [] : localEvidenceStore.load();
 const evidenceArchive = createEvidenceArchive();
 let lastDecisionFingerprint = null;
 const outcomeHarvester = createOutcomeHarvester({ store: evidenceStore, snapshots: evidenceSnapshots, token: UPSTOX_TOKEN });
@@ -743,12 +751,11 @@ function analyse(chain, expiryDate, marketContext = null) {
   });
 
   // --- Phase 7 position sizing ---
-  // Account settings are supplied through environment variables so the
-  // frontend never receives or controls sizing policy.
+  // Initial owner-agreed ceilings; the private ledger supplies remaining capacity.
   const account = {
-    capital: parseFloat(process.env.EDGE_ACCOUNT_CAPITAL || ''),
-    maxRiskPct: parseFloat(process.env.EDGE_MAX_RISK_PCT || ''),
-    dailyLossLimitRupees: parseFloat(process.env.EDGE_DAILY_LOSS_LIMIT || '')
+    capital: 10000,
+    maxRiskPct: 10,
+    dailyLossLimitRupees: 1000
   };
   const positionPlan = buildPositionPlan({
     strategy,
@@ -756,8 +763,7 @@ function analyse(chain, expiryDate, marketContext = null) {
     risk: riskPlan,
     account,
     marketPhase: getMarketPhase(),
-    dailyLossRupees: 0,
-    openRiskRupees: 0
+    budget: ledger.snapshot()
   });
 
   const orchestration = buildDecisionOrchestration({
@@ -1020,6 +1026,8 @@ async function poll() {
     } catch (contextErr) {
       console.error('[market context]', contextErr.message);
     }
+    await ledger.refresh();
+    const analysedEpoch = ledgerEpoch;
     const result = analyse(chain, nearestExpiry, marketContext);
     if (result) {
       try {
@@ -1034,8 +1042,8 @@ async function poll() {
           available:false,error:optionChartErr.message
         };
       }
-      lastResult = result;
-      lastFetchTime = Date.now();
+      if (analysedEpoch !== ledgerEpoch) throw new Error('LEDGER_CHANGED_DURING_ANALYSIS');
+
       fetchErrorCount = 0;
       lastError = null;
       // Append slim snapshot to history for session grading
@@ -1091,7 +1099,7 @@ async function poll() {
       evidenceSnapshot.evidenceKey = evidenceKey(evidenceSnapshot);
       evidenceSnapshot.setupFeatureTags = setupFeatureTags(evidenceSnapshot);
       evidenceSnapshot.setupEvidenceKey = setupEvidenceKey(evidenceSnapshot);
-      if (evidenceStore.append(evidenceSnapshot) === false) throw new Error('EVIDENCE_STORE_APPEND_FAILED');
+      if (await evidenceStore.append(evidenceSnapshot) === false) throw new Error('EVIDENCE_STORE_APPEND_FAILED');
       evidenceSnapshots.push(evidenceSnapshot);
       if (evidenceSnapshots.length > EVIDENCE_LIMIT) evidenceSnapshots.shift();
 
@@ -1104,14 +1112,18 @@ async function poll() {
       ].join('|');
       if (decisionFingerprint !== lastDecisionFingerprint) {
         const transition = { ...evidenceSnapshot, id: evidenceSnapshot.id + '|TRANSITION', recordType: 'DECISION_TRANSITION' };
-        if (evidenceStore.append(transition) === false) throw new Error('EVIDENCE_TRANSITION_APPEND_FAILED');
+        if (await evidenceStore.append(transition) === false) throw new Error('EVIDENCE_TRANSITION_APPEND_FAILED');
         lastDecisionFingerprint = decisionFingerprint;
       }
+      if (analysedEpoch !== ledgerEpoch) throw new Error('LEDGER_CHANGED_DURING_PERSISTENCE');
+      lastResult = result;
+      lastFetchTime = Date.now();
       // Presentation-only alert producer. Never affects signal generation, evidence or trade gates.
       edgeWebPush.onSuccessfulPoll(result);
     }
     backoffMs = 30000;
   } catch (err) {
+    lastResult = null;
     fetchErrorCount++;
     lastError = { message: err.message, time: new Date().toISOString() };
     backoffMs = Math.min(backoffMs * 2, 300000);
@@ -1138,6 +1150,7 @@ const dataHandler = (req, res) => {
     tokenExpired,
     lastError
   });
+  if (lastResult?.decision?.orchestration?.status === 'READY_TO_EXECUTE' && !ledger.snapshot().confirmed) return res.status(503).json({error:'TRADE_LOG_RECHECK_REQUIRED',phase});
   res.json(lastResult);
 };
 app.get('/data', dataHandler);
@@ -1199,21 +1212,22 @@ app.get('/evidence/intelligence', (req,res) => {
 
 app.get('/evidence/status', (req,res) => {
   const counts = evidenceSnapshots.reduce((a,r)=>{a[r.recordType||'UNKNOWN']=(a[r.recordType||'UNKNOWN']||0)+1;return a;},{});
-  res.json({ total:evidenceSnapshots.length, counts, storage:evidenceStore.status(), archive:evidenceArchive.status(), harvester:outcomeHarvester.getStatus(), researchCandidateHarvester:researchCandidateHarvester.getStatus(), lastDecisionFingerprint });
+  res.json({ total:evidenceSnapshots.length, counts, storage:evidenceStore.status(), archive:dataPool?{configured:false,provider:'POSTGRES_PRIMARY'}:evidenceArchive.status(), harvester:outcomeHarvester.getStatus(), researchCandidateHarvester:researchCandidateHarvester.getStatus(), lastDecisionFingerprint });
 });
 
 app.get('/evidence/health', (req,res) => {
   res.json(buildEvidenceHealth({
     rows:evidenceSnapshots,
     storage:evidenceStore.status(),
-    archive:evidenceArchive.status(),
+    archive:dataPool?{configured:false,provider:'POSTGRES_PRIMARY'}:evidenceArchive.status(),
     harvester:outcomeHarvester.getStatus()
   }));
 });
 
 app.post('/evidence/archive/verify', async (req,res) => {
+  if(dataPool)return res.status(409).json({error:'POSTGRES_IS_PRIMARY_STORE'});
   const result = await evidenceArchive.verify(evidenceSnapshots.slice());
-  res.status(result.ok ? 200 : 503).json({ ...result, archive:evidenceArchive.status() });
+  res.status(result.ok ? 200 : 503).json({ ...result, archive:dataPool?{configured:false,provider:'POSTGRES_PRIMARY'}:evidenceArchive.status() });
 });
 
 app.post('/evidence/harvest', async (req,res) => {
@@ -1233,6 +1247,17 @@ app.get('/history', (req, res) => {
 const server = http.createServer(app);
 
 async function restoreEvidenceArchive() {
+  if (dataPool) {
+    await evidenceStore.load();
+    // Import existing local observations without duplicating already persisted IDs.
+    for(const row of localEvidenceStore.load()) {
+      if(!await evidenceStore.append(row)) throw new Error('EVIDENCE_MIGRATION_FAILED');
+    }
+    const merged=await evidenceStore.load();
+    evidenceSnapshots.splice(0,evidenceSnapshots.length,...merged);
+    console.log('[evidence postgres] restored',merged.length,'records');
+    return;
+  }
   const restored = await evidenceArchive.restore();
   if (restored.restored) {
     const merged = new Map();
@@ -1264,7 +1289,7 @@ async function gracefulShutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log('[shutdown]', signal, '- checkpointing evidence');
-  try { await evidenceArchive.backup(evidenceSnapshots); } catch (err) { console.error('[evidence archive] shutdown backup failed:', err.message); }
+  try { if (!dataPool) await evidenceArchive.backup(evidenceSnapshots); } catch (err) { console.error('[evidence archive] shutdown backup failed:', err.message); }
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 10000).unref();
 }
@@ -1276,7 +1301,12 @@ server.listen(PORT, async () => {
   const probeUrl = new URL('https://api.upstox.com/v2/option/contract');
   probeUrl.searchParams.set('instrument_key', 'NSE_INDEX|Nifty 50');
   console.log('[upstox] expiry URL constructed:', probeUrl.toString());
-  await restoreEvidenceArchive();
+  try { await restoreEvidenceArchive(); }
+  catch (_) {
+    console.error('[evidence] durable restore failed; startup will retry');
+    setTimeout(()=>process.exit(1),1000);
+    return;
+  }
   outcomeHarvester.start();
   researchCandidateHarvester.start();
   poll();

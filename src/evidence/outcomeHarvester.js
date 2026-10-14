@@ -133,7 +133,7 @@ function createOutcomeHarvester({store,snapshots,token,intervalMs=60000,horizonM
         const recId=snap.id+'|OUTCOME|'+attempt;
         if(existingIds.has(recId)){status.skipped++;continue;}
         const rec={id:recId,recordType:'OUTCOME',timestamp:new Date().toISOString(),snapshotId:snap.id,attempt,nextRetryAt:measured||terminalFailure?null:new Date(now+retryDelay(attempt)).toISOString(),evidenceKey:snap.evidenceKey,setupEvidenceKey:snap.setupEvidenceKey,snapshot:snap,outcome};
-        if(store.append(rec)===false)throw new Error('EVIDENCE_STORE_APPEND_FAILED');
+        if(await store.append(rec)===false)throw new Error('EVIDENCE_STORE_APPEND_FAILED');
         snapshots.push(rec); existingIds.add(recId); attempts.set(snap.id,attempt);
         if(measured){terminal.add(snap.id);status.measured++;}
         else if(terminalFailure){terminal.add(snap.id);status.terminalFailures++;}
