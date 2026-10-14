@@ -74,7 +74,7 @@ function createResearchCandidateHarvester({store,snapshots,token,intervalMs=6000
           const rec={id:recId,recordType:'RESEARCH_CANDIDATE_OUTCOME',timestamp:new Date().toISOString(),snapshotId:snap.id,tier,attempt,
             candidateKey:planKey(snap.researchCandidatePlans.plans[tier]),nextRetryAt:measured||terminalFailure?null:new Date(now+retryDelay(attempt)).toISOString(),
             snapshot:synthetic,outcome};
-          if(store.append(rec)===false)throw new Error('RESEARCH_EVIDENCE_STORE_APPEND_FAILED');
+          if(await store.append(rec)===false)throw new Error('RESEARCH_EVIDENCE_STORE_APPEND_FAILED');
           snapshots.push(rec);existing.add(recId);attempts.set(stateKey,attempt);
           if(measured){terminal.add(stateKey);status.measured[tier]++;}
           else if(terminalFailure){terminal.add(stateKey);status.terminalFailures++;}

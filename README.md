@@ -1,0 +1,10 @@
+
+## Durable evidence and manual trade ledger
+
+`EDGE_DATA_DATABASE_URL` (or the existing `EDGE_PUSH_DATABASE_URL`) selects PostgreSQL as the primary evidence store. Apply `src/storage/schema.sql` with `npm run migrate:data` before deploying. This is additive: it preserves push subscriptions and settings. Snapshots, tier candidates, transitions and harvested outcomes are gzip-compressed and keyed for idempotent inserts. Records are retained in PostgreSQL; the latest 10,000 are restored for in-memory analysis. Restore failures stop startup; append failures prevent publishing a fresh decision. Local JSONL remains a development fallback only when no database is configured.
+
+The private `/api/v1/trades` routes use the existing alert owner code as a Bearer token. GET reads records; POST `/open`, `/close`, `/confirm` requires a unique `requestId` for retry safety. Entries describe **actual broker fills**, including fills outside policy; these routes never place broker orders. Close records require actual total charges. All writes serialize on the owner row in a database transaction.
+
+Sizing uses a ₹10,000 capital ceiling and ₹1,000 daily planned-loss allowance, including existing open risk and a ₹100-per-lot estimated cost/slippage reserve. Recorded cumulative net losses reduce capital availability; profits do not raise the ceiling. Daily reconciliation resets at 09:15 IST. Reaching a realised net loss of ₹1,000 locks entries for that session, even if subsequent gains recover it. An unreconciled, stale or unavailable ledger blocks entries. Credit strategies remain blocked without verified broker margin. Stops can slip: these are planning controls, not guaranteed loss caps or broker-side enforcement.
+
+Control → Manual trade log supports whole-position entries/closes. Split fills must be logged separately. Historical records are not automatically reconstructed, and no broker reconciliation is automatic. Database persistence does not prevent a free hosting instance from sleeping; missed market observations cannot be recovered by this storage change.
