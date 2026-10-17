@@ -1,6 +1,7 @@
 'use strict';
 const { istParts } = require('../evidence/evidenceHealth');
 const { timingSafeOwnerToken } = require('../notifications/edgeWebPush');
+const { importBrokerFills, summarizeBroker } = require('./kiteTradebook');
 const CAPITAL = 10000, DAILY = 1000, PER_TRADE = 1000;
 const money = n => Math.round(n * 100) / 100;
 function number(v, name, min = 0) {
@@ -25,7 +26,9 @@ function apply(state, operation, input, now = new Date()) {
   if (!/^[a-zA-Z0-9_-]{16,100}$/.test(input.requestId || '')) throw new Error('INVALID_REQUEST_ID');
   if (s.operations.includes(input.requestId)) return s;
   const time = new Date(now).toISOString();
-  if (operation === 'confirm') {
+  if (operation === 'import') {
+    importBrokerFills(s,input); // Historical broker fills, excluded from live ledger budget.
+  } else if (operation === 'confirm') {
     if (input.reconciled !== true) throw new Error('RECONCILIATION_REQUIRED');
     s.confirmedDay = day(now);
   } else if (operation === 'open') {
@@ -78,8 +81,16 @@ function createLedger({ pool, ownerToken, onChange = ()=>{}, getPlan = ()=>null 
       const r=await c.query("SELECT payload FROM edge_trade_ledger_v1 WHERE owner_id='owner' FOR UPDATE");
       const next=apply(r.rows[0].payload,op,input);
       await c.query("UPDATE edge_trade_ledger_v1 SET payload=$1,updated_at=now() WHERE owner_id='owner'",[JSON.stringify(next)]);
-      await c.query('COMMIT');generation++;current=next;error=null;loadedAt=Date.now();onChange();
-      return {budget:budget(next),trades:next.trades};
+      await c.query('COMMIT');generation++;current=next;error=null;loadedAt=Date.now();
+      // Importing historical records must not blank the live dashboard or alter trade approval.
+      if(op!=='import')onChange();
+      const result={budget:budget(next),trades:next.trades};
+      if(op==='import'){
+        result.broker=summarizeBroker(next);
+        result.importResult={added:(next.brokerFills||[]).length-(r.rows[0].payload.brokerFills||[]).length,
+          duplicates:(input.fills||[]).length-((next.brokerFills||[]).length-(r.rows[0].payload.brokerFills||[]).length)};
+      }
+      return result;
     } catch(e){await c.query('ROLLBACK');throw e;}finally{c.release();}
   }
   function routes(app) {
@@ -89,8 +100,8 @@ function createLedger({ pool, ownerToken, onChange = ()=>{}, getPlan = ()=>null 
       if(!ownerToken||!auth.startsWith('Bearer ')||!timingSafeOwnerToken(auth.slice(7),ownerToken))return res.status(401).json({error:'OWNER_AUTH_REQUIRED'});
       try{if(!pool)throw new Error('LEDGER_UNAVAILABLE');return await fn(req,res);}catch(e){const validation=/^(INVALID_|TRADE_NOT_OPEN|STOP_|RECONCILIATION_)/.test(e.message);return res.status(validation?400:503).json({error:validation?e.message:'LEDGER_UNAVAILABLE'});}
     };
-    app.get('/api/v1/trades',guard(async(_req,res)=>{if(!await refresh())throw new Error();res.json({budget:snapshot(),trades:current.trades,plan:getPlan()});}));
-    for(const op of ['confirm','open','close'])app.post('/api/v1/trades/'+op,guard(async(req,res)=>res.json(await mutate(op,req.body||{}))));
+    app.get('/api/v1/trades',guard(async(_req,res)=>{if(!await refresh())throw new Error();res.json({budget:snapshot(),trades:current.trades,broker:summarizeBroker(current),plan:getPlan()});}));
+    for(const op of ['confirm','open','close','import'])app.post('/api/v1/trades/'+op,guard(async(req,res)=>res.json(await mutate(op,req.body||{}))));
   }
   return { refresh, snapshot, routes };
 }
