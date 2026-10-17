@@ -1,4 +1,12 @@
 
+
+### Kite Tradebook historical import (owner-only)
+`POST /api/v1/trades/import` accepts a maximum of 120 locally parsed, validated NIFTY option fills with `clientId`, `fills`, and a unique `requestId`. Each fill contains `symbol`, `exchange`, `tradeDate`, `time` (Kite local IST), `side`, `quantity`, `price`, `tradeId` and `orderId`.
+
+The route uses the same owner Bearer authentication as the manual ledger. Broker history is stored in a separate `brokerFills` field of the existing protected ledger JSONB payload: no schema migration, broker API credentials or brokerage orders. Imports retain original Kite execution timestamps, deduplicate overlapping uploads by Kite fill identity, reject conflicting fills/account mismatches, and build FIFO summaries for completed long NIFTY option cycles. Unmatched sells and open buys are flagged. Reports show **gross P&L only**: Excel tradebook fills do not include verified brokerage and statutory charges. `netPnl` stays null.
+
+**Safety invariant:** Imported broker history is excluded from daily reconciliation, live available-capital calculations, loss allowances, signal selection and entry approval. It does not invoke the market-poll-invalidating `onChange` callback. Existing manual `/open` and `/close` operations retain their semantics. Reconcile live broker positions using the manual ledger as before. This intentionally avoids incorrectly assigning historical trades to today.
+
 ## Durable evidence and manual trade ledger
 
 `EDGE_DATA_DATABASE_URL` (or the existing `EDGE_PUSH_DATABASE_URL`) selects PostgreSQL as the primary evidence store. Apply `src/storage/schema.sql` with `npm run migrate:data` before deploying. This is additive: it preserves push subscriptions and settings. Snapshots, tier candidates, transitions and harvested outcomes are gzip-compressed and keyed for idempotent inserts. Records are retained in PostgreSQL; the latest 10,000 are restored for in-memory analysis. Restore failures stop startup; append failures prevent publishing a fresh decision. Local JSONL remains a development fallback only when no database is configured.
