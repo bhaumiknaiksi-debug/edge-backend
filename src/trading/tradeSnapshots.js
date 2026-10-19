@@ -4,6 +4,7 @@
 const crypto=require('crypto');
 const {timingSafeOwnerToken}=require('../notifications/edgeWebPush');
 const {summarizeBroker}=require('./kiteTradebook');
+const {buildTradePlans}=require('./readOnlyTradePlanner');
 
 const ENABLED=process.env.EDGE_TRADE_SNAPSHOTS_ENABLED==='true';
 const ISO_RE=/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
@@ -50,6 +51,8 @@ function buildSnapshot(analysis,tier,expectedTimestamp,now=new Date()){
     source:'EDGE_BACKEND',tier,actualSignalTier:d.signalTier?.tier||'OBSERVING',
     strategy:plan.strategy||null,expiry:analysis.expiry||null,
     selectedCandidate:clone(plan),selectedLegs:candidateLegs(plan),
+    // Freeze the contemporaneous research hypothesis BEFORE importing Kite results.
+    tradePlan:clone(buildTradePlans(analysis).tiers[tier]),
     authorization:{executionAllowed:tier==='A'&&plan.executionAllowed===true&&d.orchestration?.status==='READY_TO_EXECUTE',
       researchOnly:tier!=='A',orchestrationStatus:d.orchestration?.status||null,
       failedGates:clone(d.signalTier?.failedGates||[]),blockers:clone(d.orchestration?.blockers||[])},
