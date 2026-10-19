@@ -38,7 +38,8 @@ function makePlan(analysis,tier){
     out.reasons.push('MULTI_LEG_MODEL_PENDING');return out;
   }
   const leg=legs[0],direction=plan.strategy==='LONG_CALL'?1:-1;
-  const ask=leg.ask,bid=leg.bid,delta=leg.delta;
+  // Authoritative A has legDelta at the tradeLegs root, while B/C put it on each leg.
+  const ask=leg.ask,bid=leg.bid,delta=leg.delta??num(plan.legs?.legDelta);
   out.contract=leg.contractId;
   out.thesisInvalidation=direction===1?support:resistance;
   if(direction===1&&!(support<spot&&resistance>spot) || direction===-1&&!(resistance>spot&&support<spot)){
