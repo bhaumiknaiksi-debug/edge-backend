@@ -11,3 +11,22 @@ CREATE TABLE IF NOT EXISTS edge_trade_ledger_v1 (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 INSERT INTO edge_trade_ledger_v1(owner_id,payload) VALUES ('owner','{"trades":[],"confirmedDay":null,"lockedDays":[],"operations":[]}') ON CONFLICT DO NOTHING;
+
+-- Additive schema only; no existing ledger or evidence table is altered.
+CREATE TABLE IF NOT EXISTS edge_trade_snapshots_v1 (
+ id uuid PRIMARY KEY,
+ owner_id text NOT NULL CHECK (owner_id = 'owner'),
+ request_id uuid NOT NULL,
+ analysis_at timestamptz NOT NULL,
+ captured_at timestamptz NOT NULL,
+ tier text NOT NULL CHECK (tier IN ('A','B','C')),
+ payload jsonb NOT NULL,
+ UNIQUE (owner_id,request_id)
+);
+CREATE INDEX IF NOT EXISTS edge_trade_snapshots_v1_time ON edge_trade_snapshots_v1(owner_id,captured_at DESC);
+CREATE TABLE IF NOT EXISTS edge_trade_snapshot_matches_v1 (
+ snapshot_id uuid PRIMARY KEY REFERENCES edge_trade_snapshots_v1(id) ON DELETE RESTRICT,
+ status text NOT NULL CHECK (status IN ('PENDING_TRADEBOOK','MATCHED','PARTIAL','AMBIGUOUS','UNMATCHED')),
+ details jsonb NOT NULL,
+ updated_at timestamptz NOT NULL DEFAULT now()
+);
