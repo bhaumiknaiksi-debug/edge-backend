@@ -105,7 +105,7 @@ function matchSnapshots(snapshots,fills,episodes=[]){
     const complete=selected.length>0&&legs.every(leg=>selected.some(f=>matchQuality(leg,f,s.payload.expiry)));
     const exact=qualities.length>0&&qualities.every(x=>x==='EXACT');
     const status=ambiguous||complete&&!exact?'AMBIGUOUS':complete?'MATCHED':selected.length?'PARTIAL':fills.length?'UNMATCHED':'PENDING_TRADEBOOK';
-    let grossPnl=null;
+    let grossPnl=null,matchedEpisode=null;
     if(status==='MATCHED'&&legs.length===1&&legs[0].side==='BUY'){
       // Attribute P&L only when this click accounts for the ENTIRE reconstructed
       // broker episode. Scale-ins and overlapping fills have no defensible
@@ -115,12 +115,28 @@ function matchSnapshots(snapshots,fills,episodes=[]){
       const epMatches=episodes.filter(ep=>ep.quantity===quantity&&
         Math.abs(ep.entry-weightedEntry)<=0.02&&
         selected.some(f=>f.symbol===ep.symbol&&Math.abs(parseIst(ep.openedAt)-parseIst(f.time))<=60000));
-      if(epMatches.length===1)grossPnl=epMatches[0].grossPnl;
+      if(epMatches.length===1){grossPnl=epMatches[0].grossPnl;matchedEpisode=epMatches[0];}
     }
+    const hypothesis=s.payload?.tradePlan;
+    const planEvaluation=matchedEpisode&&hypothesis?.status==='MODEL_READY_SHADOW'
+      ? {
+          methodology:'OBSERVED_EXIT_VS_PRETRADE_HYPOTHESIS',
+          predictedEntryAsk:hypothesis.entry?.ask??null,
+          brokerEntry:matchedEpisode.entry,
+          brokerExit:matchedEpisode.exit,
+          modeledStop:hypothesis.stop?.premium??null,
+          modeledTarget:hypothesis.targets?.[0]?.premium??null,
+          entrySlippagePoints:Number((matchedEpisode.entry-(hypothesis.entry?.ask??matchedEpisode.entry)).toFixed(2)),
+          exitedBeyondModeledTarget:matchedEpisode.exit>=(hypothesis.targets?.[0]?.premium??Infinity),
+          exitedBeyondModeledStop:matchedEpisode.exit<=(hypothesis.stop?.premium??-Infinity),
+          predictionVerified:false,
+          limitations:'Tradebook only shows executed fill prices; cannot establish whether target or stop was touched intratrade.'
+        }
+      : null;
     return {snapshotId:s.id,status,details:{matchedFillKeys:selected.map(f=>f.key),
       matchedQuantity:selected.reduce((n,f)=>n+f.quantity,0),matchedLegs:legs.filter(leg=>selected.some(f=>matchQuality(leg,f,s.payload.expiry))).map(leg=>leg.name),
       requiredLegs:legs.map(l=>l.name),issues,expiryExact:exact,
-      grossPnl,netPnl:null,chargesKnown:false,source:'KITE_TRADEBOOK',affectsRiskLedger:false}};
+      grossPnl,planEvaluation,netPnl:null,chargesKnown:false,source:'KITE_TRADEBOOK',affectsRiskLedger:false}};
   });
 }
 
