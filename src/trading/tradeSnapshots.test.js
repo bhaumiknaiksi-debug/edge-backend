@@ -30,10 +30,12 @@ assert.equal(contractFromKite('BANKNIFTY26O2023600CE'),null);
 const saved={id:'s1',payload:snap};
 const fill={key:'fill-1',symbol:'NIFTY26O2023600CE',side:'BUY',time:'2026-10-19T10:00:20',
  orderId:'order-1',tradeId:'trade-1',quantity:65,price:100};
-const ep={symbol:fill.symbol,openedAt:fill.time,grossPnl:525};
+const ep={symbol:fill.symbol,openedAt:fill.time,quantity:65,entry:100,grossPnl:525};
 const a=matchSnapshots([saved],[fill],[ep])[0];
 assert.equal(a.status,'MATCHED');
 assert.equal(a.details.grossPnl,525);
+assert.equal(matchSnapshots([saved],[fill],[{...ep,quantity:130,entry:100}])[0].details.grossPnl,null,'Never attribute an entire scale-in episode to one snapshot');
+assert.equal(matchSnapshots([saved],[fill],[{...ep,quantity:65,entry:101}])[0].details.grossPnl,null,'Require verified weighted entry');
 assert.equal(a.details.netPnl,null);
 assert.equal(a.details.matchedQuantity,65);
 assert.equal(matchSnapshots([saved],[],[])[0].status,'PENDING_TRADEBOOK');

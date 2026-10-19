@@ -104,7 +104,14 @@ function matchSnapshots(snapshots,fills,episodes=[]){
     const status=ambiguous||complete&&!exact?'AMBIGUOUS':complete?'MATCHED':selected.length?'PARTIAL':fills.length?'UNMATCHED':'PENDING_TRADEBOOK';
     let grossPnl=null;
     if(status==='MATCHED'&&legs.length===1&&legs[0].side==='BUY'){
-      const epMatches=episodes.filter(ep=>selected.some(f=>f.symbol===ep.symbol&&Math.abs(parseIst(ep.openedAt)-parseIst(f.time))<=60000));
+      // Attribute P&L only when this click accounts for the ENTIRE reconstructed
+      // broker episode. Scale-ins and overlapping fills have no defensible
+      // per-snapshot P&L without finer-grained order/position reconciliation.
+      const quantity=selected.reduce((n,f)=>n+f.quantity,0);
+      const weightedEntry=quantity?selected.reduce((n,f)=>n+f.quantity*f.price,0)/quantity:null;
+      const epMatches=episodes.filter(ep=>ep.quantity===quantity&&
+        Math.abs(ep.entry-weightedEntry)<=0.02&&
+        selected.some(f=>f.symbol===ep.symbol&&Math.abs(parseIst(ep.openedAt)-parseIst(f.time))<=60000));
       if(epMatches.length===1)grossPnl=epMatches[0].grossPnl;
     }
     return {snapshotId:s.id,status,details:{matchedFillKeys:selected.map(f=>f.key),
