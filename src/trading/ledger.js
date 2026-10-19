@@ -67,7 +67,7 @@ function apply(state, operation, input, now = new Date()) {
   return s;
 }
 function numberSigned(v) { if(typeof v!=='number'||!Number.isFinite(v)||Math.abs(v)>10000000)throw new Error('INVALID_GROSS_PNL');return money(v); }
-function createLedger({ pool, ownerToken, onChange = ()=>{}, getPlan = ()=>null }) {
+function createLedger({ pool, ownerToken, onChange = ()=>{}, onBrokerImport = ()=>{}, getPlan = ()=>null }) {
   let current = null, error = 'LEDGER_NOT_LOADED', loadedAt = 0, generation = 0;
   async function refresh() {
     const started = generation;
@@ -87,6 +87,8 @@ function createLedger({ pool, ownerToken, onChange = ()=>{}, getPlan = ()=>null 
       await c.query('COMMIT');generation++;current=next;error=null;loadedAt=Date.now();
       // Importing historical records must not blank the live dashboard or alter trade approval.
       if(op!=='import'&&op!=='pnl')onChange();
+      // Reporting-only matching; cannot make broker imports fail or modify live readiness.
+      if(op==='import'||op==='pnl')Promise.resolve().then(onBrokerImport).catch(()=>console.error('[trade snapshots] background reconciliation unavailable'));
       const result={budget:budget(next),trades:next.trades,broker:summarizeBroker(next),pnl:summarizedReports(next)};
       if(op==='import'){
         result.importResult={added:(next.brokerFills||[]).length-(r.rows[0].payload.brokerFills||[]).length,
