@@ -1210,7 +1210,8 @@ app.get('/evidence/snapshots', (req,res) => {
 });
 
 app.get('/evidence/signal-funnel', (req,res) => {
-  res.json(buildSignalFunnel(evidenceSnapshots));
+  res.json({ ...buildSignalFunnel(evidenceSnapshots), collectionMode:LIGHTWEIGHT_EVIDENCE?'LIGHTWEIGHT':'FULL',
+    samplingCaveat:LIGHTWEIGHT_EVIDENCE?'Observation counts represent changed states, not every poll. Historical full and lightweight records may be mixed.':null });
 });
 
 app.get('/evidence/price-action', (req,res) => {
@@ -1253,7 +1254,9 @@ app.get('/evidence/health', (req,res) => {
     rows:evidenceSnapshots,
     storage:evidenceStore.status(),
     archive:dataPool?{configured:false,provider:'POSTGRES_PRIMARY'}:evidenceArchive.status(),
-    harvester:outcomeHarvester.getStatus()
+    harvester:outcomeHarvester.getStatus(),
+    collectionMode:LIGHTWEIGHT_EVIDENCE?'LIGHTWEIGHT':'FULL',
+    lastPollAt:lastFetchTime?new Date(lastFetchTime).toISOString():null
   }));
 });
 
