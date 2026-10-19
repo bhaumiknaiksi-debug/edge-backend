@@ -22,6 +22,7 @@ const { createDatabase } = require('./storage/database');
 const { createPostgresEvidenceStore } = require('./evidence/postgresEvidenceStore');
 const { createLedger } = require('./trading/ledger');
 const { createTradeSnapshots } = require('./trading/tradeSnapshots');
+const { buildTradePlans } = require('./trading/readOnlyTradePlanner');
 const { createEvidenceStore } = require('./evidence/evidenceStore');
 const { setupFeatureTags, setupEvidenceKey } = require('./evidence/setupEvidence');
 const { createOutcomeHarvester } = require('./evidence/outcomeHarvester');
@@ -1188,6 +1189,14 @@ const dataHandler = (req, res) => {
 };
 app.get('/data', dataHandler);
 app.get('/analysis', dataHandler);
+// Isolated observational overlay: never adds permission to /data or execution gates.
+app.get('/api/v1/trade-plans', (req,res)=>{
+  res.setHeader('Cache-Control','no-store');
+  if(process.env.EDGE_TRADE_PLANNER_ENABLED!=='true')return res.status(404).json({error:'TRADE_PLANNER_DISABLED'});
+  const available=dashboardAvailability(getMarketPhase(),lastResult,lastFetchTime);
+  if(!available.ok)return res.status(503).json({error:available.reason,mode:'SHADOW'});
+  res.json(buildTradePlans(lastResult));
+});
 app.get('/api/v1/dashboard', dataHandler);
 app.get('/api/v1/market/status', (req, res) => {
   const nextOpen = getNextOpenIST();
