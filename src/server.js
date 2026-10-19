@@ -21,6 +21,7 @@ const { evidenceKey } = require('./evidence/evidenceEngine');
 const { createDatabase } = require('./storage/database');
 const { createPostgresEvidenceStore } = require('./evidence/postgresEvidenceStore');
 const { createLedger } = require('./trading/ledger');
+const { createTradeSnapshots } = require('./trading/tradeSnapshots');
 const { createEvidenceStore } = require('./evidence/evidenceStore');
 const { setupFeatureTags, setupEvidenceKey } = require('./evidence/setupEvidence');
 const { createOutcomeHarvester } = require('./evidence/outcomeHarvester');
@@ -43,7 +44,7 @@ app.use(express.json());
 const edgeWebPush = buildWebPush();
 const dataPool = createDatabase();
 let ledgerEpoch = 0;
-const ledger = createLedger({getPlan:()=>lastResult?{timestamp:lastResult.timestamp,strategy:lastResult.decision?.strategy,entry:lastResult.decision?.entry,risk:lastResult.decision?.risk,position:lastResult.decision?.position,orchestration:lastResult.decision?.orchestration}:null,pool:dataPool,ownerToken:process.env.EDGE_PUSH_OWNER_TOKEN,onChange:()=>{ledgerEpoch++;lastResult=null;lastFetchTime=0;}});
+const ledger = createLedger({getPlan:()=>lastResult?{timestamp:lastResult.timestamp,strategy:lastResult.decision?.strategy,entry:lastResult.decision?.entry,risk:lastResult.decision?.risk,position:lastResult.decision?.position,orchestration:lastResult.decision?.orchestration}:null,pool:dataPool,ownerToken:process.env.EDGE_PUSH_OWNER_TOKEN,onChange:()=>{ledgerEpoch++;lastResult=null;lastFetchTime=0;},onBrokerImport:()=>tradeSnapshots.reconcile()});
 
 const ALLOWED_ORIGINS = (process.env.EDGE_ALLOWED_ORIGINS || 'https://edge-backend-mbcs.vercel.app,http://localhost:3000,capacitor://localhost,http://localhost')
   .split(',').map(s => s.trim()).filter(Boolean);
@@ -61,6 +62,8 @@ app.use((req, res, next) => {
 // Web Push routes must be registered AFTER CORS middleware for iPhone PWA access.
 edgeWebPush.routes(app);
 ledger.routes(app);
+// Capture only the unchanged, backend-generated candidate plan; never change execution gates.
+const tradeSnapshots = createTradeSnapshots({app,pool:dataPool,ownerToken:process.env.EDGE_PUSH_OWNER_TOKEN,getAnalysis:()=>lastResult});
 
 const PORT = process.env.PORT || 10000;
 const UPSTOX_TOKEN = process.env.UPSTOX_ACCESS_TOKEN || '';
@@ -110,7 +113,9 @@ let lastError = null;
 // History ring buffer - last N successful polls for session grading
 const HISTORY_LIMIT = 500;
 const history = [];
-const EVIDENCE_LIMIT = 10000;
+// The full archive remains in Postgres; a small restored working set prevents heap exhaustion.
+const EVIDENCE_LIMIT = Math.max(50,Math.min(500,Number.parseInt(process.env.EDGE_EVIDENCE_MEMORY_LIMIT||'100',10)||100));
+const LIGHTWEIGHT_EVIDENCE = process.env.EDGE_EVIDENCE_MODE === 'lightweight';
 const localEvidenceStore = createEvidenceStore({ limit: EVIDENCE_LIMIT });
 const evidenceStore = dataPool ? createPostgresEvidenceStore({pool:dataPool,limit:EVIDENCE_LIMIT}) : localEvidenceStore;
 const evidenceSnapshots = dataPool ? [] : localEvidenceStore.load();
@@ -1099,10 +1104,6 @@ async function poll() {
       evidenceSnapshot.evidenceKey = evidenceKey(evidenceSnapshot);
       evidenceSnapshot.setupFeatureTags = setupFeatureTags(evidenceSnapshot);
       evidenceSnapshot.setupEvidenceKey = setupEvidenceKey(evidenceSnapshot);
-      if (await evidenceStore.append(evidenceSnapshot) === false) throw new Error('EVIDENCE_STORE_APPEND_FAILED');
-      evidenceSnapshots.push(evidenceSnapshot);
-      if (evidenceSnapshots.length > EVIDENCE_LIMIT) evidenceSnapshots.shift();
-
       const decisionFingerprint = [
         evidenceSnapshot.strategy,
         evidenceSnapshot.orchestrationStatus,
@@ -1110,10 +1111,42 @@ async function poll() {
         evidenceSnapshot.tradeLegs?.buyLeg?.contractId || '',
         evidenceSnapshot.tradeLegs?.sellLeg?.contractId || ''
       ].join('|');
-      if (decisionFingerprint !== lastDecisionFingerprint) {
-        const transition = { ...evidenceSnapshot, id: evidenceSnapshot.id + '|TRANSITION', recordType: 'DECISION_TRANSITION' };
-        if (await evidenceStore.append(transition) === false) throw new Error('EVIDENCE_TRANSITION_APPEND_FAILED');
-        lastDecisionFingerprint = decisionFingerprint;
+      const changed = decisionFingerprint !== lastDecisionFingerprint;
+      // Opt-in: persist only changes in research state; never erase the full historical archive.
+      // Signal generation above this block, READY decisions and notifications remain untouched.
+      const observed = LIGHTWEIGHT_EVIDENCE ? {
+        id:evidenceSnapshot.id,recordType:'POLL_SNAPSHOT',timestamp:evidenceSnapshot.timestamp,
+        spot:evidenceSnapshot.spot,expiry:evidenceSnapshot.expiry,strategy:evidenceSnapshot.strategy,
+        tradeLegs:evidenceSnapshot.tradeLegs,regime:evidenceSnapshot.regime,
+        orchestration:evidenceSnapshot.orchestration,orchestrationStatus:evidenceSnapshot.orchestrationStatus,
+        entry:evidenceSnapshot.entry,entryStatus:evidenceSnapshot.entryStatus,
+        risk:evidenceSnapshot.risk,signalTier:evidenceSnapshot.signalTier,
+        chartIntelligence:evidenceSnapshot.chartIntelligence && {
+          verdict:evidenceSnapshot.chartIntelligence.verdict,
+          previousDay:evidenceSnapshot.chartIntelligence.previousDay,
+          structure:evidenceSnapshot.chartIntelligence.structure
+        },
+        researchCandidatePlans:evidenceSnapshot.researchCandidatePlans && {
+          version:evidenceSnapshot.researchCandidatePlans.version,
+          plans:Object.fromEntries(Object.entries(evidenceSnapshot.researchCandidatePlans.plans||{}).map(
+            ([tier,plan])=>[tier,{strategy:plan.strategy,available:plan.available,legs:plan.legs}]))
+        }
+      } : evidenceSnapshot;
+      let saved=true;
+      if (!LIGHTWEIGHT_EVIDENCE || changed) {
+        saved=await evidenceStore.append(observed);
+        if (!saved && !LIGHTWEIGHT_EVIDENCE) throw new Error('EVIDENCE_STORE_APPEND_FAILED');
+        if (saved) {
+          evidenceSnapshots.push(observed);
+          if (evidenceSnapshots.length > EVIDENCE_LIMIT) evidenceSnapshots.shift();
+        } else console.error('[evidence] optional lightweight append failed; live decision preserved');
+      }
+      if (changed && saved) {
+        const transition = { ...observed, id: observed.id + '|TRANSITION', recordType: 'DECISION_TRANSITION' };
+        const savedTransition=await evidenceStore.append(transition);
+        if (!savedTransition && !LIGHTWEIGHT_EVIDENCE) throw new Error('EVIDENCE_TRANSITION_APPEND_FAILED');
+        if (savedTransition) lastDecisionFingerprint = decisionFingerprint;
+        else console.error('[evidence] optional transition append failed; live decision preserved');
       }
       if (analysedEpoch !== ledgerEpoch) throw new Error('LEDGER_CHANGED_DURING_PERSISTENCE');
       lastResult = result;
@@ -1212,7 +1245,7 @@ app.get('/evidence/intelligence', (req,res) => {
 
 app.get('/evidence/status', (req,res) => {
   const counts = evidenceSnapshots.reduce((a,r)=>{a[r.recordType||'UNKNOWN']=(a[r.recordType||'UNKNOWN']||0)+1;return a;},{});
-  res.json({ total:evidenceSnapshots.length, counts, storage:evidenceStore.status(), archive:dataPool?{configured:false,provider:'POSTGRES_PRIMARY'}:evidenceArchive.status(), harvester:outcomeHarvester.getStatus(), researchCandidateHarvester:researchCandidateHarvester.getStatus(), lastDecisionFingerprint });
+  res.json({ total:evidenceSnapshots.length, counts, storage:evidenceStore.status(), archive:dataPool?{configured:false,provider:'POSTGRES_PRIMARY'}:evidenceArchive.status(), collectionMode:LIGHTWEIGHT_EVIDENCE?'LIGHTWEIGHT':'FULL', harvester:outcomeHarvester.getStatus(), researchCandidateHarvester:researchCandidateHarvester.getStatus(), lastDecisionFingerprint });
 });
 
 app.get('/evidence/health', (req,res) => {
@@ -1248,7 +1281,7 @@ const server = http.createServer(app);
 
 async function restoreEvidenceArchive() {
   if (dataPool) {
-    await evidenceStore.load();
+    // Avoid decompressing the same archive twice at startup.
     // Import existing local observations without duplicating already persisted IDs.
     for(const row of localEvidenceStore.load()) {
       if(!await evidenceStore.append(row)) throw new Error('EVIDENCE_MIGRATION_FAILED');
