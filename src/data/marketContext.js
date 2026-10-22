@@ -1,4 +1,5 @@
 'use strict';
+const { buildTimingSource } = require('../engine/shadowTiming');
 
 const https = require('https');
 const { buildSetupObservability, normalizeCandles } = require('../engine/setupObservability');
@@ -225,6 +226,7 @@ async function fetchMarketContext() {
     trend30mPct,
     indiaVix: Number.isFinite(indiaVix) ? indiaVix : null,
     setupFeatures,
+    timingSource: buildTimingSource(intraday5?.data?.candles || []),
     cprContext,
     chartIntelligence,
     futures: {
