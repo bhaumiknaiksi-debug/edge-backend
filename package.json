@@ -7,7 +7,7 @@
     "test": "node src/engine/vnext.test.js",
     "test:replay": "node src/replay/replayEngine.test.js",
     "test:evidence": "node src/evidence/evidenceEngine.test.js",
-    "test:all": "node src/data/chainQuotes.test.js && node src/engine/vnext.test.js && node src/engine/setupObservability.test.js && node src/engine/setupScanner.test.js && node src/engine/cprEngine.test.js && node src/engine/chartIntelligence.test.js && node src/engine/signalTier.test.js && node src/engine/candidatePlanEngine.test.js && node src/engine/gammaConcentration.test.js && node src/engine/optionExecutionIntelligence.test.js && node src/data/marketContext.test.js && node src/evidence/setupEvidence.test.js && node src/evidence/outcomeHarvester.test.js && node src/evidence/researchCandidateHarvester.test.js && node src/replay/replayEngine.test.js && node src/evidence/evidenceEngine.test.js && node src/evidence/tradingFriction.test.js && node src/evidence/evidenceIntelligence.test.js && node src/evidence/signalFunnel.test.js && node src/evidence/priceActionResearch.test.js && node src/evidence/evidenceArchive.test.js && node src/evidence/evidenceHealth.test.js && npm run test:push && node src/health/marketFreshness.test.js && node src/health/marketClock.test.js && node src/trading/ledger.test.js && node src/trading/kiteTradebook.test.js && node src/trading/kitePnl.test.js && node src/evidence/postgresEvidenceStore.test.js && npm run test:snapshots && npm run test:planner",
+    "test:all": "node src/data/chainQuotes.test.js && node src/engine/vnext.test.js && node src/engine/setupObservability.test.js && node src/engine/setupScanner.test.js && node src/engine/cprEngine.test.js && node src/engine/chartIntelligence.test.js && node src/engine/signalTier.test.js && node src/engine/candidatePlanEngine.test.js && node src/engine/gammaConcentration.test.js && node src/engine/optionExecutionIntelligence.test.js && node src/data/marketContext.test.js && node src/evidence/setupEvidence.test.js && node src/evidence/outcomeHarvester.test.js && node src/evidence/researchCandidateHarvester.test.js && node src/replay/replayEngine.test.js && node src/evidence/evidenceEngine.test.js && node src/evidence/tradingFriction.test.js && node src/evidence/evidenceIntelligence.test.js && node src/evidence/signalFunnel.test.js && node src/evidence/priceActionResearch.test.js && node src/evidence/evidenceArchive.test.js && node src/evidence/evidenceHealth.test.js && npm run test:push && node src/health/marketFreshness.test.js && node src/health/marketClock.test.js && node src/trading/ledger.test.js && node src/trading/kiteTradebook.test.js && node src/trading/kitePnl.test.js && node src/evidence/postgresEvidenceStore.test.js && npm run test:snapshots && npm run test:planner && npm run test:shadow-timing",
     "test:setup": "node src/engine/setupObservability.test.js",
     "test:setup-evidence": "node src/evidence/setupEvidence.test.js",
     "test:harvester": "node src/evidence/outcomeHarvester.test.js",
@@ -34,7 +34,8 @@
     "test:kite-import": "node src/trading/kiteTradebook.test.js",
     "test:kite-pnl": "node src/trading/kitePnl.test.js",
     "test:snapshots": "node src/trading/tradeSnapshots.test.js",
-    "test:planner": "node src/trading/readOnlyTradePlanner.test.js"
+    "test:planner": "node src/trading/readOnlyTradePlanner.test.js",
+    "test:shadow-timing": "node src/engine/shadowTiming.test.js"
   },
   "dependencies": {
     "express": "^4.18.0",

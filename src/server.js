@@ -1,4 +1,6 @@
 'use strict';
+const { createShadowTiming, buildReadinessView } = require('./engine/shadowTiming');
+const evaluateShadowTiming = createShadowTiming();
 
 const { buildMarketFeatures } = require('./engine/marketFeatureEngine');
 const { classifyRegime } = require('./engine/regimeEngine');
@@ -810,6 +812,13 @@ function analyse(chain, expiryDate, marketContext = null) {
     chartIntelligence: marketContext?.chartIntelligence || null
   });
 
+  const readinessView = buildReadinessView({ setup, entry:entryPlan, regime, strategy,
+    marketPhase:getMarketPhase(), chartAgreement:signalTier.chartAgreement, risk:riskPlan, position:positionPlan });
+  const shadowTiming = evaluateShadowTiming({ enabled:process.env.EDGE_SHADOW_TIMING_ENABLED === 'true',
+    source:marketContext?.timingSource, candidates:researchCandidatePlans,
+    input:{ spot, support:support.strike, resistance:resistance.strike, ceWall, peWall,
+      regime, features:marketFeatures, marketPhase:getMarketPhase(), dte, minutesRemaining:getMinutesRemainingIST() } });
+
   // --- Single-leg trade plan (entry / stop-loss / target in premium points, delta approximation) ---
   if (tradeLegs && (strategy === 'LONG_CALL' || strategy === 'LONG_PUT') && tradeLegs.buyLeg) {
     const entryPrem = parseFloat(tradeLegs.buyLeg.premium);
@@ -976,6 +985,8 @@ function analyse(chain, expiryDate, marketContext = null) {
       position: positionPlan,
       orchestration,
       signalTier,
+      readinessView,
+      shadowTiming,
       researchCandidatePlans,
       waitReason: orchestration.status === 'READY_TO_EXECUTE' ? null :
         (entryPlan?.reason || setup?.blockers?.join(', ') || orchestration?.blockers?.join(', ') || 'Waiting for qualification gates.'),
@@ -1093,6 +1104,8 @@ async function poll() {
         setupScanner: result.market?.setupScanner || null,
         chartIntelligence: result.market?.chartIntelligence || null,
         signalTier: result.decision?.signalTier || null,
+        readinessView: result.decision?.readinessView || null,
+        shadowTiming: result.decision?.shadowTiming || null,
         researchCandidatePlans: result.decision?.researchCandidatePlans || null,
         optionExecutionIntelligence: result.decision?.optionExecutionIntelligence || null,
         gammaConcentration: result.intel?.gammaConcentration || null,
@@ -1109,6 +1122,7 @@ async function poll() {
         evidenceSnapshot.strategy,
         evidenceSnapshot.orchestrationStatus,
         evidenceSnapshot.entryStatus,
+        JSON.stringify(evidenceSnapshot.shadowTiming),
         evidenceSnapshot.tradeLegs?.buyLeg?.contractId || '',
         evidenceSnapshot.tradeLegs?.sellLeg?.contractId || ''
       ].join('|');
@@ -1122,6 +1136,7 @@ async function poll() {
         orchestration:evidenceSnapshot.orchestration,orchestrationStatus:evidenceSnapshot.orchestrationStatus,
         entry:evidenceSnapshot.entry,entryStatus:evidenceSnapshot.entryStatus,
         risk:evidenceSnapshot.risk,signalTier:evidenceSnapshot.signalTier,
+        readinessView:evidenceSnapshot.readinessView,shadowTiming:evidenceSnapshot.shadowTiming,
         chartIntelligence:evidenceSnapshot.chartIntelligence && {
           verdict:evidenceSnapshot.chartIntelligence.verdict,
           previousDay:evidenceSnapshot.chartIntelligence.previousDay,
