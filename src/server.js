@@ -21,6 +21,7 @@ const { buildOptionExecutionIntelligence } = require('./engine/optionExecutionIn
 const { buildVolatilityContext } = require('./engine/volatilityEngine');
 const { evidenceKey } = require('./evidence/evidenceEngine');
 const { createDatabase } = require('./storage/database');
+const { createShadowEvents, quotesFromChain } = require('./evidence/shadowEvents');
 const { createPostgresEvidenceStore } = require('./evidence/postgresEvidenceStore');
 const { createLedger } = require('./trading/ledger');
 const { createTradeSnapshots } = require('./trading/tradeSnapshots');
@@ -46,6 +47,7 @@ const app = express();
 app.use(express.json());
 const edgeWebPush = buildWebPush();
 const dataPool = createDatabase();
+const shadowEvents = createShadowEvents({pool:dataPool,enabled:process.env.EDGE_SHADOW_EVENTS_ENABLED === 'true'});
 let ledgerEpoch = 0;
 const ledger = createLedger({getPlan:()=>lastResult?{timestamp:lastResult.timestamp,strategy:lastResult.decision?.strategy,entry:lastResult.decision?.entry,risk:lastResult.decision?.risk,position:lastResult.decision?.position,orchestration:lastResult.decision?.orchestration}:null,pool:dataPool,ownerToken:process.env.EDGE_PUSH_OWNER_TOKEN,onChange:()=>{ledgerEpoch++;lastResult=null;lastFetchTime=0;},onBrokerImport:()=>tradeSnapshots.reconcile()});
 
@@ -1028,6 +1030,7 @@ async function poll() {
     const phase = getMarketPhase();
     // Skip polling when closed ONLY if we already have data (startup fetch always runs once)
     if (phase === 'CLOSED' && lastResult !== null) {
+      try { await shadowEvents.observe({now:Date.now(),marketPhase:phase}); } catch (_) { console.error('[shadow events] observation unavailable'); }
       backoffMs = 60000;
       pollTimer = setTimeout(poll, backoffMs);
       return;
@@ -1037,6 +1040,7 @@ async function poll() {
     console.log('[upstox] expiries returned:', JSON.stringify(expiries.slice(0, 3)));
     const nearestExpiry = expiries[0];
     const chain = await fetchUpstoxChain(nearestExpiry);
+    const chainObservedAt = Date.now();
     let marketContext = null;
     try {
       marketContext = await fetchMarketContext();
@@ -1047,6 +1051,16 @@ async function poll() {
     const analysedEpoch = ledgerEpoch;
     const result = analyse(chain, nearestExpiry, marketContext);
     if (result) {
+      try {
+        const tracking = await shadowEvents.observe({now:Date.now(),marketPhase:phase,
+          source:marketContext?.timingSource,candidates:result.decision?.researchCandidatePlans,
+          quotes:quotesFromChain(chain),quotesAt:chainObservedAt});
+        result.decision.shadowEvents = {enabled:tracking.enabled,status:tracking.status,
+          executionAllowed:false,eventIds:(tracking.events||[]).map(e=>e.id)};
+      } catch (_) {
+        console.error('[shadow events] observation unavailable');
+        result.decision.shadowEvents = {enabled:true,status:'RECORDING_UNAVAILABLE',executionAllowed:false};
+      }
       try {
         result.decision.optionExecutionIntelligence = await buildOptionExecutionIntelligence({
           candidatePlans: result.decision?.researchCandidatePlans || null,
@@ -1226,7 +1240,12 @@ app.get('/api/v1/market/status', (req, res) => {
   });
 });
 
-// History endpoint - last N poll snapshots for session grading
+// Read-only factual shadow report; no owner trade data or mutation endpoint.
+app.get('/api/v1/shadow-events', async (req,res) => {
+  try { res.json(await shadowEvents.recent()); }
+  catch (_) { res.status(503).json({error:'SHADOW_EVENTS_UNAVAILABLE'}); }
+});
+
 // Query: ?limit=N (default 100, max HISTORY_LIMIT), ?since=ISO (filter by timestamp)
 app.get('/evidence/snapshots', (req,res) => {
   const limit=Math.min(EVIDENCE_LIMIT,parseInt(req.query.limit,10)||100);
