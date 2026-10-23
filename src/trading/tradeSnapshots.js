@@ -48,7 +48,7 @@ function buildSnapshot(analysis,tier,expectedTimestamp,now=new Date()){
   const d=analysis.decision||{},m=analysis.market||{};
   const snapshot={
     schemaVersion:1,analysisAt:analysis.timestamp,capturedAt:now.toISOString(),
-    source:'EDGE_BACKEND',tier,actualSignalTier:d.signalTier?.tier||'OBSERVING',
+    source:'EDGE_BACKEND',ruleSpec:clone(d.ruleSpec),tier,actualSignalTier:d.signalTier?.tier||'OBSERVING',
     strategy:plan.strategy||null,expiry:analysis.expiry||null,
     selectedCandidate:clone(plan),selectedLegs:candidateLegs(plan),
     // Freeze the contemporaneous research hypothesis BEFORE importing Kite results.

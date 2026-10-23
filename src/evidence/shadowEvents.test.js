@@ -109,3 +109,7 @@ console.log('Additional horizons, quote age, equality, revision and session-boun
  assert.equal('samples' in recent.events[0].contracts[2],false);
  console.log('Persistence adapter PASS: committed event restored by new tracker instance and report retains original contract');
 })().catch(e=>{console.error(e);process.exitCode=1;});
+const versioned=advance({cursor,now:t+FIVE,source:source(t,115),candidates,quotes,ruleSpec:{version:'TEST',implementationHash:'original'}});
+assert.equal(versioned.events[0].ruleSpec.implementationHash,'original');
+const afterUpgrade=advance({...versioned,now:t+FIVE+30000,source:source(t,115),candidates,quotes,ruleSpec:{version:'TEST',implementationHash:'new'}});
+assert.equal(afterUpgrade.events[0].ruleSpec.implementationHash,'original','Existing events retain their creation rules');

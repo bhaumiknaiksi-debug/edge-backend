@@ -20,6 +20,7 @@ const { buildGammaConcentration } = require('./engine/gammaConcentration');
 const { buildOptionExecutionIntelligence } = require('./engine/optionExecutionIntelligence');
 const { buildVolatilityContext } = require('./engine/volatilityEngine');
 const { evidenceKey } = require('./evidence/evidenceEngine');
+const { buildRuleSpec, signalFingerprint } = require('./evidence/signalRecording');
 const { createDatabase } = require('./storage/database');
 const { createShadowEvents, quotesFromChain } = require('./evidence/shadowEvents');
 const { createPostgresEvidenceStore } = require('./evidence/postgresEvidenceStore');
@@ -987,6 +988,7 @@ function analyse(chain, expiryDate, marketContext = null) {
       position: positionPlan,
       orchestration,
       signalTier,
+      ruleSpec: buildRuleSpec(),
       readinessView,
       shadowTiming,
       researchCandidatePlans,
@@ -1053,7 +1055,7 @@ async function poll() {
     if (result) {
       try {
         const tracking = await shadowEvents.observe({now:Date.now(),marketPhase:phase,
-          source:marketContext?.timingSource,candidates:result.decision?.researchCandidatePlans,
+          source:marketContext?.timingSource,candidates:result.decision?.researchCandidatePlans,ruleSpec:result.decision?.ruleSpec,
           quotes:quotesFromChain(chain),quotesAt:chainObservedAt});
         result.decision.shadowEvents = {enabled:tracking.enabled,status:tracking.status,
           executionAllowed:false,eventIds:(tracking.events||[]).map(e=>e.id)};
@@ -1118,6 +1120,7 @@ async function poll() {
         setupScanner: result.market?.setupScanner || null,
         chartIntelligence: result.market?.chartIntelligence || null,
         signalTier: result.decision?.signalTier || null,
+        ruleSpec: result.decision?.ruleSpec || null,
         readinessView: result.decision?.readinessView || null,
         shadowTiming: result.decision?.shadowTiming || null,
         researchCandidatePlans: result.decision?.researchCandidatePlans || null,
@@ -1132,14 +1135,7 @@ async function poll() {
       evidenceSnapshot.evidenceKey = evidenceKey(evidenceSnapshot);
       evidenceSnapshot.setupFeatureTags = setupFeatureTags(evidenceSnapshot);
       evidenceSnapshot.setupEvidenceKey = setupEvidenceKey(evidenceSnapshot);
-      const decisionFingerprint = [
-        evidenceSnapshot.strategy,
-        evidenceSnapshot.orchestrationStatus,
-        evidenceSnapshot.entryStatus,
-        JSON.stringify(evidenceSnapshot.shadowTiming),
-        evidenceSnapshot.tradeLegs?.buyLeg?.contractId || '',
-        evidenceSnapshot.tradeLegs?.sellLeg?.contractId || ''
-      ].join('|');
+      const decisionFingerprint = signalFingerprint(evidenceSnapshot);
       const changed = decisionFingerprint !== lastDecisionFingerprint;
       // Opt-in: persist only changes in research state; never erase the full historical archive.
       // Signal generation above this block, READY decisions and notifications remain untouched.
@@ -1149,7 +1145,7 @@ async function poll() {
         tradeLegs:evidenceSnapshot.tradeLegs,regime:evidenceSnapshot.regime,
         orchestration:evidenceSnapshot.orchestration,orchestrationStatus:evidenceSnapshot.orchestrationStatus,
         entry:evidenceSnapshot.entry,entryStatus:evidenceSnapshot.entryStatus,
-        risk:evidenceSnapshot.risk,signalTier:evidenceSnapshot.signalTier,
+        risk:evidenceSnapshot.risk,signalTier:evidenceSnapshot.signalTier,ruleSpec:evidenceSnapshot.ruleSpec,
         readinessView:evidenceSnapshot.readinessView,shadowTiming:evidenceSnapshot.shadowTiming,
         chartIntelligence:evidenceSnapshot.chartIntelligence && {
           verdict:evidenceSnapshot.chartIntelligence.verdict,

@@ -1,0 +1,13 @@
+# Signal transition recording and rule provenance
+
+Baseline: 5493b023222683f8ab8c7272c6bfe6a6b2c67450.
+
+The prior lightweight evidence fingerprint omitted tier, chart agreement and readiness. A B/C transition with the same contracts and execution status could therefore disappear. SIGNAL_TRANSITIONS_V2 now fingerprints these states, individual entry checks, account eligibility, authoritative and research contract identities, and rule provenance. Object ordering and missing-gate array ordering are normalized. Timestamps, spot, and ordinary option quote changes do not by themselves create new transitions. Existing shadowTiming changes still count. The successful-append retry behavior and evidence memory limit are unchanged.
+
+SIGNAL_RULE_SPEC_V1 records SHA-256 source fingerprints grouped by selection, readiness, chart, entry, eligibility, shadow timing, shadow events and exit hypotheses. It identifies implementation provenance, not calibrated confidence or adoption of the PDF's proposed tier definitions. The paper exit simulator is explicitly NOT_IMPLEMENTED. Source groups include server.js because it contains selection logic; unrelated server edits can conservatively create a new implementation hash. No credentials or environment values are included. Runtime data, budget and activation configuration still require the contemporaneous evidence fields; a source fingerprint alone does not describe those inputs.
+
+The stamp appears in decision.ruleSpec, full and lightweight poll/transition records, new manual trade snapshots and newly created durable shadow events. Existing event stamps remain frozen across later deployments. Historical unstamped records remain unversioned; there is no backfill or invented provenance. Live decisions, tier rules, account limits and notification authorization are unchanged. No schema migration or new flag is required.
+
+Tests reproduce B -> C -> B using the actual tier builder while contracts and execution status remain fixed, verify chart-only/readiness/eligibility and candidate changes, stable noise/key ordering, immutable manifests, frozen manual snapshots and preserved event stamps across upgrades. The full existing suite remains the regression gate.
+
+Release verification: inspect the live response and decompress a newly persisted POLL_SNAPSHOT and DECISION_TRANSITION to confirm identical implementation hashes and retained tier/readiness fields. A natural B/C transition may not occur during the check; synthetic regression coverage is not a claim that a live transition was observed. Sleeping-host gaps and missing upstream data remain unresolved by this patch.

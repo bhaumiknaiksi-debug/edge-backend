@@ -38,7 +38,7 @@ function freshSource(source,now){return source?.available&&source.session===day(
   source.latest.time+FIVE<=now&&now-source.latest.time-FIVE<=FIVE+GAP;}
 
 // Pure transition for deterministic replay. Existing persisted state is never mutated.
-function advance({cursor=null,events=[],source,now,candidates,quotes={},quotesAt=now,marketPhase='OPEN'}) {
+function advance({cursor=null,events=[],source,now,candidates,quotes={},quotesAt=now,marketPhase='OPEN',ruleSpec=null}) {
   const active=clone(events), nextCursor=cursor?clone(cursor):null;
   let next=nextCursor, created=null;
   if(next?.lastPollAt>=now)return {cursor:next,events:active};
@@ -58,7 +58,7 @@ function advance({cursor=null,events=[],source,now,candidates,quotes={},quotesAt
       const id=hash([VERSION,source.session,source.completedAt,source.high,source.low,direction,crossedAt]);
       if(!active.some(e=>e.id===id)) {
         const end=Math.min(now+30*60000,Date.parse(source.session+'T15:30:00+05:30'));
-        created={id,version:VERSION,session:source.session,direction,level,anchor:{high:source.high,low:source.low,completedAt:source.completedAt,source:source.source},
+        created={id,version:VERSION,ruleSpec:ruleSpec?clone(ruleSpec):null,session:source.session,direction,level,anchor:{high:source.high,low:source.low,completedAt:source.completedAt,source:source.source},
           crossedAt,detectedAt:iso(now),expiresAt:iso(end),status:'CONFIRMED',lastCandleTime:c.time,lastCandleClose:c.close,
           lastObservedAt:now,coverageGaps:[],gapCount:0,complete:false,contracts:[]};
         for(const tier of ['A','B','C']) {
