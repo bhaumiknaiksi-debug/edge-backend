@@ -49,3 +49,9 @@ const fill2={...fill,key:'fill-2',side:'SELL',symbol:'NIFTY26O2023700CE',orderId
 assert.equal(matchSnapshots([{id:'s2',payload:spread}],[fill,fill2],[])[0].status,'MATCHED');
 assert.equal(matchSnapshots([{id:'s2',payload:spread}],[fill,fill2],[])[0].details.grossPnl,null);
 console.log('Trade snapshot: immutable capture, stale guard, exact expiry, conservative matching, partial legs, dedup and net-P&L guard PASS');
+assert.equal(snap.ruleSpec,null,'Legacy analysis must remain unversioned');
+const stampedAnalysis=JSON.parse(JSON.stringify(analysis));
+stampedAnalysis.decision.ruleSpec={version:'TEST',implementationHash:'original'};
+const stampedSnapshot=buildSnapshot(stampedAnalysis,'C',analysisAt,now);
+stampedAnalysis.decision.ruleSpec.implementationHash='changed';
+assert.equal(stampedSnapshot.ruleSpec.implementationHash,'original','Snapshot freezes contemporaneous version');
