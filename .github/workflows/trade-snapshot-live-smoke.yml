@@ -11,6 +11,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
       - name: Probe feature gate, owner protection, and evidence-health mode
         shell: bash
         run: |
@@ -27,5 +31,6 @@ jobs:
           curl --fail --silent --show-error --retry 2 --max-time 80 "$base/evidence/status" > /tmp/evidence.json
           node -e "const d=require('/tmp/evidence.json');if(d.collectionMode!=='LIGHTWEIGHT'||d.storage?.provider!=='POSTGRES')throw Error('Lightweight evidence not active or storage unavailable');console.log('Evidence mode:',d.collectionMode,'in-memory records:',d.total)"
           curl --fail --silent --show-error --retry 2 --max-time 80 "$base/evidence/health" > /tmp/health.json
+          node scripts/check-evidence-health.js health /tmp/health.json
           node -e "const d=require('/tmp/health.json');if(d.collectionMode!=='LIGHTWEIGHT')throw Error('Health reporter not sampling-aware');console.log('Evidence health:',d.healthy,'issues:',d.issues)"
           echo "SAFE LIVE SMOKE PASSED: public status + owner locks + market health; no authenticated writes performed."
