@@ -36,7 +36,7 @@ const { createEvidenceArchive } = require('./evidence/evidenceArchive');
 const { buildWebPush } = require('./notifications/edgeWebPush');
 const { dashboardAvailability, isLiveDataFresh } = require('./health/marketFreshness');
 const { nextMarketOpenIST } = require('./health/marketClock');
-const { buildEvidenceHealth } = require('./evidence/evidenceHealth');
+const { registerEvidenceMonitoring } = require('./evidence/evidenceMonitoring');
 const { buildSignalFunnel } = require('./evidence/signalFunnel');
 const { buildPriceActionResearch } = require('./evidence/priceActionResearch');
 
@@ -125,6 +125,7 @@ const LIGHTWEIGHT_EVIDENCE = process.env.EDGE_EVIDENCE_MODE === 'lightweight';
 const localEvidenceStore = createEvidenceStore({ limit: EVIDENCE_LIMIT });
 const evidenceStore = dataPool ? createPostgresEvidenceStore({pool:dataPool,limit:EVIDENCE_LIMIT}) : localEvidenceStore;
 const evidenceSnapshots = dataPool ? [] : localEvidenceStore.load();
+let evidenceInitialized = false;
 const evidenceArchive = createEvidenceArchive();
 let lastDecisionFingerprint = null;
 const outcomeHarvester = createOutcomeHarvester({ store: evidenceStore, snapshots: evidenceSnapshots, token: UPSTOX_TOKEN });
@@ -1288,15 +1289,13 @@ app.get('/evidence/status', (req,res) => {
   res.json({ total:evidenceSnapshots.length, counts, storage:evidenceStore.status(), archive:dataPool?{configured:false,provider:'POSTGRES_PRIMARY'}:evidenceArchive.status(), collectionMode:LIGHTWEIGHT_EVIDENCE?'LIGHTWEIGHT':'FULL', harvester:outcomeHarvester.getStatus(), researchCandidateHarvester:researchCandidateHarvester.getStatus(), lastDecisionFingerprint });
 });
 
-app.get('/evidence/health', (req,res) => {
-  res.json(buildEvidenceHealth({
-    rows:evidenceSnapshots,
-    storage:evidenceStore.status(),
-    archive:dataPool?{configured:false,provider:'POSTGRES_PRIMARY'}:evidenceArchive.status(),
-    harvester:outcomeHarvester.getStatus(),
-    collectionMode:LIGHTWEIGHT_EVIDENCE?'LIGHTWEIGHT':'FULL',
-    lastPollAt:lastFetchTime?new Date(lastFetchTime).toISOString():null
-  }));
+registerEvidenceMonitoring(app, {
+  store:evidenceStore, archive:evidenceArchive, postgresPrimary:!!dataPool,
+  getSnapshots:()=>evidenceSnapshots,
+  getLastPollAt:()=>lastFetchTime ? new Date(lastFetchTime).toISOString() : null,
+  isInitialized:()=>evidenceInitialized,
+  harvester:outcomeHarvester, researchHarvester:researchCandidateHarvester,
+  collectionMode:LIGHTWEIGHT_EVIDENCE?'LIGHTWEIGHT':'FULL'
 });
 
 app.post('/evidence/archive/verify', async (req,res) => {
@@ -1382,6 +1381,7 @@ server.listen(PORT, async () => {
     setTimeout(()=>process.exit(1),1000);
     return;
   }
+  evidenceInitialized = true;
   outcomeHarvester.start();
   researchCandidateHarvester.start();
   poll();
