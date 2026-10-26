@@ -34,6 +34,7 @@ const { createResearchCandidateHarvester } = require('./evidence/researchCandida
 const { buildEvidenceIntelligence } = require('./evidence/evidenceIntelligence');
 const { createEvidenceArchive } = require('./evidence/evidenceArchive');
 const { buildWebPush } = require('./notifications/edgeWebPush');
+const { buildTelegram } = require('./notifications/edgeTelegram');
 const { dashboardAvailability, isLiveDataFresh } = require('./health/marketFreshness');
 const { nextMarketOpenIST } = require('./health/marketClock');
 const { registerEvidenceMonitoring } = require('./evidence/evidenceMonitoring');
@@ -48,6 +49,7 @@ const app = express();
 app.use(express.json());
 const edgeWebPush = buildWebPush();
 const dataPool = createDatabase();
+const edgeTelegram = buildTelegram({pool:dataPool,getMarketPhase,getCurrentResult:()=>lastResult});
 const shadowEvents = createShadowEvents({pool:dataPool,enabled:process.env.EDGE_SHADOW_EVENTS_ENABLED === 'true'});
 let ledgerEpoch = 0;
 const ledger = createLedger({getPlan:()=>lastResult?{timestamp:lastResult.timestamp,strategy:lastResult.decision?.strategy,entry:lastResult.decision?.entry,risk:lastResult.decision?.risk,position:lastResult.decision?.position,orchestration:lastResult.decision?.orchestration}:null,pool:dataPool,ownerToken:process.env.EDGE_PUSH_OWNER_TOKEN,onChange:()=>{ledgerEpoch++;lastResult=null;lastFetchTime=0;},onBrokerImport:()=>tradeSnapshots.reconcile()});
@@ -67,6 +69,7 @@ app.use((req, res, next) => {
 
 // Web Push routes must be registered AFTER CORS middleware for iPhone PWA access.
 edgeWebPush.routes(app);
+edgeTelegram.routes(app);
 ledger.routes(app);
 // Capture only the unchanged, backend-generated candidate plan; never change execution gates.
 const tradeSnapshots = createTradeSnapshots({app,pool:dataPool,ownerToken:process.env.EDGE_PUSH_OWNER_TOKEN,getAnalysis:()=>lastResult});
@@ -1180,6 +1183,8 @@ async function poll() {
       lastFetchTime = Date.now();
       // Presentation-only alert producer. Never affects signal generation, evidence or trade gates.
       edgeWebPush.onSuccessfulPoll(result);
+      // Optional send-only transport. Its durable queue/errors never gate the live decision.
+      void edgeTelegram.onSuccessfulPoll(result);
     }
     backoffMs = 30000;
   } catch (err) {
@@ -1362,6 +1367,7 @@ let shuttingDown = false;
 async function gracefulShutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
+  edgeTelegram.stop();
   console.log('[shutdown]', signal, '- checkpointing evidence');
   try { if (!dataPool) await evidenceArchive.backup(evidenceSnapshots); } catch (err) { console.error('[evidence archive] shutdown backup failed:', err.message); }
   server.close(() => process.exit(0));
@@ -1383,6 +1389,7 @@ server.listen(PORT, async () => {
   }
   evidenceInitialized = true;
   outcomeHarvester.start();
+  edgeTelegram.start();
   researchCandidateHarvester.start();
   poll();
 });
