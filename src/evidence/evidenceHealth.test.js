@@ -17,4 +17,18 @@ assert(!sparse.issues.includes('APPEND_STALE_DURING_MARKET'));
 const stalled=buildEvidenceHealth({rows,storage:{durable:true},archive:{configured:false},harvester:{},
   now:new Date('2026-09-30T04:30:00Z'),collectionMode:'LIGHTWEIGHT',lastPollAt:'2026-09-30T04:18:00Z'});
 assert(stalled.issues.includes('POLL_STALE_DURING_MARKET'));
+// A cold-start response must not claim health before durable restoration, even after close.
+const starting=buildEvidenceHealth({rows:[],storage:{provider:'POSTGRES',durable:true},initialized:false,
+  now:new Date('2026-10-26T11:00:00Z')});
+assert.equal(starting.healthy,false);
+assert(starting.issues.includes('EVIDENCE_INITIALIZING'));
+assert.equal(starting.collector.initialized,false);
+const verificationFailed=buildEvidenceHealth({rows,storage:{provider:'POSTGRES',durable:true,lastVerification:{ok:false}},
+  now:new Date('2026-09-30T11:00:00Z')});
+assert(verificationFailed.issues.includes('STORAGE_VERIFICATION_FAILED'));
+const researchFailed=buildEvidenceHealth({rows,storage:{durable:true},researchHarvester:{lastError:'TEST_FAILURE'},
+  now:new Date('2026-09-30T11:00:00Z')});
+assert(researchFailed.issues.includes('RESEARCH_HARVESTER_ERROR'));
+assert.equal(sparse.counterScope,'LOADED_WORKING_SET');
+assert.equal(sparse.continuousCollectionVerified,false);
 console.log('evidenceHealth tests passed');
