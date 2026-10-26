@@ -82,6 +82,23 @@ function setup({env=testEnv,shared,bootId='boot',failure=null,chatType='private'
   rate.setFailure(null);rate.advance(5000);await rate.manager.tick();
   assert.equal([...rate.fake.outbox.values()][0].status,'SENT');
   assert.equal(rate.manager.status().processCounters.apiAccepted,1);
+  for(const exhausted of [false,true]) {
+    const flood=setup({failure:new TelegramError('TELEGRAM_RATE_LIMIT',{retryAfterMs:60000})});
+    await flood.poll();flood.advance(10000);await flood.poll(true);
+    if(exhausted)[...flood.fake.outbox.values()][0].attempts=3;
+    await flood.manager.tick();
+    assert.equal([...flood.fake.outbox.values()][0].status,exhausted?'FAILED':'PENDING');
+    flood.advance(10000);await flood.poll(false);await flood.manager.tick();
+    assert.equal(flood.calls.filter(call=>call.method==='sendMessage').length,1,
+      'a second queued event must honor recipient cooldown, including exhausted retries');
+    flood.setFailure(null);flood.advance(50000);await flood.manager.tick();
+    flood.advance(5000);await flood.manager.tick();
+    const delivered=flood.calls.filter(call=>call.method==='sendMessage');
+    assert.equal(delivered.length,2);
+    assert(delivered[1].parameters.text.includes('Previous ready state ended'));
+    if(!exhausted)assert.equal([...flood.fake.outbox.values()][0].status,'EXPIRED',
+      'cooldown must not bypass the original READY expiry');
+  }
   const uncertain=setup({failure:new Error('secret-token-must-not-leak')});
   await uncertain.poll();uncertain.advance(10000);await uncertain.poll(true);await uncertain.manager.tick();
   assert.equal([...uncertain.fake.outbox.values()][0].status,'UNCERTAIN');
