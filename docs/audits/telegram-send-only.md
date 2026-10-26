@@ -44,6 +44,10 @@ responses or raw transport-error logs. The fixed HTTPS destination is `api.teleg
   There is no exactly-once or real-device-read guarantee. Uncertain sends are not blindly
   repeated. Explicit 429 responses retry with Telegram's delay, at most four attempts, and
   every retry rechecks freshness. API acceptance is recorded as SENT, not read by the owner.
+- A 429 also persists a recipient-wide cooldown in the existing cursor JSON, atomically
+  with the outbox result. It blocks every queued message for that recipient, survives
+  checkpoints/restarts and remains enforced when the rejected event exhausts its retries.
+  No schema change is needed. Expiry and current-readiness checks still run after the wait.
 - Optional failures are caught outside the authoritative polling pipeline. The pending
   observation slot is bounded; coalescing is counted and forces a conservative baseline.
   A request has an absolute seven-second deadline and a bounded response body.

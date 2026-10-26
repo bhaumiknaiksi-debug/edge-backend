@@ -64,6 +64,7 @@ function createTelegramStore({pool,recipientKey}) {
       // stored. Never silently retry such a message as though it was certainly unsent.
       await client.query(`UPDATE edge_telegram_outbox_v1 SET status='UNCERTAIN',last_error='WORKER_INTERRUPTED',lease_until=NULL
         WHERE recipient_key=$1 AND status='SENDING' AND lease_until<=$2`,[recipientKey,timestamp]);
+      if (now < (state.cooldownUntil || 0)) return null;
       if (now - (state.lastAttemptAt || 0) < 1500) return null;
       const result = await client.query(`SELECT q.event_id,q.attempts,e.payload FROM edge_telegram_outbox_v1 q
         JOIN edge_telegram_events_v1 e ON e.event_id=q.event_id
@@ -78,12 +79,23 @@ function createTelegramStore({pool,recipientKey}) {
       return {event:row.payload,attempts:row.attempts+1};
     });
   }
-  async function finish(eventId,status,{messageId=null,error=null,nextAttemptAt=null}={}) {
+  async function finish(eventId,status,{messageId=null,error=null,nextAttemptAt=null,cooldownUntil=null}={}) {
     if (!['PENDING','SENT','EXPIRED','FAILED','UNCERTAIN'].includes(status)) throw new Error('INVALID_DELIVERY_STATUS');
-    return pool.query(`UPDATE edge_telegram_outbox_v1 SET status=$3,message_id=$4,last_error=$5,
+    if (cooldownUntil !== null && (!Number.isSafeInteger(cooldownUntil) || cooldownUntil <= 0)) throw new Error('INVALID_COOLDOWN');
+    const update = client => client.query(`UPDATE edge_telegram_outbox_v1 SET status=$3,message_id=$4,last_error=$5,
       next_attempt_at=COALESCE($6,next_attempt_at),lease_until=NULL
       WHERE event_id=$1 AND recipient_key=$2 AND status='SENDING'`,
     [eventId,recipientKey,status,messageId,error,nextAttemptAt]);
+    if (cooldownUntil === null) return update(pool);
+    // Flood control applies to every message for this recipient, not only this event.
+    // Persist it atomically even when this event has exhausted its retry budget.
+    return transaction(async client => {
+      const state = await lockState(client);
+      state.cooldownUntil = Math.max(state.cooldownUntil || 0,cooldownUntil);
+      const result = await update(client);
+      await saveState(client,state);
+      return result;
+    });
   }
   return {initialize:()=>pool.query(readSchema()),checkpoint,loadState,claim,finish};
 }

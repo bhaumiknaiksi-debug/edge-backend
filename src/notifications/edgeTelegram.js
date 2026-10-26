@@ -126,12 +126,13 @@ function buildTelegram({pool,env = process.env,getMarketPhase,getCurrentResult =
       } catch (error) {
         const rateLimited = error instanceof TelegramError && error.retryAfterMs > 0;
         const permanent = error instanceof TelegramError && error.permanent;
+        const cooldownUntil = rateLimited ? now()+error.retryAfterMs : null;
         deliveryError = rateLimited ? 'TELEGRAM_RATE_LIMIT' : permanent ? 'TELEGRAM_REQUEST_REJECTED' : 'DELIVERY_UNCERTAIN';
         if (rateLimited && attempts < 4) {
-          await store.finish(event.id,'PENDING',{error:deliveryError,nextAttemptAt:new Date(now()+error.retryAfterMs).toISOString()});
+          await store.finish(event.id,'PENDING',{error:deliveryError,nextAttemptAt:new Date(cooldownUntil).toISOString(),cooldownUntil});
           counters.rateLimited++;
         } else {
-          await store.finish(event.id,rateLimited || permanent ? 'FAILED' : 'UNCERTAIN',{error:deliveryError});
+          await store.finish(event.id,rateLimited || permanent ? 'FAILED' : 'UNCERTAIN',{error:deliveryError,cooldownUntil});
           if (rateLimited || permanent) counters.failed++; else counters.uncertain++;
         }
         if (permanent) {initialized=false; initError='TELEGRAM_REQUEST_REJECTED';}
