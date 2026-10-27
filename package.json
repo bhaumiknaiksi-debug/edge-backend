@@ -40,7 +40,8 @@
     "test:shadow-timing": "node src/engine/shadowTiming.test.js",
     "test:shadow-events": "node src/evidence/shadowEvents.test.js",
     "test:signal-recording": "node src/evidence/signalRecording.test.js",
-    "test:upstox-sandbox": "node src/execution/upstoxSandbox.test.js"
+    "test:upstox-sandbox": "node src/execution/upstoxSandbox.test.js && node src/execution/catalogQuotes.test.js && node src/execution/sandboxEngine.test.js && node src/execution/sandboxStore.test.js && node src/execution/sandboxService.test.js",
+    "check:sandbox-connection": "node scripts/check-sandbox-connection.js"
   },
   "dependencies": {
     "express": "^4.18.0",

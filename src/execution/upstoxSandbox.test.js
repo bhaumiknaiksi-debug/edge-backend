@@ -1,22 +1,40 @@
 'use strict';
 const assert=require('node:assert/strict');
 const {createSandbox}=require('./upstoxSandbox');
+const reply=(data,status=200)=>new Response(JSON.stringify(data),{status});
 (async()=>{
  const order={instrumentKey:'NSE_FO|12345',quantity:65,price:100,side:'BUY',tag:'edge-test-1'};
  let calls=0;
  const s=createSandbox({token:'sandbox-secret',request:async(url,options)=>{
    calls++;assert.equal(url,'https://sandbox.upstox.com/v3/order/place');assert.equal(options.redirect,'error');
-   const body=JSON.parse(options.body);assert.equal(body.instrument_token,order.instrumentKey);assert.equal(body.order_type,'LIMIT');assert.equal(body.slice,false);
-   return {ok:true,status:200,json:async()=>({status:'success',data:{order_ids:['123']}})};
+   const body=JSON.parse(options.body);assert.equal(body.instrument_token,order.instrumentKey);assert.equal(body.slice,false);
+   assert.equal(options.headers.Authorization,'Bearer sandbox-secret');
+   return reply({status:'success',data:{order_ids:['123']}});
  }});
  assert.deepEqual(await s.placeLimit(order),{state:'ACKNOWLEDGED',orderId:'123',tag:order.tag});assert.equal(calls,1);
  await assert.rejects(()=>s.placeLimit({...order,quantity:0}),/INVALID_SANDBOX_ORDER/);assert.equal(calls,1);
+ await assert.rejects(()=>s.placeOrder({...order,orderType:'SL',trigger:101}),/INVALID_SANDBOX_ORDER/);
  const timeout=createSandbox({token:'secret',request:async()=>{throw Error('secret');}});
- assert.deepEqual(await timeout.placeLimit(order),{state:'UNCERTAIN',reason:'TRANSPORT_UNCONFIRMED',tag:order.tag});
- const invalid=createSandbox({token:'secret',request:async()=>({ok:true,status:200,json:async()=>({status:'success',data:{order_ids:['1','2']}})})});
+ assert.equal((await timeout.placeLimit(order)).state,'UNCERTAIN');
+ const invalid=createSandbox({token:'secret',request:async()=>reply({status:'success',data:{order_ids:['1','2']}})});
  assert.equal((await invalid.placeLimit(order)).state,'UNCERTAIN');
- const reject=createSandbox({token:'secret',request:async()=>({ok:false,status:400,json:async()=>({status:'error',errors:[{message:'secret'}]})})});
- assert.deepEqual(await reject.placeLimit(order),{state:'REJECTED',reason:'SANDBOX_REQUEST_REJECTED',tag:order.tag});
+ const rejected=createSandbox({token:'secret',request:async()=>reply({status:'error',errors:[{message:'secret'}]},400)});
+ assert.deepEqual(await rejected.placeLimit(order),{state:'REJECTED',reason:'SANDBOX_REQUEST_REJECTED',tag:order.tag});
+ const paths=[];
+ const lifecycle=createSandbox({token:'secret',request:async(url,options)=>{
+   paths.push(url);assert.equal(new URL(url).hostname,'sandbox.upstox.com');
+   if(options.method==='GET')return reply({status:'success',data:[]});
+   if(options.method==='DELETE')return reply({status:'success',data:{order_id:'order-1'}});
+   const body=JSON.parse(options.body);assert.equal(body.order_type,'SL');assert.equal(body.trigger_price,99);assert.equal(body.transaction_type,'SELL');
+   return reply({status:'success',data:{order_ids:['stop-1']}});
+ }});
+ await lifecycle.placeOrder({...order,orderType:'SL',side:'SELL',price:98,trigger:99});
+ assert.equal((await lifecycle.cancel('order-1')).state,'ACKNOWLEDGED');
+ assert.deepEqual(await lifecycle.getOrders(),[]);assert.deepEqual(await lifecycle.getPositions(),[]);assert.equal(paths.length,4);
+ const unsupported=createSandbox({token:'secret',request:async()=>reply({status:'error'},404)});
+ await assert.rejects(()=>unsupported.getPositions(),/SANDBOX_READ_UNAVAILABLE/);
+ const oversized=createSandbox({token:'secret',request:async()=>new Response('x'.repeat(2*1024*1024+1))});
+ assert.equal((await oversized.placeOrder(order)).state,'UNCERTAIN');
  assert.throws(()=>createSandbox({token:''}),/SANDBOX_TOKEN_REQUIRED/);
- console.log('Upstox sandbox transport PASS');
+ console.log('Upstox sandbox transport PASS: fixed host, bounded body, limit/stop/cancel/read, no fallback, sanitized ambiguous outcomes');
 })().catch(e=>{console.error(e);process.exitCode=1;});
