@@ -6,7 +6,7 @@ const reply=(data,status=200)=>new Response(JSON.stringify(data),{status});
  const order={instrumentKey:'NSE_FO|12345',quantity:65,price:100,side:'BUY',tag:'edge-test-1'};
  let calls=0;
  const s=createSandbox({token:'sandbox-secret',request:async(url,options)=>{
-   calls++;assert.equal(url,'https://sandbox.upstox.com/v3/order/place');assert.equal(options.redirect,'error');
+   calls++;assert.equal(url,'https://api-sandbox.upstox.com/v3/order/place');assert.equal(options.redirect,'error');
    const body=JSON.parse(options.body);assert.equal(body.instrument_token,order.instrumentKey);assert.equal(body.slice,false);
    assert.equal(options.headers.Authorization,'Bearer sandbox-secret');
    return reply({status:'success',data:{order_ids:['123']}});
@@ -22,7 +22,7 @@ const reply=(data,status=200)=>new Response(JSON.stringify(data),{status});
  assert.deepEqual(await rejected.placeLimit(order),{state:'REJECTED',reason:'SANDBOX_REQUEST_REJECTED',tag:order.tag});
  const paths=[];
  const lifecycle=createSandbox({token:'secret',request:async(url,options)=>{
-   paths.push(url);assert.equal(new URL(url).hostname,'sandbox.upstox.com');
+   paths.push(url);assert.equal(new URL(url).hostname,'api-sandbox.upstox.com');
    if(options.method==='GET')return reply({status:'success',data:[]});
    if(options.method==='DELETE')return reply({status:'success',data:{order_id:'order-1'}});
    const body=JSON.parse(options.body);assert.equal(body.order_type,'SL');assert.equal(body.trigger_price,99);assert.equal(body.transaction_type,'SELL');

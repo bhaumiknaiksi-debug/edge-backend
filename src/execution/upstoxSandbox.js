@@ -1,6 +1,6 @@
 'use strict';
 // Host is deliberately fixed. No live mode, live-token fallback or redirect following.
-const BASE='https://sandbox.upstox.com';
+const BASE='https://api-sandbox.upstox.com';
 const idPattern=/^[A-Za-z0-9-]{1,100}$/;
 async function boundedJson(response,maxBytes=2*1024*1024){
   if(!response.body?.getReader)throw Error('INVALID_RESPONSE');
