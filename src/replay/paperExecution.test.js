@@ -1,0 +1,14 @@
+'use strict';
+const assert=require('node:assert/strict');
+const {simulate}=require('./paperExecution');
+const row=(time,more={})=>({time,quoteAt:time,contract:'NIFTY-TEST-CE',strategy:'LONG_CALL',lotSize:25,bid:99,ask:100,stop:95,target:110,episodeId:'e1',trigger:true,...more});
+const t1='2026-10-27T04:00:00Z',t2='2026-10-27T04:00:30Z',t3='2026-10-27T04:01:00Z';
+let r=simulate([row(t1),row(t2,{bid:110,ask:111,trigger:false})]);
+assert.equal(r.events[0].type,'OPEN'); assert.equal(r.netPnl,150); assert.equal(r.events[1].reason,'TARGET');
+r=simulate([row(t1,{lotSize:65})]); assert.equal(r.events[0].reason,'RISK_LIMIT');
+r=simulate([row(t1,{quoteAt:'2026-10-27T03:59:00Z'})]);assert.equal(r.events[0].reason,'STALE_OR_INVALID_QUOTE');
+r=simulate([row(t1),row(t2,{bid:80,ask:81}),row(t3,{episodeId:'e2'})]);assert.equal(r.locked,true);assert.equal(r.events.at(-1).reason,'DAILY_LOSS_LOCK');
+r=simulate([row(t1),row('2026-10-27T04:04:00Z')]);assert.equal(r.unknown,true);assert.equal(r.netPnl,null);
+r=simulate([row(t1),row(t2,{bid:110,ask:111}),row(t3)]);assert.equal(r.events.at(-1).reason,'DUPLICATE_EPISODE');
+assert.throws(()=>simulate([row(t1),row(t1)]),/TIMESTAMPS/);
+console.log('paper execution tests passed');
