@@ -1,0 +1,11 @@
+# Offline paper execution experiment
+
+This standalone research module is not connected to the server, UI, scheduler, storage, broker, or existing signal gates. No orders are possible. Rollback: delete the module, its test and test script; there is no migration or production flag. No live deployment is required.
+
+The caller supplies chronological snapshots from one IST date with the existing selected contract, strategy, episode ID, a separately determined trigger, lot size, option bid/ask with timestamp, stop and target. Nothing in this module determines whether a signal is valid, produces triggers or connects existing EDGE records. Historical quote availability and identity matching must be established before replaying real data. No synthetic scenario is evidence of profitability.
+
+It simulates one long call or put, one lot at a time, buying at ask plus slippage and selling at bid minus slippage. It reserves estimated round-trip costs, uses configurable research defaults of Rs 10,000 capital, Rs 250 planned risk per trade and Rs 500 realized daily-loss threshold. Defaults do not change the live ledger. Stops execute at the next observed bid, potentially worse than planned. These costs and slippage are assumptions, not verified broker charges. The model does not simulate liquidity depth, partial fills, intrabar movement or broker order behavior. It does not close automatically at session end.
+
+It skips invalid/stale quotes, unsupported structures, risk/capital violations and duplicate episodes. Missing position quotes or long data gaps make outcomes UNKNOWN; an open position makes net P&L incomplete. It refuses multiple dates and non-increasing timestamps. It cannot prove no gaps existed between observations. Loss thresholds are not guaranteed caps. No real-data replay, continuous collection, sandbox or live-trading readiness is claimed.
+
+Run `npm run test:paper-execution`. Before any future integration: establish baseline with existing decision snapshots; map inputs to actual captured events and timestamped option quotes without lookahead; include full-session coverage, expenses, real fills, restart and outages; compare selected contracts and existing decisions byte-for-byte; retain an off-by-default flag and separate storage; review risk controls and implement order reconciliation before live execution.
