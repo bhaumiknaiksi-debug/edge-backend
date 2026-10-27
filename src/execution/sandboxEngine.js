@@ -100,9 +100,12 @@ function planEntry(s,result,quote,meta,now){
     exitReason:null,closedAt:null,netPnl:null,pnlBasis:'BROKER_FILLS_MINUS_ESTIMATED_FRICTION',buys:0};
   s.trades[id]=t;addOrder(s,t,'ENTRY',t.quantity,price);return 'QUEUED';
 }
-function reconcile(s,book,positions,now){
+function reconcile(s,book,positions,now,{positionBasis='BROKER_POSITIONS'}={}){
   assertState(s);
-  if(!Array.isArray(book)||!Array.isArray(positions))throw Error('BROKER_RECONCILIATION_REQUIRED');
+  const derived=positionBasis==='SANDBOX_ORDER_BOOK_DERIVED';
+  if(!Array.isArray(book)||(!derived&&!Array.isArray(positions))||(derived&&positions!==null)||
+    !['BROKER_POSITIONS','SANDBOX_ORDER_BOOK_DERIVED'].includes(positionBasis))throw Error('BROKER_RECONCILIATION_REQUIRED');
+  if(derived&&Object.values(s.trades).some(t=>!t.closedAt&&t.day!==day(now)))throw Error('PRIOR_DAY_EXPOSURE_UNVERIFIED');
   const seen=new Set(),byTag=new Map();
   for(const b of book){
     if(typeof b.order_id!=='string'||!b.order_id||seen.has(b.order_id))throw Error('INVALID_BROKER_BOOK');
@@ -113,7 +116,7 @@ function reconcile(s,book,positions,now){
     if(o.state==='QUEUED'||o.state==='EXPIRED')continue;
     if(terminal(o)&&s.trades[o.tradeId]?.closedAt)continue; // Broker books roll daily; persisted terminal fills do not.
     const rows=o.orderId?book.filter(b=>b.order_id===o.orderId):(byTag.get(o.tag)||[]);
-    if(rows.length!==1){halt(s,'ORDER_RECONCILIATION_REQUIRED');continue;}
+    if(rows.length!==1){if(derived)throw Error('ORDER_RECONCILIATION_REQUIRED');halt(s,'ORDER_RECONCILIATION_REQUIRED');continue;}
     const b=rows[0],filled=b.filled_quantity;
     if(b.tag!==o.tag||b.instrument_token!==o.instrumentKey||b.quantity!==o.quantity||b.transaction_type!==o.side||b.product!=='I'||
       b.order_type!==o.orderType||b.price!==o.price||b.trigger_price!==o.trigger||!Number.isSafeInteger(filled)||filled<o.filled||filled>o.quantity||
@@ -133,6 +136,7 @@ function reconcile(s,book,positions,now){
     }
   }
   const ownedIds=new Set(Object.values(s.orders).map(o=>o.orderId).filter(Boolean));
+  if(derived&&book.some(b=>!ownedIds.has(b.order_id)))throw Error('UNMANAGED_SANDBOX_ORDER');
   if(book.some(b=>!ownedIds.has(b.order_id)&&!['complete','cancelled','rejected'].includes(b.status)))throw Error('UNMANAGED_PENDING_ORDER');
   const expected={};
   for(const t of Object.values(s.trades)){
@@ -147,13 +151,13 @@ function reconcile(s,book,positions,now){
     }
   }
   const actual={};
-  for(const p of positions){
+  for(const p of positions||[]){
     if(p.product!=='I'||typeof p.instrument_token!=='string'||!Number.isSafeInteger(p.quantity))throw Error('INVALID_BROKER_POSITION');
     actual[p.instrument_token]=(actual[p.instrument_token]||0)+p.quantity;
   }
-  for(const instrument of new Set([...Object.keys(expected),...Object.keys(actual)]))
+  if(!derived)for(const instrument of new Set([...Object.keys(expected),...Object.keys(actual)]))
     if((expected[instrument]||0)!==(actual[instrument]||0))throw Error('BROKER_POSITION_MISMATCH');
-  s.reconciledAt=now;
+  s.positionBasis=positionBasis;s.reconciledAt=now;
 }
 function manage(s,quotes,now){
   assertState(s);

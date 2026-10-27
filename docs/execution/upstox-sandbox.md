@@ -15,7 +15,7 @@ With the flag enabled, one additive `edge_sandbox_execution_v1` JSONB state tabl
 
 The public `/api/v1/execution/sandbox/status` shows configuration/worker status without credentials, orders, positions or contracts. `/api/v1/execution/sandbox/control` provides a sandbox control page using the existing owner code. The owner code stays in page memory, not local storage or URLs. The API requires owner Bearer authentication for full state and POST `/arm` or `/stop`; commands require `confirmSandbox:true` and a unique `requestId`. Replaying an old ARM request cannot override a later STOP. No public order-send or inbound broker webhook endpoint exists.
 
-A read-only broker smoke is available with `npm run check:sandbox-connection` from a host where the sandbox token is securely configured. It calls order-book and positions reads and reports only counts/capabilities. It never places an order.
+A read-only broker smoke is available with `npm run check:sandbox-connection` from a host where the sandbox token is securely configured. It calls order-book and positions reads and reports only counts/capabilities. It never places an order. The positions read may return 404 even when the order-book read succeeds.
 
 ## Decisions and limits
 
@@ -30,7 +30,7 @@ Instrument lot, strike, expiry and tick size come from the official NSE BOD CSV 
 ## Order lifecycle
 
 1. Persist a deterministic entry intent, then claim it as SUBMITTING before any HTTP mutation. Session/contract identity deduplicates repeated polls.
-2. Keep ACKNOWLEDGED separate from fills. Reconcile tag, instrument, side, product, quantity, order type, prices and cumulative fills against broker order-book and position reads.
+2. Keep ACKNOWLEDGED separate from fills. Reconcile tag, instrument, side, product, quantity, order type, prices and cumulative fills against the broker order book. When positions are available they are independently checked. A sandbox positions HTTP 404 enables the explicitly labeled `SANDBOX_ORDER_BOOK_DERIVED` basis: exposure is calculated solely from validated broker-reported fills, not independently confirmed by a positions API. Unknown orders and unresolved prior-day trades halt reconciliation. Other positions errors fail closed. This fallback is sandbox-only and is not proof of broker-account flatness, particularly after broker book rollover.
 3. For a partial entry, cancel the unfilled remainder and wait for terminal broker confirmation before fixing the protective-stop quantity. There is an unprotected interval while cancellation/stop placement completes; this alone prevents treating V1 as a production-ready execution system.
 4. Place a broker-held SELL stop-limit for the confirmed quantity. A stop-limit is not a guaranteed fill. Fresh quotes, target/stop breach, estimated loss threshold, time exit, restart or STOP control may request closure.
 5. Cancel an active protective stop and wait for broker terminal status before submitting a new SELL exit. If the stop fills while cancellation is pending, reconcile its fill and sell only the remaining net quantity, preventing duplicate exits/short positions.
@@ -42,7 +42,7 @@ STOP immediately persists killed/disarmed state and requests cancellation/closur
 
 ## Broker capability boundary
 
-Upstox's current sandbox list explicitly advertises placement, modification and cancellation. An older official announcement also describes order/detail/book lifecycle retrieval. The order-book and positions read routes used here therefore MUST be checked with an actual sandbox token. If reads are unsupported, this worker fails closed with SANDBOX_READ_UNAVAILABLE; it never falls back to live-account reads or simulated broker fills. No real Upstox sandbox account test has been performed in this implementation session because no sandbox token was available.
+Upstox's current sandbox list explicitly advertises placement, modification and cancellation. An older official announcement also describes order/detail/book lifecycle retrieval. The sandbox account returned an order-book success and positions HTTP 404 on 28 October 2026. The worker can use the clearly labeled order-book-derived basis for this specific 404; it never falls back to live-account reads or simulated broker fills. Sandbox order placement and a real sandbox fill/exit lifecycle remain unverified.
 
 ## Validation and rollout
 

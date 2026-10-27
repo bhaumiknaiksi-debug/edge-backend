@@ -65,5 +65,15 @@ function open(f){assert.equal(E.planEntry(f.state,f.result,f.quote,f.meta,BASE),
  assert.throws(()=>E.reconcile(f.state,[],positions('foreign',1),BASE),/BROKER_POSITION_MISMATCH/);
  E.control(f.state,'STOP','stop-request-00002',BASE);E.control(f.state,'ARM','arm-request-000001',BASE);assert.equal(f.state.armed,false,'replayed ARM command cannot undo a later STOP');
 }
-console.log('Sandbox engine PASS: partial fills, cancel/stop-fill race, net exits, durable identities, restart ambiguity, daily loss latch and unchanged decisions');
+{
+ const f=fixture(),entry=open(f),rows=orderRows(f.state);Object.assign(rows[0],{status:'complete',filled_quantity:65,average_price:100});
+ E.reconcile(f.state,rows,null,BASE+1000,{positionBasis:'SANDBOX_ORDER_BOOK_DERIVED'});
+ assert.equal(f.state.positionBasis,'SANDBOX_ORDER_BOOK_DERIVED');assert.equal(entry.filled,65);
+ E.manage(f.state,{[entry.instrumentKey]:{...f.quote,receivedAt:BASE+1000}},BASE+1000);
+ const stop=E.claim(f.state,BASE+1000);assert.equal(stop.order.quantity,65,'stop uses broker-reported fills');
+ E.finish(f.state,stop,{state:'ACKNOWLEDGED',orderId:'stop-derived'});rows.push(orderRows(f.state).find(o=>o.order_id==='stop-derived'));
+ assert.throws(()=>E.reconcile(f.state,[...rows,{order_id:'foreign',status:'complete'}],null,BASE+2000,{positionBasis:'SANDBOX_ORDER_BOOK_DERIVED'}),/UNMANAGED_SANDBOX_ORDER/);
+ assert.throws(()=>E.reconcile(f.state,rows,null,BASE+86400000,{positionBasis:'SANDBOX_ORDER_BOOK_DERIVED'}),/PRIOR_DAY_EXPOSURE_UNVERIFIED/);
+}
+console.log('Sandbox engine PASS: partial fills, derived-position safety, cancel/stop-fill race, net exits, restart ambiguity and daily loss latch');
 module.exports={fixture,orderRows,positions};
