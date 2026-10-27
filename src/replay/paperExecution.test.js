@@ -35,4 +35,6 @@ assert.throws(()=>simulate([row('2026-10-27T04:00:00')]),/TIMESTAMPS/);
 const input=[row(t1),row(t2,{bid:111,ask:112})], original=JSON.stringify(input);
 simulate(input);assert.equal(JSON.stringify(input),original);
 assert.equal(simulate(input).executionAllowed,false);
+assert.equal(simulate(input,{slippage:0.5}).events[0].plannedRisk,250);
+assert.equal(simulate(input,{slippage:1}).events[0].reason,'RISK_LIMIT','friction must consume planned risk');
 console.log('Paper execution PASS: cash depletion, daily risk budget, loss latch, original contracts, no future quotes, gaps, open results and isolation');

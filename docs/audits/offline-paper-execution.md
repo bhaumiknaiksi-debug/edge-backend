@@ -42,13 +42,21 @@ The CLI rejects unknown arguments, including credential arguments. Nothing needs
 
 A minimized copy of that actual poll is preserved in `fixtures/paper-evidence-captured-20261028.json` to test the real schema and missing-data behavior. Synthetic integration tests separately use the existing shadow-timing and planner modules. Fixture profits are never reported as measured market performance.
 
+### Retained database check
+
+A subsequent read-only query of the existing evidence database recovered all 24 retained POLL_SNAPSHOT rows dated 27 October IST. Of these, 23 have the market-open gate set and are classified Tier C, spanning `08:43:11.565Z` to `09:05:09.136Z` (14:13 to 14:35 IST). The recorded C timing states are UNKNOWN (9), WAITING (12) and INVALIDATED (2), with no CONFIRMED observation. There are zero shadow-event rows detected during that market session. All 24 retained polls lack independent quote receipt times, historical lot sidecars and the structural inputs necessary for this planner reconstruction. Replaying them therefore produces no executable entries and null net P&L, rather than inventing losses or wins. The scoped findings are in `paper-retained-evidence-20261027.json`.
+
+The longest interval between retained open-market state snapshots is 204,388 ms. Lightweight mode records changed states, so this is NOT a measurement of the live poll interval or proof of a polling outage. These observations represent a small portion of one trading session; neither the endpoint nor database query establishes a full day of coverage.
+
+The database query used a SELECT restricted to `record_type='POLL_SNAPSHOT'` and `recorded_at >= '2026-10-27T00:00:00+05:30' AND recorded_at < '2026-10-28T00:00:00+05:30'`, ordered by timestamp and record key, with a limit of 2,000. Its 24 gzip payloads were decompressed locally. No account credentials, private broker fills or ledger rows were read, and no database writes occurred.
+
 ## Validation and next measurable milestone
 
 Run `npm run test:paper-execution`, `npm run test:all`, `npm run test:syntax`, and `git diff --check`. Tests cover actual module integration, original contract/expiry retention, no lookahead quote joins, explicit metadata, source-version mismatch, no retroactive baselines, unavailable fields, cash depletion, daily loss lock, gap losses, invalid/stale quotes, duplicate episodes, ordering, session boundaries and input immutability.
 
 Before connecting live execution:
 
-1. Obtain a scoped read-only export of the retained market-session polls. Audit what the database actually holds rather than extrapolating from the 100-record endpoint.
+1. Completed for 27 October: scoped read-only export of retained polls, with the limitations above. Further dates remain unevaluated; this one cannot establish profitable automated execution.
 2. Capture full-session research observations, contemporaneous hypotheses, quote receipt timestamps and effective broker instrument metadata independently of the bounded working set. Continue observing every open paper contract even if candidates change. This capture path is not implemented by this PR.
 3. Replay complete sessions, compare contracts with baseline EDGE, and report trade counts, all skip reasons, UNKNOWN coverage, costs, drawdown and sensitivity to nonzero slippage. Evaluate rules on later held-out sessions. No numerical profit promise or live-readiness threshold is inferred from fixture tests.
 4. Separately build sandbox order handling, persistent intent/fill reconciliation, restart recovery, protective exits and kill switch. Establish always-awake hosting and broker static-IP/account prerequisites before live activation.
