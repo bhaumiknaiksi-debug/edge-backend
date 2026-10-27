@@ -1,0 +1,43 @@
+{
+  "scope": "RETAINED_POLL_SNAPSHOTS_FOR_ONE_IST_DATE_NOT_FULL_SESSION_COVERAGE",
+  "session": "2026-10-27",
+  "source": "Read-only SELECT from the existing EDGE evidence database; no schema or data writes",
+  "table": "edge_evidence_v1",
+  "inputSha256": "70de06bebe32f29904337c2d15c2c37b635dcc68cb8e37703afc7b827d77e481",
+  "queryBounds": {
+    "from": "2026-10-27T00:00:00+05:30",
+    "untilExclusive": "2026-10-28T00:00:00+05:30",
+    "recordType": "POLL_SNAPSHOT"
+  },
+  "retainedSnapshots": 24,
+  "openMarketSnapshots": 23,
+  "firstOpenMarketSnapshot": "2026-10-27T08:43:11.565Z",
+  "lastOpenMarketSnapshot": "2026-10-27T09:05:09.136Z",
+  "longestStoredSnapshotIntervalMs": 204388,
+  "openMarketTierCounts": {
+    "C": 23
+  },
+  "openMarketShadowTimingCounts": {
+    "UNKNOWN": 9,
+    "WAITING": 12,
+    "INVALIDATED": 2
+  },
+  "shadowEventRowsInMarketSession": 0,
+  "replay": {
+    "readyRows": 0,
+    "blockerCounts": {
+      "RECORDED_MARKET_NOT_OPEN": 1,
+      "MISSING_LOT_METADATA": 24,
+      "MISSING_TIMESTAMPED_QUOTES": 24,
+      "MISSING_RECONSTRUCTION_INPUTS": 24,
+      "MISSING_USABLE_EXIT_HYPOTHESIS": 24,
+      "NO_RECORDED_SHADOW_TRIGGER": 24
+    },
+    "netPnl": null
+  },
+  "limitations": [
+    "Lightweight recording stores changed states rather than every poll; stored gaps are not a measurement of polling gaps.",
+    "The recovered observations span only a portion of the market session. This does not establish no opportunities occurred elsewhere.",
+    "Quote receipt timestamps, historical lot metadata and sufficient exit reconstruction inputs are absent. No P&L claim can be made."
+  ]
+}
