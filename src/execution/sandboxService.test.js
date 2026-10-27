@@ -54,7 +54,9 @@ function setup(shared){
  const quoteFailure=setup();await quoteFailure.service.tick();await quoteFailure.store.mutate(s=>control(s,'ARM','quote-failure-arm-01',quoteFailure.time()));await quoteFailure.service.tick();
  quoteFailure.dependencies.quotes.get=async()=>{throw Error('quote error');};await quoteFailure.store.mutate(s=>control(s,'STOP','quote-failure-stop-1',quoteFailure.time()));quoteFailure.advance();await quoteFailure.service.tick();assert.equal(quoteFailure.rows[0].status,'cancelled','quote outage cannot prevent cancelling an unfilled entry');
  const bookFailure=setup();await bookFailure.service.tick();await bookFailure.store.mutate(s=>control(s,'ARM','book-failure-arm-01',bookFailure.time()));await bookFailure.service.tick();
- bookFailure.dependencies.broker.getOrders=async()=>{throw Error('SANDBOX_READ_UNAVAILABLE');};await bookFailure.store.mutate(s=>control(s,'STOP','book-failure-stop-1',bookFailure.time()));bookFailure.advance();await bookFailure.service.tick();assert.equal(bookFailure.rows[0].status,'cancelled','kill still cancels a known entry during a broker read outage');
+ bookFailure.dependencies.broker.getOrders=async()=>{const e=Error('private details');e.httpStatus=404;throw e;};await bookFailure.store.mutate(s=>control(s,'STOP','book-failure-stop-1',bookFailure.time()));bookFailure.advance();await bookFailure.service.tick();assert.equal(bookFailure.rows[0].status,'cancelled','kill still cancels a known entry during a broker read outage');
+ assert.deepEqual(bookFailure.service.status().brokerReads,{orders:{ok:false,httpStatus:404},positions:{ok:true}});
+ assert.ok(!JSON.stringify(bookFailure.service.status()).includes('private details'));
  const lost=setup();await lost.service.tick();await lost.store.mutate(s=>control(s,'ARM','lost-ack-arm-00001',lost.time()));lost.loseNextAck();await lost.service.tick();
  assert.equal(lost.rows.length,1);assert.equal(lost.service.status().reason,'STORE_WRITE_FAILED');
  lost.advance();await lost.service.tick();assert.equal(lost.rows.length,1,'lost persistence ACK must not place a duplicate');

@@ -19,9 +19,9 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
   const broker=reason?null:dependencies.broker||createSandbox({token:env.EDGE_UPSTOX_SANDBOX_TOKEN});
   const catalog=reason?null:dependencies.catalog||createCatalog({now});
   const quoteSource=reason?null:dependencies.quotes||createMarketQuotes({token:env.UPSTOX_ACCESS_TOKEN,now});
-  let running=false,stopped=false,timer=null,lastError=reason,lastTickAt=null,lastEntryResult=null;
+  let running=false,stopped=false,timer=null,lastError=reason,lastTickAt=null,lastEntryResult=null,brokerReads=null;
   const publicStatus=()=>({version:'EDGE_SANDBOX_EXECUTION_V1',enabled,mode:'SANDBOX',liveOrdersSupported:false,
-    liveDecisionImpact:false,configured:!reason,reason:lastError,lastTickAt,lastEntryResult});
+    liveDecisionImpact:false,configured:!reason,reason:lastError,lastTickAt,lastEntryResult,brokerReads});
   const clean=e=>/^[A-Z_]{3,80}$/.test(e?.message||'')?e.message:'SANDBOX_SERVICE_UNAVAILABLE';
   function currentAllowed(order,context,time){
     const r=context.analysis,d=r?.decision,t=Date.parse(r?.timestamp),q=context.quotes?.[order.instrumentKey];
@@ -46,7 +46,12 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
       if(instrumentKey)keys.push(instrumentKey);
       let readAt;
       const [brokerState,quotes,meta]=await Promise.all([
-        Promise.all([broker.getOrders(),broker.getPositions()]).then(rows=>{readAt=now();return rows;}),
+        Promise.allSettled([broker.getOrders(),broker.getPositions()]).then(results=>{
+          const describe=r=>r.status==='fulfilled'?{ok:true}:{ok:false,httpStatus:Number.isInteger(r.reason?.httpStatus)&&r.reason.httpStatus>=100&&r.reason.httpStatus<=599?r.reason.httpStatus:null};
+          brokerReads={orders:describe(results[0]),positions:describe(results[1])};
+          if(results.some(r=>r.status==='rejected'))throw Error('SANDBOX_READ_UNAVAILABLE');
+          readAt=now();return results.map(r=>r.value);
+        }),
         quoteSource.get(keys).catch(()=>({})),catalog.get(instrumentKey).catch(()=>null)]);
       const [book,positions]=brokerState;
       if(stopped)return publicStatus();

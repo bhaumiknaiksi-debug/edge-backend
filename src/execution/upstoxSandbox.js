@@ -16,7 +16,8 @@ function createSandbox({token,request=fetch}={}){
     try{
       const response=await request(BASE+path,{method,redirect:'error',headers:{'Content-Type':'application/json',Accept:'application/json',Authorization:'Bearer '+token},
         ...(body?{body:JSON.stringify(body)}:{}),signal:AbortSignal.timeout(7000)});
-      return {ok:response.ok,status:response.status,payload:await boundedJson(response)};
+      const payload=await boundedJson(response).catch(()=>null);
+      return {ok:response.ok,status:response.status,payload};
     }catch(_){return null;}
   }
   async function placeOrder({instrumentKey,quantity,price,side,tag,orderType='LIMIT',trigger=0}){
@@ -42,7 +43,7 @@ function createSandbox({token,request=fetch}={}){
     if(reply?.ok&&reply.payload?.status==='success'&&reply.payload.data?.order_id===orderId)return {state:'ACKNOWLEDGED',orderId};
     return failure(reply);
   }
-  async function read(path){const reply=await call('GET',path);if(!reply?.ok||reply.payload?.status!=='success'||!Array.isArray(reply.payload.data))throw Error('SANDBOX_READ_UNAVAILABLE');return reply.payload.data;}
+  async function read(path){const reply=await call('GET',path);if(!reply?.ok||reply.payload?.status!=='success'||!Array.isArray(reply.payload.data)){const error=Error('SANDBOX_READ_UNAVAILABLE');error.httpStatus=Number.isInteger(reply?.status)?reply.status:null;throw error;}return reply.payload.data;}
   return {placeOrder,placeLimit:placeOrder,cancel,getOrders:()=>read('/v2/order/retrieve-all'),getPositions:()=>read('/v2/portfolio/short-term-positions')};
 }
 module.exports={createSandbox,boundedJson};
