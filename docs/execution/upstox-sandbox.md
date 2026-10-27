@@ -1,6 +1,6 @@
 # EDGE sandbox execution V1
 
-This is an executable sandbox order workflow, connected to EDGE through an optional background worker and owner-only controls. It is not a live trading release. Every order and cancellation has a hard-coded `sandbox.upstox.com` destination. There is no live mode or live-order host setting. The existing market-data credential is used only for a fixed GET quote endpoint.
+This is an executable sandbox order workflow, connected to EDGE through an optional background worker and owner-only controls. It is not a live trading release. Every order and cancellation has a hard-coded `api-sandbox.upstox.com` destination. There is no live mode or live-order host setting. The existing market-data credential is used only for a fixed GET quote endpoint.
 
 ## Runtime setup
 
