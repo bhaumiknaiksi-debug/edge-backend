@@ -1,0 +1,8 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>EDGE Sandbox Execution</title><link rel="stylesheet" href="/api/v1/execution/sandbox/control.css"></head>
+<body><main><header><span class="brand">EDGE</span><span class="badge">SANDBOX</span></header><h1>Execution control</h1><p class="muted">Test order management. Real-money trading is disabled.</p>
+<section id="login"><label for="owner">EDGE owner code</label><div class="login"><input id="owner" type="password" autocomplete="off" placeholder="Your existing owner code"><button id="connect">Connect</button></div></section>
+<p id="message" role="status">Checking connection…</p>
+<section class="metrics"><article><small>System</small><strong id="system">—</strong></article><article><small>Working orders</small><strong id="orders">—</strong></article><article><small>Open trades</small><strong id="positions">—</strong></article></section>
+<p id="limits" class="muted"></p><section class="actions"><button id="arm" disabled>Arm sandbox</button><button id="stop" class="danger" disabled>Stop &amp; close sandbox trades</button></section><p class="muted">Stopping blocks new entries and requests cancellation and closure. Check the orders below to confirm completion.</p>
+<section><h2>Orders</h2><div id="list" class="muted">Connect to see order status.</div></section><p class="muted">A restart disarms entries. An accepted order is not necessarily filled.</p></main><script src="/api/v1/execution/sandbox/control.js" defer></script></body></html>
