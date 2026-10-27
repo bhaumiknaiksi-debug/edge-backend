@@ -15,6 +15,7 @@
    el('system').textContent=s.killed?'Stopped':s.armed?'Armed':'Disarmed';
    el('orders').textContent=orders.filter(o=>!['COMPLETE','CANCELLED','REJECTED','EXPIRED'].includes(o.state)).length;
    el('positions').textContent=trades.filter(t=>!t.closedAt).length;
+   el('position-basis').textContent=s.positionBasis==='SANDBOX_ORDER_BOOK_DERIVED'?'Exposure is derived from sandbox order fills; it is not independently confirmed by a positions API.':s.positionBasis==='BROKER_POSITIONS'?'Exposure is checked against broker positions.':'';
    el('arm').disabled=s.armed;el('stop').disabled=false;
    message(s.haltReason?human(s.haltReason):data.status.reason?human(data.status.reason):human(data.status.lastEntryResult||'Connected'));
    el('list').replaceChildren();

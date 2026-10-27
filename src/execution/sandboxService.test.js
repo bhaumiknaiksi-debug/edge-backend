@@ -57,6 +57,14 @@ function setup(shared){
  bookFailure.dependencies.broker.getOrders=async()=>{const e=Error('private details');e.httpStatus=404;throw e;};await bookFailure.store.mutate(s=>control(s,'STOP','book-failure-stop-1',bookFailure.time()));bookFailure.advance();await bookFailure.service.tick();assert.equal(bookFailure.rows[0].status,'cancelled','kill still cancels a known entry during a broker read outage');
  assert.deepEqual(bookFailure.service.status().brokerReads,{orders:{ok:false,httpStatus:404},positions:{ok:true}});
  assert.ok(!JSON.stringify(bookFailure.service.status()).includes('private details'));
+ const missingPositions=setup();missingPositions.dependencies.broker.getPositions=async()=>{const e=Error('SANDBOX_READ_UNAVAILABLE');e.httpStatus=404;throw e;};
+ await missingPositions.service.tick();assert.equal(missingPositions.service.status().positionBasis,'SANDBOX_ORDER_BOOK_DERIVED');
+ assert.equal(missingPositions.service.status().reason,null);assert.equal((await missingPositions.store.read()).armed,false);
+ await missingPositions.store.mutate(s=>control(s,'ARM','derived-arm-request-1',missingPositions.time()));await missingPositions.service.tick();
+ assert.equal(missingPositions.rows.length,1);Object.assign(missingPositions.rows[0],{status:'complete',filled_quantity:65,average_price:100});
+ missingPositions.advance();await missingPositions.service.tick();assert.equal(missingPositions.rows[1].order_type,'SL');assert.equal(missingPositions.rows[1].quantity,65);
+ const badPositions=setup();badPositions.dependencies.broker.getPositions=async()=>{const e=Error('SANDBOX_READ_UNAVAILABLE');e.httpStatus=401;throw e;};
+ await badPositions.service.tick();assert.equal(badPositions.service.status().reason,'SANDBOX_READ_UNAVAILABLE');assert.equal(badPositions.service.status().positionBasis,null);
  const lost=setup();await lost.service.tick();await lost.store.mutate(s=>control(s,'ARM','lost-ack-arm-00001',lost.time()));lost.loseNextAck();await lost.service.tick();
  assert.equal(lost.rows.length,1);assert.equal(lost.service.status().reason,'STORE_WRITE_FAILED');
  lost.advance();await lost.service.tick();assert.equal(lost.rows.length,1,'lost persistence ACK must not place a duplicate');
