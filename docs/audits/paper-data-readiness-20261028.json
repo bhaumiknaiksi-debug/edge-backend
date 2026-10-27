@@ -1,0 +1,88 @@
+{
+  "inputSha256": "94fcbb65b2fb9d057c2199d09f4a86091c977a524bbabac64edabf4fa8f95401",
+  "version": "PAPER_EVIDENCE_REPLAY_V1",
+  "mode": "OFFLINE_RESEARCH_ONLY",
+  "executionAllowed": false,
+  "liveDecisionImpact": false,
+  "tier": "C",
+  "entryPolicy": "RECORDED_SHADOW_CROSS_RESEARCH_ONLY",
+  "records": 100,
+  "pollSnapshots": 1,
+  "recordTypes": {
+    "RESEARCH_CANDIDATE_OUTCOME": 99,
+    "POLL_SNAPSHOT": 1
+  },
+  "excludedOutcomeRecords": 99,
+  "quoteSidecarRecords": 0,
+  "instrumentSidecarRecords": 0,
+  "readyRows": 0,
+  "blockerCounts": {
+    "RECORDED_MARKET_NOT_OPEN": 1,
+    "INVALID_OR_EXPIRED_CONTRACT": 1,
+    "MISSING_LOT_METADATA": 1,
+    "MISSING_TIMESTAMPED_QUOTES": 1,
+    "MISSING_RECONSTRUCTION_INPUTS": 1,
+    "MISSING_USABLE_EXIT_HYPOTHESIS": 1,
+    "NO_RECORDED_SHADOW_TRIGGER": 1
+  },
+  "observations": [
+    {
+      "sourceId": "2026-10-27T19:46:03.295Z|LONG_PUT|MARKET_CLOSED",
+      "time": "2026-10-27T19:46:03.295Z",
+      "reasons": [
+        "RECORDED_MARKET_NOT_OPEN",
+        "INVALID_OR_EXPIRED_CONTRACT",
+        "MISSING_LOT_METADATA",
+        "MISSING_TIMESTAMPED_QUOTES",
+        "MISSING_RECONSTRUCTION_INPUTS",
+        "MISSING_USABLE_EXIT_HYPOTHESIS",
+        "NO_RECORDED_SHADOW_TRIGGER"
+      ],
+      "planBasis": null
+    }
+  ],
+  "sessions": [
+    {
+      "session": "2026-10-28",
+      "observations": 1,
+      "firstObservedAt": "2026-10-27T19:46:03.295Z",
+      "lastObservedAt": "2026-10-27T19:46:03.295Z",
+      "opens": 0,
+      "closes": 0,
+      "mode": "OFFLINE_RESEARCH_ONLY",
+      "executionAllowed": false,
+      "liveDecisionImpact": false,
+      "netPnl": null,
+      "realizedPnl": 0,
+      "locked": false,
+      "openPosition": null,
+      "unknown": false,
+      "events": [
+        {
+          "time": "2026-10-27T19:46:03.295Z",
+          "type": "SKIP",
+          "reason": "RECORDED_MARKET_NOT_OPEN",
+          "sourceId": "2026-10-27T19:46:03.295Z|LONG_PUT|MARKET_CLOSED"
+        }
+      ],
+      "assumptions": {
+        "capital": 10000,
+        "perTradeRisk": 250,
+        "dailyLoss": 500,
+        "roundTripCosts": 100,
+        "slippage": 0,
+        "maxQuoteAgeMs": 30000,
+        "maxGapMs": 90000
+      },
+      "coverage": "INPUT_WINDOW_ONLY_NOT_A_FULL_SESSION_PROOF",
+      "warning": "Sampled quotes are not fills. Stops and loss thresholds are not guarantees. No depth, partial-fill, intrabar or broker-failure modelling."
+    }
+  ],
+  "coverage": "INPUT_WINDOW_ONLY_NOT_CONTINUOUS_COLLECTION",
+  "limitations": [
+    "Outcome summaries and candle closes are never used as bid/ask quotes.",
+    "Historical receipt times and lot metadata must be supplied with provenance; analysis timestamps are not substituted.",
+    "Reconstructed plans require a matching recorded planner hash and remain unvalidated hypotheses.",
+    "No real broker fills, partial fills, intrabar path or execution reliability is established."
+  ]
+}

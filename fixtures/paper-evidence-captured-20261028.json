@@ -1,0 +1,212 @@
+{
+  "source": "Public EDGE working-set endpoint; minimized actual poll, not a synthetic trade",
+  "entries": [
+    {
+      "id": "2026-10-27T19:46:03.295Z|LONG_PUT|MARKET_CLOSED",
+      "recordType": "POLL_SNAPSHOT",
+      "timestamp": "2026-10-27T19:46:03.295Z",
+      "expiry": "2026-10-27",
+      "strategy": "LONG_PUT",
+      "spot": 22749.75,
+      "risk": {
+        "status": "CONDITIONAL",
+        "reason": "Risk plan is defined but market is not OPEN; no live execution should occur.",
+        "marketPhase": "CLOSED"
+      },
+      "signalTier": {
+        "version": "SIGNAL_TIER_V1",
+        "tier": "OBSERVING",
+        "label": "OBSERVING",
+        "researchOnly": true,
+        "liveDecisionImpact": false,
+        "executionAllowed": false,
+        "notProbability": true,
+        "explanation": "No research-tier signal yet.",
+        "chartAgreement": "UNRESOLVED",
+        "entryPassCount": 1,
+        "failedGates": [
+          "SETUP",
+          "TRIGGER",
+          "LIQUIDITY",
+          "RISK",
+          "POSITION",
+          "MARKET"
+        ],
+        "gates": {
+          "regime": true,
+          "strategy": true,
+          "setup": false,
+          "trigger": false,
+          "price": true,
+          "liquidity": false,
+          "risk": false,
+          "position": false,
+          "market": false
+        }
+      },
+      "shadowTiming": {
+        "version": "OPENING_RANGE_SHADOW_V1",
+        "researchOnly": true,
+        "liveDecisionImpact": false,
+        "executionAllowed": false,
+        "plans": {
+          "A": {
+            "executionAllowed": false,
+            "status": "UNKNOWN",
+            "reason": "MARKET_CLOSED"
+          },
+          "B": {
+            "executionAllowed": false,
+            "status": "UNKNOWN",
+            "reason": "MARKET_CLOSED"
+          },
+          "C": {
+            "executionAllowed": false,
+            "status": "UNKNOWN",
+            "reason": "MARKET_CLOSED"
+          }
+        }
+      },
+      "researchCandidatePlans": {
+        "version": "RESEARCH_CANDIDATE_PLANS_V1",
+        "plans": {
+          "A": {
+            "strategy": "LONG_PUT",
+            "available": true,
+            "legs": {
+              "buyLeg": {
+                "contractId": "NIFTY 27 OCT 22750 PE",
+                "instrumentKey": "NSE_FO|51343",
+                "strike": 22750,
+                "premium": "0.20",
+                "bid": 0.2,
+                "ask": 0.25,
+                "type": "PE"
+              },
+              "legDelta": 0.5,
+              "maxProfit": "22749.80",
+              "maxProfitRupees": 1478737,
+              "maxLoss": "0.20",
+              "maxLossRupees": 13,
+              "breakeven": "22750",
+              "rrr": "High",
+              "pop": 50,
+              "lotSize": 65,
+              "liquidity": "TIGHT"
+            }
+          },
+          "B": {
+            "strategy": "BEAR_PUT_SPREAD",
+            "available": true,
+            "legs": {
+              "buyLeg": {
+                "contractId": "NIFTY 27 OCT 22850 PE",
+                "instrumentKey": "NSE_FO|51347",
+                "strike": 22850,
+                "type": "PE",
+                "premium": 100.15,
+                "bid": 100,
+                "ask": 100.2,
+                "delta": 0.985,
+                "spread": 0.2,
+                "spreadPct": 0.2
+              },
+              "sellLeg": {
+                "contractId": "NIFTY 27 OCT 22800 PE",
+                "instrumentKey": "NSE_FO|51345",
+                "strike": 22800,
+                "type": "PE",
+                "premium": 50.1,
+                "bid": 50.1,
+                "ask": 50.2,
+                "delta": 0.988,
+                "spread": 0.1,
+                "spreadPct": 0.2
+              }
+            }
+          },
+          "C": {
+            "strategy": "LONG_PUT",
+            "available": true,
+            "legs": {
+              "buyLeg": {
+                "contractId": "NIFTY 27 OCT 22850 PE",
+                "instrumentKey": "NSE_FO|51347",
+                "strike": 22850,
+                "type": "PE",
+                "premium": 100.15,
+                "bid": 100,
+                "ask": 100.2,
+                "delta": 0.985,
+                "spread": 0.2,
+                "spreadPct": 0.2
+              }
+            }
+          }
+        }
+      },
+      "ruleSpec": {
+        "version": "SIGNAL_RULE_SPEC_V1",
+        "implementationHash": "b6a5d5b449578f8e8b155efdba95a5a2464016b12bfab8b80e334c8aa60f6565",
+        "components": {
+          "selection": {
+            "files": {
+              "engine/marketFeatureEngine.js": "192a092068dd40e50fdd111ba4c083e7ba5480203a445be37c70794befc52854",
+              "engine/regimeEngine.js": "870bc3aa3b21ffc08e2dfe815f1bcd13c8daef7fd2ba98bae57b6cf4b7f376bd",
+              "engine/strategyEngine.js": "055344da915f1a052fdae77edf09b8005381077ee1b86bcbf27e185e4a956af9",
+              "engine/candidatePlanEngine.js": "cb700312a66009762ff82689d6d60e57238baa93743e9c27300165541821aba5",
+              "server.js": "43ff3b173582e5cf79bb965c3a4df4602dd536e2c78b4020c82d5e5468f94fc6"
+            }
+          },
+          "readiness": {
+            "files": {
+              "engine/setupEngine.js": "7e9832764d169b000e5253dca5f9d1dc24baa6cdd8879dcfa3c3f00a16bae4b5",
+              "engine/signalTier.js": "62418ebc85449b9f7105cbac9d63635e392153e2f62d74228ef9fd2006faba85",
+              "engine/shadowTiming.js": "cd9707edc03d942a84cc9853c6f7d1e0183acc5f97a9d9f0c7b123849633829d",
+              "engine/decisionOrchestrator.js": "d0e599289257ba89d3249abd5dc3344c4ee06dafae991c534793c5dbf00f5c38"
+            }
+          },
+          "chart": {
+            "files": {
+              "engine/chartIntelligence.js": "bf3a26b29d369c2049c6e364bfa9fb78a65ee8f01d08be45f5f29e65d0d4b9f8",
+              "engine/cprEngine.js": "2ca863d316024c0f4639f662d47e82b972986d28baf337f8885755dff1d87724",
+              "engine/setupObservability.js": "0abd2832bb5f87a0e23be5d4c9127e421172773f26749eb2f1b37c63520ad9c6",
+              "data/marketContext.js": "d322863b2431026877d25d4bc641db901dbee528ca4b8b89e2336eda81217136"
+            }
+          },
+          "entry": {
+            "files": {
+              "engine/entryEngine.js": "fddf33757c772467414470a5e64fa154410e1b95852024343d17abb8ca6ec85c"
+            }
+          },
+          "eligibility": {
+            "files": {
+              "engine/riskEngine.js": "57453b666379e6e01ffd4d613f14bd6b3efbad1cbabe5caf94c248c9fb3e484f",
+              "engine/positionSizingEngine.js": "0913af3ea1b2308b989704a9043fa49701b8a63dbe52dba635389f66cc6b1050",
+              "trading/ledger.js": "921c852f746980201bac755049713d239157dae80475e8e858c56504043d3f38"
+            }
+          },
+          "shadowTiming": {
+            "files": {
+              "engine/shadowTiming.js": "cd9707edc03d942a84cc9853c6f7d1e0183acc5f97a9d9f0c7b123849633829d"
+            }
+          },
+          "shadowEvents": {
+            "files": {
+              "evidence/shadowEvents.js": "2f95920de221896e8f6a9045642515071c471f7453cfede712d68ebefb9dc5db"
+            }
+          },
+          "exitHypotheses": {
+            "files": {
+              "trading/readOnlyTradePlanner.js": "4b825dea347875afebab9d7bf57349dd2662e6092de2b7abc63ca8468ac7d845",
+              "engine/managementEngine.js": "fc9cfeb89f106a168940f666200d739c7072a222478cb10e5a06bb2bf6efe175",
+              "engine/riskEngine.js": "57453b666379e6e01ffd4d613f14bd6b3efbad1cbabe5caf94c248c9fb3e484f"
+            }
+          }
+        },
+        "paperExitSimulator": "NOT_IMPLEMENTED",
+        "confidenceCalibration": "NOT_VALIDATED"
+      }
+    }
+  ]
+}

@@ -40,7 +40,8 @@
     "test:shadow-timing": "node src/engine/shadowTiming.test.js",
     "test:shadow-events": "node src/evidence/shadowEvents.test.js",
     "test:signal-recording": "node src/evidence/signalRecording.test.js",
-    "test:paper-execution": "node src/replay/paperExecution.test.js"
+    "test:paper-execution": "node src/replay/paperExecution.test.js && node src/replay/paperEvidence.test.js",
+    "replay:paper": "node scripts/replay-paper-evidence.js"
   },
   "dependencies": {
     "express": "^4.18.0",
