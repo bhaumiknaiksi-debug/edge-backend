@@ -70,7 +70,8 @@ function open(f){assert.equal(E.planEntry(f.state,f.result,f.quote,f.meta,BASE),
  E.reconcile(f.state,rows,null,BASE+1000,{positionBasis:'SANDBOX_ORDER_BOOK_DERIVED'});
  assert.equal(f.state.positionBasis,'SANDBOX_ORDER_BOOK_DERIVED');assert.equal(entry.filled,65);
  E.manage(f.state,{[entry.instrumentKey]:{...f.quote,receivedAt:BASE+1000}},BASE+1000);
- assert.equal(E.claim(f.state,BASE+1000).order.quantity,65,'stop uses broker-reported fills');
+ const stop=E.claim(f.state,BASE+1000);assert.equal(stop.order.quantity,65,'stop uses broker-reported fills');
+ E.finish(f.state,stop,{state:'ACKNOWLEDGED',orderId:'stop-derived'});rows.push(orderRows(f.state).find(o=>o.order_id==='stop-derived'));
  assert.throws(()=>E.reconcile(f.state,[...rows,{order_id:'foreign',status:'complete'}],null,BASE+2000,{positionBasis:'SANDBOX_ORDER_BOOK_DERIVED'}),/UNMANAGED_SANDBOX_ORDER/);
  assert.throws(()=>E.reconcile(f.state,rows,null,BASE+86400000,{positionBasis:'SANDBOX_ORDER_BOOK_DERIVED'}),/PRIOR_DAY_EXPOSURE_UNVERIFIED/);
 }

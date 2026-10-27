@@ -85,7 +85,7 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
       if(store){
         const emergency=await store.mutate(s=>{
           if(s.lease?.owner!==bootId)return null;
-          engine.halt(s,lastError);return engine.claimEmergencyCancel(s,now());
+          engine.halt(s,lastError);s.reconciledAt=null;return engine.claimEmergencyCancel(s,now());
         }).catch(()=>null);
         if(emergency?.result){
           const result=await broker.cancel(emergency.result.order.orderId).catch(()=>({state:'UNCERTAIN'}));

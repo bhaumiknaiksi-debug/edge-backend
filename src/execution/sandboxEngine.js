@@ -116,7 +116,7 @@ function reconcile(s,book,positions,now,{positionBasis='BROKER_POSITIONS'}={}){
     if(o.state==='QUEUED'||o.state==='EXPIRED')continue;
     if(terminal(o)&&s.trades[o.tradeId]?.closedAt)continue; // Broker books roll daily; persisted terminal fills do not.
     const rows=o.orderId?book.filter(b=>b.order_id===o.orderId):(byTag.get(o.tag)||[]);
-    if(rows.length!==1){halt(s,'ORDER_RECONCILIATION_REQUIRED');continue;}
+    if(rows.length!==1){if(derived)throw Error('ORDER_RECONCILIATION_REQUIRED');halt(s,'ORDER_RECONCILIATION_REQUIRED');continue;}
     const b=rows[0],filled=b.filled_quantity;
     if(b.tag!==o.tag||b.instrument_token!==o.instrumentKey||b.quantity!==o.quantity||b.transaction_type!==o.side||b.product!=='I'||
       b.order_type!==o.orderType||b.price!==o.price||b.trigger_price!==o.trigger||!Number.isSafeInteger(filled)||filled<o.filled||filled>o.quantity||

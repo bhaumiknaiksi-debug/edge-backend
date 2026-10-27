@@ -65,6 +65,9 @@ function setup(shared){
  missingPositions.advance();await missingPositions.service.tick();assert.equal(missingPositions.rows[1].order_type,'SL');assert.equal(missingPositions.rows[1].quantity,65);
  const badPositions=setup();badPositions.dependencies.broker.getPositions=async()=>{const e=Error('SANDBOX_READ_UNAVAILABLE');e.httpStatus=401;throw e;};
  await badPositions.service.tick();assert.equal(badPositions.service.status().reason,'SANDBOX_READ_UNAVAILABLE');assert.equal(badPositions.service.status().positionBasis,null);
+ const foreign=setup();await foreign.service.tick();foreign.rows.push({order_id:'foreign',status:'complete'});foreign.dependencies.broker.getPositions=missingPositions.dependencies.broker.getPositions;
+ await foreign.service.tick();assert.equal(foreign.service.status().reason,'UNMANAGED_SANDBOX_ORDER');
+ await assert.rejects(()=>foreign.store.mutate(s=>control(s,'ARM','foreign-arm-request-1',foreign.time())),/FRESH_RECONCILIATION_REQUIRED/);
  const lost=setup();await lost.service.tick();await lost.store.mutate(s=>control(s,'ARM','lost-ack-arm-00001',lost.time()));lost.loseNextAck();await lost.service.tick();
  assert.equal(lost.rows.length,1);assert.equal(lost.service.status().reason,'STORE_WRITE_FAILED');
  lost.advance();await lost.service.tick();assert.equal(lost.rows.length,1,'lost persistence ACK must not place a duplicate');
