@@ -11,7 +11,7 @@
  async function refresh(){
   try{
    const data=await request(),s=data.state,orders=Object.values(s.orders),trades=Object.values(s.trades);
-   el('limits').textContent='Sandbox limits: ₹'+s.policy.capital+' capital · ₹'+s.policy.perTradeRisk+' planned risk/trade · ₹'+s.policy.dailyLoss+' daily loss threshold · '+s.policy.maxTradesPerDay+' entries/day · '+(s.policy.entryMode==='OPENING_RANGE_SHADOW_V1'?'any tier after fixed-level crossing (experimental)':'Tier A only');
+   el('limits').textContent='Sandbox limits: ₹'+s.policy.capital+' capital · ₹'+s.policy.perTradeRisk+' planned risk/trade · ₹'+s.policy.dailyLoss+' daily loss threshold · '+s.policy.maxTradesPerDay+' entries/day · '+(s.policy.entryMode==='OPENING_RANGE_SHADOW_V1'?'any tier after fixed-level crossing (experimental)':s.policy.entryMode==='CLAUDE_DECIDES_V1'?'Claude decides (experimental)':'Tier A only');
    if(!policyLoaded){el('daily-goal').value=s.policy.dailyGoal||1000;el('daily-loss').value=s.policy.dailyLoss;el('per-trade-risk').value=s.policy.perTradeRisk;el('entry-mode').value=s.policy.entryMode||'AUTHORITATIVE_A_ONLY';policyLoaded=true;updateRatio();}
    el('save-policy').disabled=!s.killed||s.armed||orders.some(o=>!['COMPLETE','CANCELLED','REJECTED','EXPIRED'].includes(o.state))||trades.some(t=>!t.closedAt);
    el('system').textContent=s.killed?'Stopped':s.armed?'Armed':'Disarmed';
@@ -23,7 +23,7 @@
    el('worker-line').textContent=live.lastTickAt?'Last successful check '+at(live.lastTickAt)+' IST'+(fresh?'':' (not recent)')+(live.lastErrorAt?' · last error '+at(live.lastErrorAt)+' IST':''):'No successful check since the server started'+(live.tickCount?' ('+live.tickCount+' attempts, none completed)':' (worker has not started a check)');
    const problem=live.reason?'Now: '+human(live.reason):'',halted=s.haltReason?'Halted: '+human(s.haltReason)+(!live.reason&&fresh?' (the broker is reachable again; tap Arm sandbox to clear)':''):'';
    message(problem&&halted?problem+' · '+halted:problem||halted||human(live.lastEntryResult||'Connected'));
-   renderTiers(data.tierSummary);renderStuck(s,trades);
+   renderTiers(data.tierSummary);renderStuck(s,trades);renderAdvisor(data.advisor,s.policy.entryMode);
    el('list').replaceChildren();
    for(const order of orders.slice(-15).reverse()){
     const row=document.createElement('div');row.className='order';const title=document.createElement('strong'),detail=document.createElement('span');
@@ -34,11 +34,25 @@
    if(!orders.length)el('list').textContent='No sandbox orders yet.';
   }catch(e){el('arm').disabled=true;el('save-policy').disabled=true;message(e.message);}
  }
+ const label={AUTHORITATIVE_A:'Rules: Tier A',SHADOW_OPENING_RANGE:'Rules: level crossing',CLAUDE_DECIDES:'Claude',EXPIRY_DAY:'Expiry day',DAY_BEFORE_EXPIRY:'Day before expiry',OTHER_DAYS:'Other days',UNKNOWN:'Unknown'};
+ const named=k=>k.split(' · ').map(x=>label[x]||x).join(' · ');
  function renderTiers(summary){
-  const box=el('tier-summary'),rows=Object.entries(summary?.byEntryTier||{});box.replaceChildren();
-  if(!rows.length){box.textContent='No closed sandbox trades yet.';return;}
-  for(const [tier,r] of rows.sort()){const row=document.createElement('div');row.className='order';const a=document.createElement('strong'),b=document.createElement('span');
-   a.textContent='Tier '+tier;b.textContent=r.trades+' trades · '+r.wins+' wins · '+r.losses+' losses · estimated net ₹'+r.netPnl;row.append(a,b);box.append(row);}
+  const box=el('tier-summary');box.replaceChildren();
+  const groups=[['By entry tier',summary?.byEntryTier,k=>'Tier '+k],['By decision source',summary?.bySource,named],['By days to expiry',summary?.byExpiryBucket,named],['Source × expiry',summary?.bySourceAndExpiry,named]];
+  if(!Object.keys(summary?.byEntryTier||{}).length){box.textContent='No closed sandbox trades yet.';return;}
+  for(const [title,group,name] of groups){
+   const h=document.createElement('h3');h.textContent=title;box.append(h);
+   for(const [key,r] of Object.entries(group||{}).sort()){const row=document.createElement('div');row.className='order';const a=document.createElement('strong'),b=document.createElement('span');
+    a.textContent=name(key);b.textContent=r.trades+' trades · '+r.wins+' wins · '+r.losses+' losses · estimated net ₹'+r.netPnl;row.append(a,b);box.append(row);}
+  }
+ }
+ function renderAdvisor(a,mode){
+  const line=el('advisor-line');
+  if(mode!=='CLAUDE_DECIDES_V1'){line.textContent='';return;}
+  if(!a?.configured){line.textContent='Claude is not configured: add ANTHROPIC_API_KEY on the server.'+(a?.lastError?' ('+human(a.lastError)+')':'');return;}
+  const at=a.lastDecisionAt?new Date(a.lastDecisionAt).toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata'}):null;
+  line.textContent=(at?'Claude '+at+' IST: '+a.lastAction+(a.lastAction==='BUY'?' card '+a.lastTier:'')+' · confidence '+Math.round((a.lastConfidence||0)*100)+'% · '+(a.lastReason||''):'Claude has not been asked yet (asked once per 5-minute candle while armed).')+
+   (a.lastError?' · last error: '+human(a.lastError):'')+' · '+a.calls+' calls since restart';
  }
  function renderStuck(s,trades){
   const today=new Date(Date.now()+19800000).toISOString().slice(0,10),stuck=trades.filter(t=>!t.closedAt&&t.day<today);

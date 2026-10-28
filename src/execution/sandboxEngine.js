@@ -1,7 +1,7 @@
 'use strict';
 // Durable SANDBOX-only state machine. Pure functions; never calls a broker or alters EDGE decisions.
 const {createHash}=require('node:crypto');
-const {selectCandidate,MODES,DEFAULT_MODE}=require('./candidateSelection');
+const {selectCandidate,expiryBucket,MODES,DEFAULT_MODE}=require('./candidateSelection');
 const hash=x=>createHash('sha256').update(JSON.stringify(x)).digest('hex');
 const clone=x=>JSON.parse(JSON.stringify(x));
 const money=x=>Math.round(x*100)/100;
@@ -63,6 +63,12 @@ function resolveTrade(s,input,now=Date.now()){
   t.exitReason||='OWNER_RESOLVED';
   t.resolution={at:now,reason:reason.trim(),netQuantity:q.net};
   s.commands[requestId]=command;assertState(s);
+}
+// A fresh model EXIT for the open trade is just another exit reason; the normal stop-cancel-then-sell path does the work.
+function requestModelExit(s,tradeId,now){
+  assertState(s);const t=s.trades[tradeId];
+  if(!t||t.closedAt||t.day!==day(now))return false;
+  t.exitReason||='MODEL_EXIT';return true;
 }
 function halt(s,reason){s.haltReason=reason;s.armed=false;}
 function quantities(s,t){
@@ -135,11 +141,12 @@ function planEntry(s,result,quote,meta,now){
   if(risk>policy.perTradeRisk||risk>policy.dailyLoss-Math.max(0,-pnlToday))return 'RISK_LIMIT';
   if(price*meta.lotSize+policy.costReserve>Math.max(0,policy.capital+Math.min(0,totalPnl)))return 'CAPITAL_LIMIT';
   // One entry per original contract/session. Poll timestamps never manufacture new entry identities.
-  const id=hash([day(now),pick.strategy,result.expiry,leg.instrumentKey,leg.contractId]);
+  const base=[day(now),pick.strategy,result.expiry,leg.instrumentKey,leg.contractId];
+  const id=hash(pick.identity?[...base,pick.identity]:base); // a model decision is its own identity; other modes are unchanged
   if(s.trades[id])return 'SIGNAL_ALREADY_CONSUMED';
   const t={id,day:day(now),createdAt:now,entryExpiresAt:now+15000,analysisAt:result.timestamp,
     instrumentKey:leg.instrumentKey,contractId:leg.contractId,strategy:pick.strategy,expiry:result.expiry,
-    tier:pick.tier,entrySource:pick.source,ruleVersion:pick.ruleVersion,riskModel:pick.riskModel,anchor:pick.anchor,
+    tier:pick.tier,entrySource:pick.source,expiryBucket:expiryBucket(result.expiry,day(now)),ruleVersion:pick.ruleVersion,riskModel:pick.riskModel,anchor:pick.anchor,
     tickSize:tick,quantity:meta.lotSize,stop,stopLimit,target,plannedRisk:risk,costReserve:policy.costReserve,
     exitReason:null,closedAt:null,netPnl:null,pnlBasis:'BROKER_FILLS_MINUS_ESTIMATED_FRICTION',buys:0};
   s.trades[id]=t;addOrder(s,t,'ENTRY',t.quantity,price);return 'QUEUED';
@@ -277,4 +284,4 @@ function claimEmergencyCancel(s,now){
   }
   return null;
 }
-module.exports={initialState,assertState,control,configurePolicy,resolveTrade,selectCandidate,recover,planEntry,reconcile,manage,claim,finish,claimEmergencyCancel,quantities,terminal,halt,day};
+module.exports={initialState,assertState,control,configurePolicy,resolveTrade,requestModelExit,selectCandidate,expiryBucket,recover,planEntry,reconcile,manage,claim,finish,claimEmergencyCancel,quantities,terminal,halt,day};
