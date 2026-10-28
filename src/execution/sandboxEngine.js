@@ -11,31 +11,34 @@ const minutes=t=>{const d=new Date(t+19800000);return d.getUTCHours()*60+d.getUT
 const terminal=o=>['COMPLETE','CANCELLED','REJECTED','EXPIRED'].includes(o.state);
 const working=o=>!terminal(o);
 function initialState(){return {version:1,mode:'SANDBOX',armed:false,armedDay:null,killed:true,haltReason:null,bootId:null,reconciledAt:null,
-  orders:{},trades:{},commands:{},lockedDays:[],policy:{capital:10000,dailyGoal:1000,perTradeRisk:250,dailyLoss:500,costReserve:100,maxTradesPerDay:3,entryMode:DEFAULT_MODE}};}
+  orders:{},trades:{},commands:{},lockedDays:[],policy:{capital:10000,dailyGoal:1000,perTradeRisk:250,dailyLoss:500,costReserve:100,maxTradesPerDay:3,entryMode:DEFAULT_MODE,maxConsecutiveLosses:2}};}
 function assertState(s){
   const p=s?.policy;
   if(s?.version!==1||s.mode!=='SANDBOX'||!p||!positive(p.capital)||p.capital>10000||!positive(p.perTradeRisk)||
     !positive(p.dailyLoss)||p.dailyLoss>1000||p.perTradeRisk>p.dailyLoss||!Number.isFinite(p.costReserve)||p.costReserve<0||
     !Number.isSafeInteger(p.maxTradesPerDay)||p.maxTradesPerDay<1||p.maxTradesPerDay>10||
     (p.dailyGoal!==undefined&&(!positive(p.dailyGoal)||p.dailyGoal>100000))||(p.entryMode!==undefined&&!MODES.includes(p.entryMode))||
+    (p.maxConsecutiveLosses!==undefined&&!(Number.isSafeInteger(p.maxConsecutiveLosses)&&p.maxConsecutiveLosses>=1&&p.maxConsecutiveLosses<=5))||
+    (s.archivedPnl!==undefined&&!Number.isFinite(s.archivedPnl))||
     !s.orders||Array.isArray(s.orders)||!s.trades||Array.isArray(s.trades)||!s.commands||!Array.isArray(s.lockedDays))throw Error('INVALID_SANDBOX_STATE');
 }
 function configurePolicy(s,input,now=Date.now()){
   assertState(s);
-  const {dailyGoal,dailyLoss,requestId,perTradeRisk,entryMode}=input;
-  const extended=perTradeRisk!==undefined||entryMode!==undefined;
+  const {dailyGoal,dailyLoss,requestId,perTradeRisk,entryMode,maxConsecutiveLosses}=input;
+  const extended=perTradeRisk!==undefined||entryMode!==undefined||maxConsecutiveLosses!==undefined;
   if(!/^[a-zA-Z0-9_-]{16,100}$/.test(requestId||'')||!positive(dailyGoal)||dailyGoal>100000||!positive(dailyLoss)||dailyLoss>1000||
     money(dailyGoal)!==dailyGoal||money(dailyLoss)!==dailyLoss||
     (perTradeRisk!==undefined&&(!positive(perTradeRisk)||money(perTradeRisk)!==perTradeRisk||perTradeRisk>dailyLoss||perTradeRisk<=s.policy.costReserve))||
-    (entryMode!==undefined&&!MODES.includes(entryMode)))throw Error('INVALID_SANDBOX_POLICY');
+    (entryMode!==undefined&&!MODES.includes(entryMode))||
+    (maxConsecutiveLosses!==undefined&&!(Number.isSafeInteger(maxConsecutiveLosses)&&maxConsecutiveLosses>=1&&maxConsecutiveLosses<=5)))throw Error('INVALID_SANDBOX_POLICY');
   // Requests that set only goal and loss keep their original idempotency fingerprint.
-  const command='POLICY:'+hash(extended?[dailyGoal,dailyLoss,perTradeRisk??null,entryMode??null]:[dailyGoal,dailyLoss]);
+  const command='POLICY:'+hash(extended?[dailyGoal,dailyLoss,perTradeRisk??null,entryMode??null,...(maxConsecutiveLosses!==undefined?[maxConsecutiveLosses]:[])]:[dailyGoal,dailyLoss]);
   if(s.commands[requestId]){if(s.commands[requestId]!==command)throw Error('REQUEST_ID_REUSED');return;}
   if(!s.killed||s.armed||Object.values(s.trades).some(t=>!t.closedAt)||Object.values(s.orders).some(working))throw Error('STOP_AND_FLATTEN_BEFORE_POLICY_CHANGE');
   if(Object.keys(s.commands).length>=1000)throw Error('COMMAND_LIMIT');
   // Per-trade risk is its own setting. It is never raised implicitly; tightening the daily loss can only lower it.
   s.policy={...s.policy,dailyGoal,dailyLoss,perTradeRisk:perTradeRisk??Math.min(s.policy.perTradeRisk,dailyLoss),
-    entryMode:entryMode??s.policy.entryMode??DEFAULT_MODE};
+    entryMode:entryMode??s.policy.entryMode??DEFAULT_MODE,maxConsecutiveLosses:maxConsecutiveLosses??s.policy.maxConsecutiveLosses??2};
   const realized=Object.values(s.trades).filter(t=>t.closedAt&&day(t.closedAt)===day(now)).reduce((a,t)=>a+t.netPnl,0);
   if(realized<=-dailyLoss&&!s.lockedDays.includes(day(now)))s.lockedDays.push(day(now));
   s.commands[requestId]=command;assertState(s);
@@ -69,6 +72,27 @@ function requestModelExit(s,tradeId,now){
   assertState(s);const t=s.trades[tradeId];
   if(!t||t.closedAt||t.day!==day(now))return false;
   t.exitReason||='MODEL_EXIT';return true;
+}
+// Consecutive losing trades closed today (the streak resets with the IST session, like the daily loss limit).
+function losingStreak(s,now){
+  const today=Object.values(s.trades).filter(t=>t.closedAt&&t.buys>0&&day(t.closedAt)===day(now)).sort((a,b)=>a.closedAt-b.closedAt);
+  let streak=0;for(let i=today.length-1;i>=0&&today[i].netPnl<0;i--)streak++;return streak;
+}
+// Moves closed prior-day trades (and their terminal orders) to the durable archive so the hot state never fills up.
+// Realized P&L is carried in archivedPnl so the capital ceiling still reflects every past loss.
+function archiveClosed(s,now,max=20){
+  assertState(s);let moved=0;
+  for(const t of Object.values(s.trades)){
+    if(moved>=max)break;
+    if(!t.closedAt||!(t.day<day(now)))continue;
+    const orders=Object.values(s.orders).filter(o=>o.tradeId===t.id);
+    if(orders.some(working))continue;
+    (s.archiveQueue||=[]).push({id:'trade:'+t.id,kind:'TRADE',payload:{trade:t,orders}});
+    s.archivedPnl=money((s.archivedPnl||0)+(t.buys>0?t.netPnl:0));s.archivedTrades=(s.archivedTrades||0)+1;
+    for(const o of orders)delete s.orders[o.id];
+    delete s.trades[t.id];moved++;
+  }
+  return moved;
 }
 function halt(s,reason){s.haltReason=reason;s.armed=false;}
 function quantities(s,t){
@@ -132,8 +156,9 @@ function planEntry(s,result,quote,meta,now){
   const policy=s.policy;
   const closed=Object.values(s.trades).filter(t=>t.closedAt&&t.buys>0);
   const pnlToday=closed.filter(t=>day(t.closedAt)===day(now)).reduce((a,t)=>a+t.netPnl,0);
-  const totalPnl=closed.reduce((a,t)=>a+t.netPnl,0);
+  const totalPnl=closed.reduce((a,t)=>a+t.netPnl,0)+(s.archivedPnl||0); // archived losses still lower the capital ceiling
   if(s.lockedDays.includes(day(now))||pnlToday<=-policy.dailyLoss)return 'DAILY_LOSS_LOCK';
+  if(losingStreak(s,now)>=(policy.maxConsecutiveLosses||2))return 'LOSING_STREAK_LOCK';
   if(Object.values(s.trades).some(t=>!t.closedAt)||Object.values(s.orders).some(o=>working(o)))return 'EXPOSURE_ALREADY_EXISTS';
   if(Object.keys(s.orders).length>=500||Object.keys(s.trades).length>=100)return 'STATE_CAPACITY_LIMIT';
   if(Object.values(s.trades).filter(t=>t.day===day(now)).length>=policy.maxTradesPerDay)return 'DAILY_TRADE_LIMIT';
@@ -284,4 +309,4 @@ function claimEmergencyCancel(s,now){
   }
   return null;
 }
-module.exports={initialState,assertState,control,configurePolicy,resolveTrade,requestModelExit,selectCandidate,expiryBucket,recover,planEntry,reconcile,manage,claim,finish,claimEmergencyCancel,quantities,terminal,halt,day};
+module.exports={initialState,assertState,control,configurePolicy,resolveTrade,requestModelExit,archiveClosed,losingStreak,selectCandidate,expiryBucket,recover,planEntry,reconcile,manage,claim,finish,claimEmergencyCancel,quantities,terminal,halt,day};

@@ -9,7 +9,8 @@ const {createCatalog}=require('./instrumentCatalog');
 const {createMarketQuotes}=require('./marketQuotes');
 const {timingSafeOwnerToken}=require('../notifications/edgeWebPush');
 const {createClaudeAdvisor,buildSnapshot}=require('./claudeAdvisor');
-function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.env,dependencies={}}){
+const {rejectOwner}=require('../health/authThrottle');
+function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.env,dependencies={},notify=()=>{}}){
   const enabled=env.EDGE_SANDBOX_EXECUTION_ENABLED==='true';
   const tokenValid=t=>typeof t==='string'&&!!t.trim()&&!/[\r\n]/.test(t);
   const reason=!enabled?'DISABLED':!ownerToken?'OWNER_AUTH_REQUIRED':!pool&&!dependencies.store?'DATABASE_REQUIRED':
@@ -33,6 +34,30 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
   const publicStatus=()=>({version:'EDGE_SANDBOX_EXECUTION_V1',enabled,mode:'SANDBOX',liveOrdersSupported:false,
     liveDecisionImpact:false,configured:!reason,reason:lastError,lastTickAt,lastEntryResult,brokerReads,positionBasis,tickCount,lastTickStartedAt,lastErrorAt,advisorConfigured:!!advisor});
   const clean=e=>/^[A-Z_]{3,80}$/.test(e?.message||'')?e.message:'SANDBOX_SERVICE_UNAVAILABLE';
+  const human=x=>String(x||'').toLowerCase().replaceAll('_',' ');
+  const send=(key,text)=>{try{notify(key,text);}catch(_){}};
+  // Alerts on state transitions only. The first observation after a restart is a silent baseline.
+  let seen=null;
+  function watch(state){
+    if(!state)return;
+    const today=engine.day(now()),trades=Object.values(state.trades),orders=Object.values(state.orders);
+    const snap={halt:state.haltReason||null,locked:state.lockedDays.includes(today),
+      closed:new Set(trades.filter(t=>t.closedAt).map(t=>t.id)),filled:new Set(orders.filter(o=>o.kind==='ENTRY'&&o.filled>0).map(o=>o.tradeId))};
+    if(seen){
+      const open=trades.filter(t=>!t.closedAt).length;
+      if(snap.halt&&snap.halt!==seen.halt)send('HALT:'+snap.halt+':'+today,'EDGE sandbox HALTED: '+human(snap.halt)+'. Open trades: '+open+'. New entries are disarmed; check the control page.');
+      for(const id of snap.filled)if(!seen.filled.has(id)){
+        const t=state.trades[id],e=orders.find(o=>o.tradeId===id&&o.kind==='ENTRY');
+        if(t)send('FILL:'+id,'EDGE sandbox entry filled: '+(t.contractId||t.instrumentKey)+' x'+e.filled+' @ '+e.averagePrice+' (tier '+(t.tier||'A')+', '+human(t.entrySource||'AUTHORITATIVE_A')+'). Stop '+t.stop+', target '+t.target+'.');
+      }
+      for(const id of snap.closed)if(!seen.closed.has(id)){
+        const t=state.trades[id];
+        if(t&&t.buys>0)send('CLOSE:'+id,'EDGE sandbox trade closed: '+(t.contractId||t.instrumentKey)+', exit '+human(t.exitReason||'closed')+', estimated net Rs '+t.netPnl+' (tier '+(t.tier||'A')+').');
+      }
+      if(snap.locked&&!seen.locked)send('LOCK:'+today,'EDGE sandbox paused for today: daily loss limit reached.');
+    }
+    seen=snap;
+  }
   // Same candidate rules the planner used; re-checked just before any entry is sent.
   function currentAllowed(order,context,time,policy){
     const r=context.analysis,t=Date.parse(r?.timestamp),q=context.quotes?.[order.instrumentKey];
@@ -71,14 +96,17 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
       const prepared=await store.mutate(s=>{
         if(s.lease?.owner!==bootId||s.lease.until<=now())return null;
         engine.reconcile(s,book,positions,readAt,{positionBasis:positions===null?'SANDBOX_ORDER_BOOK_DERIVED':'BROKER_POSITIONS'});
+        engine.archiveClosed(s,now());
         if(advice?.action==='EXIT'&&advice.tradeId&&adviceFresh(now()))engine.requestModelExit(s,advice.tradeId,now());
         engine.manage(s,view.quotes||{},now());
         const planKey=engine.selectCandidate(s.policy,view.analysis).leg?.instrumentKey||view.analysis?.decision?.tradeLegs?.buyLeg?.instrumentKey;
+        const previousEntryResult=lastEntryResult;
         lastEntryResult=engine.planEntry(s,view.analysis,view.quotes?.[planKey],meta,now());
+        if(lastEntryResult==='LOSING_STREAK_LOCK'&&previousEntryResult!=='LOSING_STREAK_LOCK')send('STREAK:'+engine.day(now()),'EDGE sandbox paused for today: '+(s.policy.maxConsecutiveLosses||2)+' losing trades in a row.');
         const pending=Object.values(s.orders).find(o=>o.kind==='ENTRY'&&o.state==='QUEUED');
         return engine.claim(s,now(),!pending||currentAllowed(pending,{...context(),quotes},now(),s.policy));
       });
-      positionBasis=prepared.state.positionBasis;
+      positionBasis=prepared.state.positionBasis;watch(prepared.state);
       const action=prepared.result;
       if(action){
         if(action.action==='PLACE'&&action.order.kind==='ENTRY'){
@@ -101,6 +129,7 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
           if(s.lease?.owner!==bootId)return null;
           engine.halt(s,lastError);s.reconciledAt=null;return engine.claimEmergencyCancel(s,now());
         }).catch(()=>null);
+        watch(emergency?.state);
         if(emergency?.result){
           const result=await broker.cancel(emergency.result.order.orderId).catch(()=>({state:'UNCERTAIN'}));
           await store.mutate(s=>{if(s.lease?.owner===bootId)engine.finish(s,emergency.result,result);}).catch(()=>{});
@@ -132,18 +161,21 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
         instrumentKey:decision.action==='BUY'?plan?.legs?.buyLeg?.instrumentKey||null:null,tradeId:open?.id||null};
       Object.assign(advisorStatus,{lastDecisionAt:advice.decidedAt,lastAction:advice.action,lastTier:advice.tier,lastConfidence:advice.confidence,lastReason:advice.reason,lastError:null});
       // Bounded audit trail of every decision, including SKIPs, for later comparison against outcomes.
-      await store.mutate(s=>{s.modelDecisions=[...(s.modelDecisions||[]),{at:advice.decidedAt,bucket,action:advice.action,tier:advice.tier,
-        stopUnderlying:advice.stopUnderlying,confidence:advice.confidence,reason:advice.reason,spot:snapshot.spot,expiryBucket:snapshot.expiryBucket,tradeId:advice.tradeId,model:advice.model}].slice(-60);});
+      const record={at:advice.decidedAt,bucket,action:advice.action,tier:advice.tier,stopUnderlying:advice.stopUnderlying,confidence:advice.confidence,
+        reason:advice.reason,spot:snapshot.spot,expiryBucket:snapshot.expiryBucket,tradeId:advice.tradeId,model:advice.model};
+      // Recent decisions stay in state for the page; every decision is also archived permanently, in the same write.
+      await store.mutate(s=>{s.modelDecisions=[...(s.modelDecisions||[]),record].slice(-60);
+        (s.archiveQueue||=[]).push({id:'decision:'+bucket+':'+advice.decidedAt,kind:'DECISION',payload:{...record,snapshot}});});
       return advice;
     }catch(e){advisorStatus.lastError=clean(e);return null;}
     finally{advising=false;}
   }
   // Realized sandbox results by entry tier, decision source and days-to-expiry bucket.
-  function tierSummary(state){
+  function tierSummary(state,archived=[]){
     const groups={byEntryTier:{},bySource:{},byExpiryBucket:{},bySourceAndExpiry:{}};
     const add=(group,key,t)=>{const row=groups[group][key]||={trades:0,wins:0,losses:0,netPnl:0};
       row.trades++;row.netPnl=Math.round((row.netPnl+t.netPnl)*100)/100;if(t.netPnl>0)row.wins++;else if(t.netPnl<0)row.losses++;};
-    for(const t of Object.values(state.trades)){
+    for(const t of [...archived.map(a=>a?.trade).filter(Boolean),...Object.values(state.trades)]){
       if(!t.closedAt||!(t.buys>0))continue;
       const source=t.entrySource||'AUTHORITATIVE_A',bucket=t.expiryBucket||'UNKNOWN';
       add('byEntryTier',t.tier||'A',t);add('bySource',source,t);add('byExpiryBucket',bucket,t);add('bySourceAndExpiry',source+' · '+bucket,t);
@@ -162,12 +194,17 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
     });
     app.get(base+'/status',(_req,res)=>{res.set('Cache-Control','no-store');res.json(publicStatus());});
     const guard=fn=>async(req,res)=>{
-      res.set('Cache-Control','no-store');const auth=String(req.headers.authorization||'');
-      if(!ownerToken||!auth.startsWith('Bearer ')||!timingSafeOwnerToken(auth.slice(7),ownerToken))return res.status(401).json({error:'OWNER_AUTH_REQUIRED'});
+      res.set('Cache-Control','no-store');
+      if(rejectOwner(req,res,{ownerToken,compare:timingSafeOwnerToken,throttle:dependencies.throttle}))return;
       if(reason)return res.status(503).json({error:reason});
       try{await fn(req,res);}catch(e){res.status(409).json({error:clean(e)});}
     };
-    app.get(base,guard(async(_req,res)=>{const state=await store.read();res.json({status:publicStatus(),state,tierSummary:tierSummary(state),advisor:{configured:!!advisor,model:advisor?.model||null,...advisorStatus},catalog:catalog.status()});}));
+    app.get(base+'/decisions',guard(async(req,res)=>{
+      const limit=Math.min(5000,Math.max(1,parseInt(req.query.limit,10)||500));
+      res.json({decisions:store.readArchive?await store.readArchive('DECISION',limit):[]});
+    }));
+    app.get(base,guard(async(_req,res)=>{const state=await store.read(),archived=store.readArchive?await store.readArchive('TRADE'):[];
+      res.json({status:publicStatus(),state,history:{archivedTrades:state.archivedTrades||0,archivedPnl:state.archivedPnl||0},tierSummary:tierSummary(state,archived),advisor:{configured:!!advisor,model:advisor?.model||null,...advisorStatus},catalog:catalog.status()});}));
     app.post(base+'/resolve',guard(async(req,res)=>{
       if(req.body?.confirmSandbox!==true)return res.status(400).json({error:'SANDBOX_CONFIRMATION_REQUIRED'});
       const updated=await store.mutate(s=>engine.resolveTrade(s,req.body||{},now()));

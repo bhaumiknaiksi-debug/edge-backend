@@ -53,7 +53,8 @@ app.use(express.json());
 const edgeWebPush = buildWebPush();
 const dataPool = createDatabase();
 const edgeTelegram = buildTelegram({pool:dataPool,getMarketPhase,getCurrentResult:()=>lastResult});
-const sandboxExecution = createSandboxService({pool:dataPool,ownerToken:process.env.EDGE_PUSH_OWNER_TOKEN,getContext:()=>({analysis:lastResult})});
+const sandboxExecution = createSandboxService({pool:dataPool,ownerToken:process.env.EDGE_PUSH_OWNER_TOKEN,getContext:()=>({analysis:lastResult}),
+  notify:(key,text)=>edgeTelegram.alert(key,text)}); // edgeTelegram is defined below; only called after startup
 const shadowEvents = createShadowEvents({pool:dataPool,enabled:process.env.EDGE_SHADOW_EVENTS_ENABLED === 'true'});
 let ledgerEpoch = 0;
 const ledger = createLedger({getPlan:()=>lastResult?{timestamp:lastResult.timestamp,strategy:lastResult.decision?.strategy,entry:lastResult.decision?.entry,risk:lastResult.decision?.risk,position:lastResult.decision?.position,orchestration:lastResult.decision?.orchestration}:null,pool:dataPool,ownerToken:process.env.EDGE_PUSH_OWNER_TOKEN,onChange:()=>{ledgerEpoch++;lastResult=null;lastFetchTime=0;},onBrokerImport:()=>tradeSnapshots.reconcile()});

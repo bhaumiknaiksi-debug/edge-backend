@@ -69,7 +69,9 @@ function validate(raw){
 }
 
 const num=x=>typeof x==='number'&&Number.isFinite(x)?Math.round(x*100)/100:undefined;
-function scalars(o,keys){const out={};for(const k of keys){const v=o?.[k];if(typeof v==='number'&&Number.isFinite(v))out[k]=num(v);else if(typeof v==='string'&&v.length<=60)out[k]=v;else if(typeof v==='boolean')out[k]=v;}return out;}
+// Only short, plain labels reach the model; anything else is dropped (defence against text injection via data fields).
+const label=v=>typeof v==='string'&&/^[A-Za-z0-9 _.:\-\/()%+]{1,60}$/.test(v)?v:undefined;
+function scalars(o,keys){const out={};for(const k of keys){const v=o?.[k];if(typeof v==='number'&&Number.isFinite(v))out[k]=num(v);else if(typeof v==='string'){const l=label(v);if(l!==undefined)out[k]=l;}else if(typeof v==='boolean')out[k]=v;}return out;}
 const candle=c=>c?scalars(c,['open','high','low','close']):undefined;
 
 // Compact, bounded view of the current EDGE analysis plus the sandbox's own position and limits.
@@ -80,10 +82,10 @@ function buildSnapshot(analysis,state,{now=Date.now(),quotes={},expiryBucket=nul
   for(const tier of ['A','B','C']){
     const p=d.researchCandidatePlans?.plans?.[tier];if(!p?.available)continue;
     const leg=p.legs?.buyLeg,st=d.shadowTiming?.plans?.[tier];
-    candidates[tier]={strategy:p.strategy,singleLeg:!p.legs?.sellLeg,
-      buy:leg?{strike:leg.strike,type:leg.type,...scalars(leg,['bid','ask','premium','delta'])}:undefined,
-      sell:p.legs?.sellLeg?{strike:p.legs.sellLeg.strike,type:p.legs.sellLeg.type}:undefined,
-      openingRangeTiming:st?{status:st.status,reason:st.reason,ready:st.shadowEntryReady===true}:undefined};
+    candidates[tier]={strategy:label(p.strategy),singleLeg:!p.legs?.sellLeg,
+      buy:leg?{strike:num(leg.strike),type:label(leg.type),...scalars(leg,['bid','ask','premium','delta'])}:undefined,
+      sell:p.legs?.sellLeg?{strike:num(p.legs.sellLeg.strike),type:label(p.legs.sellLeg.type)}:undefined,
+      openingRangeTiming:st?{status:label(st.status),reason:label(st.reason),ready:st.shadowEntryReady===true}:undefined};
   }
   const open=Object.values(state?.trades||{}).find(t=>!t.closedAt);
   const orders=Object.values(state?.orders||{});
@@ -92,17 +94,17 @@ function buildSnapshot(analysis,state,{now=Date.now(),quotes={},expiryBucket=nul
   const realized=todays.filter(t=>t.closedAt&&t.buys>0).reduce((a,t)=>a+t.netPnl,0);
   const snap={
     timeIST:ist.toISOString().slice(11,16),minutesToClose:Math.max(0,930-minutes),date:ist.toISOString().slice(0,10),
-    spot:num(analysis?.spot),expiry:analysis?.expiry,expiryBucket,
+    spot:num(analysis?.spot),expiry:label(analysis?.expiry),expiryBucket:label(expiryBucket),
     openingRange:timing.available?{high:num(timing.high),low:num(timing.low),latest5m:candle(timing.latest),previous5m:candle(timing.previous)}:'NOT_COMPLETE',
     previousDay:chart.previousDay?scalars(chart.previousDay,['high','low','close','open']):undefined,
     regime:scalars(d.regime,['direction','label','score','confidence']),
-    momentum:{...scalars(analysis?.market?.features,['trend30mPct','sessionChangePct']),optionFlow:analysis?.market?.features?.optionFlow?.aggregate?.label},
+    momentum:{...scalars(analysis?.market?.features,['trend30mPct','sessionChangePct']),optionFlow:label(analysis?.market?.features?.optionFlow?.aggregate?.label)},
     volatility:scalars(analysis,['nearAtmIV','ivRegime','pcr','maxPain']),
     walls:scalars(analysis?.structure,['peWall','ceWall','rangeWidth','compression','breakoutRisk']),
     expectedMove:scalars(analysis?.expectedMove,['low','high','points']),
-    edgeSignalTier:d.signalTier?.tier||null,
+    edgeSignalTier:label(d.signalTier?.tier)||null,
     candidates,
-    position:open?{tier:open.tier,strategy:open.strategy,strike:open.contractId,entryPrice:num(entry?.averagePrice),filled:entry?.filled||0,
+    position:open?{tier:label(open.tier),strategy:label(open.strategy),strike:label(open.contractId),entryPrice:num(entry?.averagePrice),filled:entry?.filled||0,
       stopPremium:open.stop,targetPremium:open.target,currentBid:num(quotes[open.instrumentKey]?.bid)}:null,
     today:{realizedNetPnl:Math.round(realized*100)/100,tradesTaken:todays.length},
     limits:{lotSize:65,perTradeRiskRupees:state?.policy?.perTradeRisk,dailyLossRupees:state?.policy?.dailyLoss,

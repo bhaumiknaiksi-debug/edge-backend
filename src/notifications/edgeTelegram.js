@@ -150,7 +150,7 @@ function buildTelegram({pool,env = process.env,getMarketPhase,getCurrentResult =
   function start() {
     if (config.reason || timer) return;
     stopped = false;
-    timer = setInterval(()=>{void tick();},5000);
+    timer = setInterval(()=>{void tick().then(()=>{if(alerts.length)void drainAlerts();});},5000);
     timer.unref?.();
     void tick();
   }
@@ -161,7 +161,37 @@ function buildTelegram({pool,env = process.env,getMarketPhase,getCurrentResult =
       res.json(status()); // No token, recipient ID, message contents or mutation/send endpoints.
     });
   }
-  return {onSuccessfulPoll,start,stop,tick,initialize,status,routes};
+  // Direct operational alerts (e.g. the sandbox executor halting). Best effort and in-memory: bounded queue,
+  // same private recipient check, one message per key per 30 minutes, and it honours Telegram flood control.
+  const alerts=[],alertSentAt=new Map();let alerting=false,alertCooldownUntil=0;
+  function alert(key,text){
+    if(config.reason||stopped||typeof key!=='string'||typeof text!=='string')return false;
+    const last=alertSentAt.get(key);if(last&&now()-last<30*60000)return false;
+    if(alerts.some(a=>a.key===key))return false;
+    if(alerts.length>=20)alerts.shift();
+    alerts.push({key,text:text.slice(0,600)});void drainAlerts();return true;
+  }
+  async function drainAlerts(){
+    if(alerting)return;alerting=true;
+    try{
+      while(alerts.length&&!stopped){
+        if(now()<alertCooldownUntil||!(await initialize()))break;
+        const next=alerts[0];
+        try{
+          await api('sendMessage',{chat_id:config.chatId,text:next.text,protect_content:true,link_preview_options:{is_disabled:true}});
+          alerts.shift();alertSentAt.set(next.key,now());counters.apiAccepted++;
+          if(alertSentAt.size>500)alertSentAt.delete(alertSentAt.keys().next().value);
+        }catch(error){
+          if(error instanceof TelegramError&&error.retryAfterMs>0){alertCooldownUntil=now()+error.retryAfterMs;counters.rateLimited++;}
+          else{alerts.shift();counters.failed++;deliveryError='ALERT_DELIVERY_FAILED';}
+          break;
+        }
+      }
+    }finally{alerting=false;}
+  }
+  const baseTick=tick;
+  async function tickWithAlerts(){const result=await baseTick();if(alerts.length)void drainAlerts();return result;}
+  return {onSuccessfulPoll,start,stop,tick:tickWithAlerts,initialize,status,routes,alert,pendingAlerts:()=>alerts.length};
 }
 
 module.exports = { buildTelegram,telegramConfig };
