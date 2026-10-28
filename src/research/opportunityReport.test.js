@@ -21,7 +21,11 @@ function fill({strike=23000,time='2026-10-28T10:00:30',side='BUY',key='f1'}={}){
  const monthly=fill();monthly.symbol='NIFTY26NOV23000CE';assert.equal(R.buildOpportunityReport({...input,ledger:{brokerFills:[monthly]}}).fills[0].coverage.status,'UNRESOLVED_CONTRACT_OR_TIME');
  assert.equal(R.candidateEpisodes(R.normalizeObservations(records)).length,2,'same card/contract repeated does not add samples');
  const approved=R.buildOpportunityReport({...input,records:[observation(BASE,{ready:true,tier:'A'})]});assert.equal(approved.fills[0].coverage.status,'FLAGGED_AND_READY');assert.equal(approved.gateChangeQueue.length,0,'an executable A matching a research C is not a missed trade');
+ const savedC={id:'zzzz-snapshot',payload:{analysisAt:iso(BASE),capturedAt:iso(BASE+10000),tier:'C',actualSignalTier:'A',expiry:'2026-11-03',strategy:'LONG_CALL',selectedCandidate:{strategy:'LONG_CALL',legs:{buyLeg:leg()}},authorization:{executionAllowed:false}}};
+ const withSnapshot=R.buildOpportunityReport({...input,records:[observation(BASE,{ready:true,tier:'A'})],snapshots:[savedC]});
+ assert.equal(withSnapshot.fills[0].coverage.status,'FLAGGED_AND_READY');assert.equal(withSnapshot.gateChangeQueue.length,0);assert.equal(withSnapshot.fills[0].coverage.history.length,1);assert.equal(withSnapshot.fills[0].coverage.history[0].source,'CENSUS');
  const readiness=R.candidateEpisodes(R.normalizeObservations(records),{axis:'READINESS_TIER'});assert.deepEqual(readiness.map(e=>e.tier),['C','A']);
+ const pre=observation(),open=observation(BASE+30000);pre.marketPhase='PRE_OPEN';open.marketPhase='OPEN';assert.equal(R.candidateEpisodes(R.normalizeObservations([pre,open])).length,4,'market open starts a new measurable episode after a premarket flag');
  const different=observation();different.candidates[0].strategy='BULL_CALL_SPREAD';different.candidates[0].legs.sellLeg={...leg(23100),bid:40,ask:40.05};different.candidates[1].gates=null;
  const separate=R.buildOpportunityReport({...input,records:[different]}).fills[0].coverage;
  assert.deepEqual(separate.rejectedBy,['RESEARCH_ONLY']);assert.ok(separate.relatedPlanGates[0].rejectedBy.includes('TRIGGER'),'a spread rejection remains separate from the single-leg C trade');

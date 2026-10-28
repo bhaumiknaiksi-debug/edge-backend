@@ -48,7 +48,12 @@ function matchContract(candidate,contract){return candidate.expiry===contract.ex
 function matchCoverage({at,symbol,contract,observations}){
  const t=ms(at),date=day(t);contract ||=contractFromKite(symbol);
  if(!Number.isFinite(t)||!contract||contract.exact!==true)return {status:'UNRESOLVED_CONTRACT_OR_TIME',primaryMiss:'CONTRACT_IDENTITY_UNRESOLVED',history:[]};
- const before=observations.filter(o=>day(ms(o.at))===date&&ms(o.at)<=t&&Number.isFinite(ms(o.knownAt))&&ms(o.knownAt)<=t);
+ const priority={SAVED_SNAPSHOT:0,POLL:1,CENSUS:2},byTime=new Map();
+ for(const o of observations.filter(o=>day(ms(o.at))===date&&ms(o.at)<=t&&Number.isFinite(ms(o.knownAt))&&ms(o.knownAt)<=t)){
+  const previous=byTime.get(o.at);if(!previous||priority[o.source]>priority[previous.source])byTime.set(o.at,o);
+ }
+ // A saved selected card supplements a complete same-time poll; it cannot replace its authorization.
+ const before=[...byTime.values()].sort((a,b)=>ms(a.at)-ms(b.at));
  const history=[];let previous=null;
  for(const o of before){const candidates=o.candidates.filter(c=>matchContract(c,contract));if(!candidates.length)continue;
   const value={at:o.at,source:o.source,observationId:o.id,signalTier:o.signalTier,ruleVersion:o.ruleVersion,candidates:candidates.map(c=>({tier:c.tier,strategy:c.strategy,matchKind:candidateLegs(c).length===1?'SINGLE_LEG_STRUCTURE':'CONTRACT_LEG_ONLY',gateScope:c.gateScope,rejectedBy:rejection(c),blockers:c.blockers||[],executionAllowed:c.executionAllowed===true}))};
@@ -75,7 +80,7 @@ function candidateEpisodes(observations,{axis='CANDIDATE_CARD'}={}){
   for(const c of o.candidates){
    if(axis==='READINESS_TIER'&&(c.tier!=='A'||!['A','B','C'].includes(o.signalTier)))continue;
    const tier=axis==='READINESS_TIER'?o.signalTier:c.tier;
-   const key=[axis,day(ms(o.at)),o.ruleVersion,tier,c.key].join('|');current.add(key);
+   const key=[axis,day(ms(o.at)),o.ruleVersion,tier,c.key,o.marketPhase].join('|');current.add(key);
    let ep=active.get(key);
    if(!ep||!previous||ms(o.at)-ms(previous.at)>GAP_MS){
     ep={id:hash([VERSION,key,o.at]),axis,cardTier:c.tier,firstObservationId:o.id,at:o.at,lastAt:o.at,ruleVersion:o.ruleVersion,tier,signalTier:o.signalTier,marketPhase:o.marketPhase,
