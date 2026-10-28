@@ -20,7 +20,8 @@ const { buildGammaConcentration } = require('./engine/gammaConcentration');
 const { buildOptionExecutionIntelligence } = require('./engine/optionExecutionIntelligence');
 const { buildVolatilityContext } = require('./engine/volatilityEngine');
 const { evidenceKey } = require('./evidence/evidenceEngine');
-const { buildRuleSpec, signalFingerprint } = require('./evidence/signalRecording');
+const { buildRuleSpec } = require('./evidence/signalRecording');
+const { createDecisionRecorder } = require('./evidence/decisionRecorder');
 const { createDatabase } = require('./storage/database');
 const { createShadowEvents, quotesFromChain } = require('./evidence/shadowEvents');
 const { createPostgresEvidenceStore } = require('./evidence/postgresEvidenceStore');
@@ -137,7 +138,14 @@ const evidenceStore = dataPool ? createPostgresEvidenceStore({pool:dataPool,limi
 const evidenceSnapshots = dataPool ? [] : localEvidenceStore.load();
 let evidenceInitialized = false;
 const evidenceArchive = createEvidenceArchive();
-let lastDecisionFingerprint = null;
+const decisionRecorder = createDecisionRecorder({
+  store: evidenceStore,
+  lightweight: LIGHTWEIGHT_EVIDENCE,
+  onObservationAppended: observed => {
+    evidenceSnapshots.push(observed);
+    if (evidenceSnapshots.length > EVIDENCE_LIMIT) evidenceSnapshots.shift();
+  }
+});
 const outcomeHarvester = createOutcomeHarvester({ store: evidenceStore, snapshots: evidenceSnapshots, token: UPSTOX_TOKEN });
 const researchCandidateHarvester = createResearchCandidateHarvester({ store: evidenceStore, snapshots: evidenceSnapshots, token: UPSTOX_TOKEN });
 const opportunityResearch = createOpportunityResearch({pool:dataPool,store:evidenceStore,ownerToken:process.env.EDGE_PUSH_OWNER_TOKEN,
@@ -1149,8 +1157,6 @@ async function poll() {
       evidenceSnapshot.evidenceKey = evidenceKey(evidenceSnapshot);
       evidenceSnapshot.setupFeatureTags = setupFeatureTags(evidenceSnapshot);
       evidenceSnapshot.setupEvidenceKey = setupEvidenceKey(evidenceSnapshot);
-      const decisionFingerprint = signalFingerprint(evidenceSnapshot);
-      const changed = decisionFingerprint !== lastDecisionFingerprint;
       // Opt-in: persist only changes in research state; never erase the full historical archive.
       // Signal generation above this block, READY decisions and notifications remain untouched.
       const observed = LIGHTWEIGHT_EVIDENCE ? {
@@ -1172,22 +1178,7 @@ async function poll() {
             ([tier,plan])=>[tier,{strategy:plan.strategy,available:plan.available,legs:plan.legs}]))
         }
       } : evidenceSnapshot;
-      let saved=true;
-      if (!LIGHTWEIGHT_EVIDENCE || changed) {
-        saved=await evidenceStore.append(observed);
-        if (!saved && !LIGHTWEIGHT_EVIDENCE) throw new Error('EVIDENCE_STORE_APPEND_FAILED');
-        if (saved) {
-          evidenceSnapshots.push(observed);
-          if (evidenceSnapshots.length > EVIDENCE_LIMIT) evidenceSnapshots.shift();
-        } else console.error('[evidence] optional lightweight append failed; live decision preserved');
-      }
-      if (changed && saved) {
-        const transition = { ...observed, id: observed.id + '|TRANSITION', recordType: 'DECISION_TRANSITION' };
-        const savedTransition=await evidenceStore.append(transition);
-        if (!savedTransition && !LIGHTWEIGHT_EVIDENCE) throw new Error('EVIDENCE_TRANSITION_APPEND_FAILED');
-        if (savedTransition) lastDecisionFingerprint = decisionFingerprint;
-        else console.error('[evidence] optional transition append failed; live decision preserved');
-      }
+      await decisionRecorder.record(evidenceSnapshot, observed);
       if (analysedEpoch !== ledgerEpoch) throw new Error('LEDGER_CHANGED_DURING_PERSISTENCE');
       lastResult = result;
       // Optional census observes every successful OPEN poll, independent of execution gates.
@@ -1305,7 +1296,7 @@ app.get('/evidence/intelligence', (req,res) => {
 
 app.get('/evidence/status', (req,res) => {
   const counts = evidenceSnapshots.reduce((a,r)=>{a[r.recordType||'UNKNOWN']=(a[r.recordType||'UNKNOWN']||0)+1;return a;},{});
-  res.json({ total:evidenceSnapshots.length, counts, storage:evidenceStore.status(), archive:dataPool?{configured:false,provider:'POSTGRES_PRIMARY'}:evidenceArchive.status(), collectionMode:LIGHTWEIGHT_EVIDENCE?'LIGHTWEIGHT':'FULL', harvester:outcomeHarvester.getStatus(), researchCandidateHarvester:researchCandidateHarvester.getStatus(), lastDecisionFingerprint });
+  res.json({ total:evidenceSnapshots.length, counts, storage:evidenceStore.status(), archive:dataPool?{configured:false,provider:'POSTGRES_PRIMARY'}:evidenceArchive.status(), collectionMode:LIGHTWEIGHT_EVIDENCE?'LIGHTWEIGHT':'FULL', harvester:outcomeHarvester.getStatus(), researchCandidateHarvester:researchCandidateHarvester.getStatus(), lastDecisionFingerprint: decisionRecorder.lastFingerprint() });
 });
 
 registerEvidenceMonitoring(app, {
