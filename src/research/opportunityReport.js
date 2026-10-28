@@ -28,6 +28,7 @@ function normalizeObservations(records=[],snapshots=[]){
   }));
   const obs={id:r.id,at:r.timestamp,knownAt:r.observedAt||r.timestamp,source:modern?'CENSUS':'POLL',ruleVersion:rule(r.ruleSpec),
    signalTier:r.signalTier?.tier||r.signalTier||'UNKNOWN',candidates:candidates.filter(c=>['A','B','C'].includes(c.tier)).map(c=>({...c,legs:c.legs||{},expiry:c.expiry||r.expiry,key:identity({strategy:c.strategy,legs:c.legs},c.expiry||r.expiry)})),
+   candidateCoverageKnown:modern?Array.isArray(r.candidates):!!r.researchCandidatePlans?.plans,
    authoritativeGates:gatesOf(r),marketPhase:r.marketPhase||(gatesOf(r).market===true?'OPEN':gatesOf(r).market===false?'NOT_OPEN':'UNKNOWN')};
   const existing=polls.get(r.timestamp);if(!existing||modern)polls.set(r.timestamp,obs);
  }
@@ -60,7 +61,8 @@ function matchCoverage({at,symbol,contract,observations}){
   const fingerprint=hash({...value,at:null,observationId:null,source:null});if(fingerprint!==previous)history.push(value);previous=fingerprint;
  }
  const recent=before.filter(o=>t-ms(o.at)<=GAP_MS);
- const matching=recent.filter(o=>o.candidates.some(c=>matchContract(c,contract))).at(-1);
+ const latestComplete=recent.filter(o=>o.source!=='SAVED_SNAPSHOT'&&o.candidateCoverageKnown).at(-1);
+ const matching=latestComplete?(latestComplete.candidates.some(c=>matchContract(c,contract))?latestComplete:null):recent.filter(o=>o.candidates.some(c=>matchContract(c,contract))).at(-1);
  if(matching){const candidates=matching.candidates.filter(c=>matchContract(c,contract)),direct=candidates.filter(c=>candidateLegs(c).length===1),ready=direct.some(c=>c.tier==='A'&&c.executionAllowed===true);
   const rejectedBy=[...new Set(direct.flatMap(rejection))];
   return {status:ready?'FLAGGED_AND_READY':rejectedBy.length?'FLAGGED_BUT_REJECTED':'FLAGGED_GATE_DETAIL_UNKNOWN',
@@ -70,8 +72,9 @@ function matchCoverage({at,symbol,contract,observations}){
    gateScope:candidates.map(c=>({tier:c.tier,scope:c.gateScope})),authoritativeGateContext:matching.authoritativeGates||matching.authoritativeContext||null,history};
  }
  const postSnapshot=observations.some(o=>o.source==='SAVED_SNAPSHOT'&&ms(o.at)<=t&&ms(o.knownAt)>t&&o.candidates.some(c=>matchContract(c,contract)));
- return {status:recent.some(o=>o.source!=='SAVED_SNAPSHOT')?'NOT_FLAGGED_AT_OBSERVED_POLL':postSnapshot?'POST_TRADE_SNAPSHOT_ONLY':'UNKNOWN_RECORDING_GAP',
-  primaryMiss:recent.some(o=>o.source!=='SAVED_SNAPSHOT')?'CONTRACT_NOT_FLAGGED':postSnapshot?'CAPTURED_AFTER_TRADE':'RECORDING_GAP',history};
+ const missingMetadata=recent.some(o=>o.source!=='SAVED_SNAPSHOT'&&!o.candidateCoverageKnown);
+ return {status:latestComplete?'NOT_FLAGGED_AT_OBSERVED_POLL':missingMetadata?'UNKNOWN_CANDIDATE_RECORD':postSnapshot?'POST_TRADE_SNAPSHOT_ONLY':'UNKNOWN_RECORDING_GAP',
+  primaryMiss:latestComplete?'CONTRACT_NOT_FLAGGED':missingMetadata?'CANDIDATE_RECORD_UNAVAILABLE':postSnapshot?'CAPTURED_AFTER_TRADE':'RECORDING_GAP',observedAt:latestComplete?.at||null,history};
 }
 function candidateEpisodes(observations,{axis='CANDIDATE_CARD'}={}){
  const episodes=[],active=new Map();let previous=null;
@@ -145,7 +148,7 @@ function buildOpportunityReport({records=[],ledger={},snapshots=[],now=Date.now(
  }
  const gateChanges=Object.entries(missCounts).map(([gate,g])=>({gate,missedEntryFills:g.fills,missedEntryOrders:g.orders.size,sourceRuleVersions:[...g.versions],fillKeys:g.fillKeys,
   blockingConditions:[...([...g.versions].some(v=>['UNKNOWN','UNVERSIONED'].includes(v))?['HISTORICAL_RULE_VERSION_REQUIRED']:[]),'COMPLETE_CANDIDATE_EXPECTANCY_REQUIRED','GATE_SPECIFIC_REPLAY_REQUIRED'],
-  status:['RECORDING_GAP','CAPTURED_AFTER_TRADE','CONTRACT_IDENTITY_UNRESOLVED','STRUCTURE_ATTRIBUTION_UNRESOLVED'].includes(gate)?'REPAIR_COVERAGE_FIRST':'EVIDENCE_REVIEW_REQUIRED',
+  status:['RECORDING_GAP','CAPTURED_AFTER_TRADE','CONTRACT_IDENTITY_UNRESOLVED','STRUCTURE_ATTRIBUTION_UNRESOLVED','CANDIDATE_RECORD_UNAVAILABLE'].includes(gate)?'REPAIR_COVERAGE_FIRST':'EVIDENCE_REVIEW_REQUIRED',
   gateChangeAuthorized:false,ruleVersion:null})).sort((a,b)=>b.missedEntryOrders-a.missedEntryOrders||b.missedEntryFills-a.missedEntryFills||a.gate.localeCompare(b.gate));
  return {version:VERSION,generatedAt:new Date(now).toISOString(),liveDecisionImpact:false,gateChangesApplied:[],liveTradingInScope:false,
   source:{...source,firstObservationAt:observations[0]?.at||null,lastObservationAt:observations.at(-1)?.at||null,observations:observations.length},
