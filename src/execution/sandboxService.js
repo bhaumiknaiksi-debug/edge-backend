@@ -112,6 +112,11 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
       try{await fn(req,res);}catch(e){res.status(409).json({error:clean(e)});}
     };
     app.get(base,guard(async(_req,res)=>res.json({status:publicStatus(),state:await store.read(),catalog:catalog.status()})));
+    app.post(base+'/policy',guard(async(req,res)=>{
+      if(req.body?.confirmSandbox!==true)return res.status(400).json({error:'SANDBOX_CONFIRMATION_REQUIRED'});
+      const updated=await store.mutate(s=>engine.configurePolicy(s,req.body||{},now()));
+      const p=updated.state.policy;res.json({mode:'SANDBOX',policy:p,dailyLossGoalRatio:p.dailyLoss/(p.dailyGoal||1000),liveOrdersSupported:false});
+    }));
     for(const [path,operation] of [['arm','ARM'],['stop','STOP']])app.post(base+'/'+path,guard(async(req,res)=>{
       if(req.body?.confirmSandbox!==true)return res.status(400).json({error:'SANDBOX_CONFIRMATION_REQUIRED'});
       const updated=await store.mutate(s=>engine.control(s,operation,req.body.requestId,now()));

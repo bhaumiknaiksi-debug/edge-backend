@@ -1,0 +1,17 @@
+'use strict';
+const assert=require('node:assert/strict');
+const E=require('./sandboxEngine');
+const now=Date.parse('2026-10-28T10:00:00+05:30');
+const s=E.initialState();
+E.configurePolicy(s,{requestId:'settings-request-0001',dailyGoal:2000,dailyLoss:400},now);
+assert.equal(s.policy.dailyGoal,2000);assert.equal(s.policy.dailyLoss,400);assert.equal(s.policy.perTradeRisk,250);
+E.configurePolicy(s,{requestId:'settings-request-0001',dailyGoal:2000,dailyLoss:400},now);
+assert.throws(()=>E.configurePolicy(s,{requestId:'settings-request-0001',dailyGoal:3000,dailyLoss:400},now),/REQUEST_ID_REUSED/);
+assert.throws(()=>E.configurePolicy(s,{requestId:'settings-request-0002',dailyGoal:3000,dailyLoss:1001},now),/INVALID_SANDBOX_POLICY/);
+E.configurePolicy(s,{requestId:'settings-request-0003',dailyGoal:1000,dailyLoss:200},now);assert.equal(s.policy.perTradeRisk,200,'tightening loss cannot leave a larger per-trade budget');
+s.trades.closed={closedAt:now,netPnl:-250};
+E.configurePolicy(s,{requestId:'settings-request-0004',dailyGoal:1000,dailyLoss:150},now);assert.ok(s.lockedDays.includes('2026-10-28'));
+E.configurePolicy(s,{requestId:'settings-request-0005',dailyGoal:1000,dailyLoss:500},now);assert.ok(s.lockedDays.includes('2026-10-28'),'raising a setting never clears a loss lock');
+s.armed=true;s.killed=false;assert.throws(()=>E.configurePolicy(s,{requestId:'settings-request-0006',dailyGoal:1000,dailyLoss:500},now),/STOP_AND_FLATTEN/);
+assert.equal(s.policy.capital,10000);assert.equal(s.policy.perTradeRisk,150,'daily goals never increase sizing');
+console.log('Sandbox policy PASS: owner-set goal/loss, bounded limits, idempotency, flat/stopped requirement and persistent loss locks');

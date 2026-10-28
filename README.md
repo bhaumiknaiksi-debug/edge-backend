@@ -42,3 +42,7 @@ not silently retried; rate-limit retries still obey freshness and expiry. Summar
 coverage-unknown and contain no profit claims. Backend sleep still loses observations and can
 delay alerts/summaries; Telegram does not keep the collector running or fix outcome harvesting.
 See [Telegram send-only rollout](docs/audits/telegram-send-only.md) and run `npm run test:telegram`.
+
+## Private opportunity coverage
+
+The owner report at `/api/v1/opportunities/control` matches imported Kite fills and saved snapshots to recorded tiers and rejection gates. It separates recording gaps from known misses, compares all flagged candidate/readiness episodes, and groups results by rule fingerprint. The sandbox page includes owner-set daily goal/loss controls. No gate loosening or live trading is enabled. See [methodology, limits and rollback](docs/execution/opportunity-coverage.md).

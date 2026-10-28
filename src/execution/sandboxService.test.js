@@ -38,8 +38,11 @@ function setup(shared){
   assert.equal((await post('arm','arm-request-00001',{})).status,401);
   const panel=await fetch(url+'/control');assert.equal(panel.status,200);assert.ok(panel.headers.get('content-security-policy').includes("script-src 'self'"));assert.ok((await panel.text()).includes('Real-money trading is disabled'));
   const publicBody=await (await fetch(url+'/status')).text();assert.ok(!publicBody.includes(OWNER));assert.ok(publicBody.includes('SANDBOX'));
+  const policy=await fetch(url+'/policy',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+OWNER},body:JSON.stringify({requestId:'policy-http-request-1',confirmSandbox:true,dailyGoal:2000,dailyLoss:500})});
+  assert.equal(policy.status,200);assert.equal((await policy.json()).dailyLossGoalRatio,0.25);
   assert.equal((await post('arm','arm-request-00001')).status,409,'fresh broker reconciliation precedes arming');
   await f.service.tick();assert.equal((await post('arm','arm-request-00001')).status,200);
+  const whileArmed=await fetch(url+'/policy',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+OWNER},body:JSON.stringify({requestId:'policy-http-request-2',confirmSandbox:true,dailyGoal:1000,dailyLoss:500})});assert.equal(whileArmed.status,409);
   await f.service.tick();assert.equal(f.rows.length,1);assert.equal(f.calls.filter(x=>x.startsWith('place')).length,1);
   const peer=createSandboxService({ownerToken:OWNER,env:{EDGE_SANDBOX_EXECUTION_ENABLED:'true'},dependencies:{...f.dependencies,bootId:'peer'},getContext:()=>({analysis:f.result})});
   await peer.tick();assert.equal(peer.status().reason,'ANOTHER_WORKER_ACTIVE');assert.equal(f.rows.length,1);

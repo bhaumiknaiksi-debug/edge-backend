@@ -1,6 +1,8 @@
 'use strict';
 const assert=require('assert');
 const {eligible,isExpired,episodeStartIds,harvestOutcome,createOutcomeHarvester,retryDelay}=require('./outcomeHarvester');
+const {expiredCandlePath}=require('./outcomeHarvester');
+assert(expiredCandlePath({timestamp:'2026-10-09T04:30:00Z',expiry:'2026-10-13'},'NSE_FO|123').endsWith('/2026-10-09/2026-10-09'),'expired-contract measurement must request the trade date, not expiry day');
 const old=new Date(Date.now()-121*60000).toISOString();
 const snapshot={id:'x',recordType:'POLL_SNAPSHOT',timestamp:old,expiry:'2099-09-29',orchestrationStatus:'READY_TO_EXECUTE',strategy:'LONG_CALL',tradeLegs:{buyLeg:{contractId:'NIFTY TEST CE',instrumentKey:'NSE_FO|123',strike:23000,type:'CE',premium:100,ask:101,bid:99}}};
 assert.strictEqual(eligible(snapshot),true);
@@ -27,6 +29,8 @@ assert(starts.has('x3'));
  assert.strictEqual(out.status,'MEASURED');
  assert(out.mfePct>28&&out.mfePct<29);
  assert.strictEqual(out.bestMinute,60);
+ const shorter=await harvestOutcome(snapshot,{token:'test',fetchCandles:async()=>[{timestamp:new Date(new Date(old).getTime()+60*60000).toISOString(),close:95}],horizons:[60]});
+ assert.strictEqual(shorter.status,'MEASURED');assert(shorter.horizonsPct[60]<0);
 
  // Restart recovery: a measured outcome already on disk must suppress another fetch.
  let calls=0;

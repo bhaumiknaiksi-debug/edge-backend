@@ -36,6 +36,7 @@ const { createEvidenceArchive } = require('./evidence/evidenceArchive');
 const { buildWebPush } = require('./notifications/edgeWebPush');
 const { buildTelegram } = require('./notifications/edgeTelegram');
 const { createSandboxService } = require('./execution/sandboxService');
+const { createOpportunityResearch } = require('./research/opportunityService');
 const { dashboardAvailability, isLiveDataFresh } = require('./health/marketFreshness');
 const { nextMarketOpenIST } = require('./health/marketClock');
 const { registerEvidenceMonitoring } = require('./evidence/evidenceMonitoring');
@@ -136,6 +137,9 @@ const evidenceArchive = createEvidenceArchive();
 let lastDecisionFingerprint = null;
 const outcomeHarvester = createOutcomeHarvester({ store: evidenceStore, snapshots: evidenceSnapshots, token: UPSTOX_TOKEN });
 const researchCandidateHarvester = createResearchCandidateHarvester({ store: evidenceStore, snapshots: evidenceSnapshots, token: UPSTOX_TOKEN });
+const opportunityResearch = createOpportunityResearch({pool:dataPool,store:evidenceStore,ownerToken:process.env.EDGE_PUSH_OWNER_TOKEN,
+  token:UPSTOX_TOKEN,enabled:process.env.EDGE_OPPORTUNITY_REPORTS_ENABLED!=='false'});
+opportunityResearch.routes(app);
 
 // --- Market hours ---
 // NSE F&O regular market: 09:15-15:40 IST; F&O pre-open: 09:00-09:15 IST.
@@ -1183,6 +1187,9 @@ async function poll() {
       }
       if (analysedEpoch !== ledgerEpoch) throw new Error('LEDGER_CHANGED_DURING_PERSISTENCE');
       lastResult = result;
+      // Optional census observes every successful OPEN poll, independent of execution gates.
+      // Recording failures are isolated from the live dashboard and never promote a signal.
+      void opportunityResearch.observe(result,{lotSize:NIFTY_LOT_SIZE,budget:ledger.snapshot(),observedAt:Date.now()});
       lastFetchTime = Date.now();
       // Presentation-only alert producer. Never affects signal generation, evidence or trade gates.
       edgeWebPush.onSuccessfulPoll(result);
@@ -1372,6 +1379,7 @@ async function gracefulShutdown(signal) {
   shuttingDown = true;
   edgeTelegram.stop();
   sandboxExecution.stop();
+  opportunityResearch.stop();
   console.log('[shutdown]', signal, '- checkpointing evidence');
   try { if (!dataPool) await evidenceArchive.backup(evidenceSnapshots); } catch (err) { console.error('[evidence archive] shutdown backup failed:', err.message); }
   server.close(() => process.exit(0));
@@ -1396,5 +1404,6 @@ server.listen(PORT, async () => {
   edgeTelegram.start();
   sandboxExecution.start();
   researchCandidateHarvester.start();
+  opportunityResearch.start();
   poll();
 });

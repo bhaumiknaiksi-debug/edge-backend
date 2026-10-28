@@ -1,7 +1,7 @@
 'use strict';
 (()=>{
  const base='/api/v1/execution/sandbox',el=id=>document.getElementById(id);
- let owner='',timer=null;
+ let owner='',timer=null,policyLoaded=false;
  const human=value=>String(value||'').toLowerCase().replaceAll('_',' ');
  async function request(path='',body){
   const response=await fetch(base+path,{method:body?'POST':'GET',cache:'no-store',headers:{...(owner?{Authorization:'Bearer '+owner}:{}),...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{})});
@@ -12,6 +12,8 @@
   try{
    const data=await request(),s=data.state,orders=Object.values(s.orders),trades=Object.values(s.trades);
    el('limits').textContent='Sandbox limits: ₹'+s.policy.capital+' capital · ₹'+s.policy.perTradeRisk+' planned risk/trade · ₹'+s.policy.dailyLoss+' daily loss threshold · '+s.policy.maxTradesPerDay+' entries/day';
+   if(!policyLoaded){el('daily-goal').value=s.policy.dailyGoal||1000;el('daily-loss').value=s.policy.dailyLoss;policyLoaded=true;updateRatio();}
+   el('save-policy').disabled=!s.killed||s.armed||orders.some(o=>!['COMPLETE','CANCELLED','REJECTED','EXPIRED'].includes(o.state))||trades.some(t=>!t.closedAt);
    el('system').textContent=s.killed?'Stopped':s.armed?'Armed':'Disarmed';
    el('orders').textContent=orders.filter(o=>!['COMPLETE','CANCELLED','REJECTED','EXPIRED'].includes(o.state)).length;
    el('positions').textContent=trades.filter(t=>!t.closedAt).length;
@@ -26,8 +28,11 @@
     row.append(title,detail);el('list').append(row);
    }
    if(!orders.length)el('list').textContent='No sandbox orders yet.';
-  }catch(e){el('arm').disabled=true;message(e.message);}
+  }catch(e){el('arm').disabled=true;el('save-policy').disabled=true;message(e.message);}
  }
+ function updateRatio(){const goal=Number(el('daily-goal').value),loss=Number(el('daily-loss').value);el('goal-ratio').textContent=goal>0&&loss>0?'Loss threshold: '+(loss/goal*100).toFixed(1)+'% of daily goal.':'';}
+ for(const id of ['daily-goal','daily-loss'])el(id).addEventListener('input',updateRatio);
+ el('save-policy').addEventListener('click',async()=>{el('save-policy').disabled=true;try{await request('/policy',{requestId:crypto.randomUUID(),confirmSandbox:true,dailyGoal:Number(el('daily-goal').value),dailyLoss:Number(el('daily-loss').value)});policyLoaded=false;await refresh();message('Sandbox limits saved.');}catch(e){message(e.message);}});
  el('connect').addEventListener('click',async()=>{owner=el('owner').value.trim();el('owner').value='';if(!owner){message('Enter your owner code.');return;}await refresh();if(timer)clearInterval(timer);timer=setInterval(refresh,5000);});
  for(const name of ['arm','stop'])el(name).addEventListener('click',async()=>{el(name).disabled=true;try{await request('/'+name,{requestId:crypto.randomUUID(),confirmSandbox:true});await refresh();}catch(e){message(e.message);}});
  request('/status').then(s=>message(s.configured?'Ready to connect.':'Sandbox connection needs setup: '+human(s.reason))).catch(()=>message('Connection unavailable.'));

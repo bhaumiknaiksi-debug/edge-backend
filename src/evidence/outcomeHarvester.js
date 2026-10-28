@@ -75,9 +75,12 @@ async function expiredInstrumentKey(snapshot,leg,token){
   if(!match?.instrument_key)throw new Error('EXPIRED_INSTRUMENT_NOT_FOUND:'+strike+type);
   return match.instrument_key;
 }
+function expiredCandlePath(snapshot,key){
+  const date=new Date(Date.parse(snapshot.timestamp)+19800000).toISOString().slice(0,10);
+  return '/v2/expired-instruments/historical-candle/'+encodeURIComponent(key)+'/1minute/'+date+'/'+date;
+}
 async function fetchExpiredHistorical1m(snapshot,leg,token){
-  const exp=expiryDate(snapshot),key=await expiredInstrumentKey(snapshot,leg,token);
-  const path='/v2/expired-instruments/historical-candle/'+encodeURIComponent(key)+'/1minute/'+exp+'/'+exp;
+  const key=await expiredInstrumentKey(snapshot,leg,token),path=expiredCandlePath(snapshot,key);
   const json=await requestJson(path,token); return normalizeCandles(json?.data?.candles||[]);
 }
 async function fetchLegCandles(snapshot,leg,token){
@@ -85,7 +88,7 @@ async function fetchLegCandles(snapshot,leg,token){
   const day=String(snapshot.timestamp).slice(0,10);
   return fetchActiveHistorical1m(leg.instrumentKey,token,day,day);
 }
-async function harvestOutcome(snapshot,{token,fetchCandles}={}){
+async function harvestOutcome(snapshot,{token,fetchCandles,horizons}={}){
   if(!token)return{status:'UNAVAILABLE',reason:'UPSTOX_TOKEN_MISSING'};
   const candlesByContract={};
   for(const [,leg] of requiredLegs(snapshot)){
@@ -94,7 +97,7 @@ async function harvestOutcome(snapshot,{token,fetchCandles}={}){
       ? await fetchCandles(leg.instrumentKey,token,snapshot,leg)
       : await fetchLegCandles(snapshot,leg,token);
   }
-  return measureOutcome({snapshot,candlesByContract});
+  return measureOutcome({snapshot,candlesByContract,...(horizons?{horizons}:{})});
 }
 function retryDelay(attempt){return Math.min(30*60*1000,BASE_RETRY_MS*Math.pow(2,Math.max(0,attempt-1)));}
 
@@ -148,4 +151,4 @@ function createOutcomeHarvester({store,snapshots,token,intervalMs=60000,horizonM
   return{run,start,getStatus};
 }
 
-module.exports={eligible,isExpired,opportunityKey,episodeStartIds,harvestOutcome,createOutcomeHarvester,normalizeCandles,retryDelay};
+module.exports={eligible,isExpired,opportunityKey,episodeStartIds,harvestOutcome,createOutcomeHarvester,normalizeCandles,retryDelay,expiredCandlePath};
