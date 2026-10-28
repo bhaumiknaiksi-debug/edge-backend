@@ -19,6 +19,8 @@ Sizing uses a ₹10,000 capital ceiling and ₹1,000 daily planned-loss allowanc
 
 Control → Manual trade log supports whole-position entries/closes. Split fills must be logged separately. Historical records are not automatically reconstructed, and no broker reconciliation is automatic. Database persistence does not prevent a free hosting instance from sleeping; missed market observations cannot be recovered by this storage change.
 
+**Free-tier keep-alive.** While running, the backend requests its own public URL (`RENDER_EXTERNAL_URL`, set by Render, or `EDGE_PUBLIC_URL`) at `/api/v1/market/status` every 9 minutes so Render does not idle it after 15 minutes. `EDGE_KEEPALIVE` chooses the window in IST: `weekdays` (default, Mon–Fri), `market` (Mon–Fri 08:30–16:30), `always`, or `off`. It cannot wake an instance that is already asleep: after a weekend or a sleep, opening the app (or any request) wakes it once. Render's free plan has 750 instance hours per workspace per month shared by all free services; `weekdays` uses about 480, `always` about 744. Status (last attempt, last success, HTTP status) is reported under `keepAlive` in `/api/v1/market/status`. External pingers such as cron-job.org were observed receiving HTTP 429 from Render's edge.
+
 ## Optional private Telegram notifications (send-only, disabled by default)
 
 The Telegram adapter mirrors backend-confirmed Tier A readiness and invalidations, warns about

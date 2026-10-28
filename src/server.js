@@ -36,6 +36,7 @@ const { createEvidenceArchive } = require('./evidence/evidenceArchive');
 const { buildWebPush } = require('./notifications/edgeWebPush');
 const { buildTelegram } = require('./notifications/edgeTelegram');
 const { createSandboxService } = require('./execution/sandboxService');
+const { createKeepAlive } = require('./health/keepAlive');
 const { createOpportunityResearch } = require('./research/opportunityService');
 const { dashboardAvailability, isLiveDataFresh } = require('./health/marketFreshness');
 const { nextMarketOpenIST } = require('./health/marketClock');
@@ -74,6 +75,8 @@ app.use((req, res, next) => {
 edgeWebPush.routes(app);
 edgeTelegram.routes(app);
 sandboxExecution.routes(app);
+// Free-tier keep-alive: requests this service's own public URL so the host does not idle it (EDGE_KEEPALIVE).
+const keepAlive = createKeepAlive();
 ledger.routes(app);
 // Capture only the unchanged, backend-generated candidate plan; never change execution gates.
 const tradeSnapshots = createTradeSnapshots({app,pool:dataPool,ownerToken:process.env.EDGE_PUSH_OWNER_TOKEN,getAnalysis:()=>lastResult});
@@ -1248,7 +1251,8 @@ app.get('/api/v1/market/status', (req, res) => {
     lastFetch: lastFetchTime,
     liveDataFresh: isLiveDataFresh(lastFetchTime),
     minutesRemaining: getMinutesRemainingIST(),
-    nextOpen: nextOpen ? nextOpen.toISOString() : null
+    nextOpen: nextOpen ? nextOpen.toISOString() : null,
+    keepAlive: keepAlive.status()
   });
 });
 
@@ -1379,6 +1383,7 @@ async function gracefulShutdown(signal) {
   shuttingDown = true;
   edgeTelegram.stop();
   sandboxExecution.stop();
+  keepAlive.stop();
   opportunityResearch.stop();
   console.log('[shutdown]', signal, '- checkpointing evidence');
   try { if (!dataPool) await evidenceArchive.backup(evidenceSnapshots); } catch (err) { console.error('[evidence archive] shutdown backup failed:', err.message); }
@@ -1403,6 +1408,7 @@ server.listen(PORT, async () => {
   outcomeHarvester.start();
   edgeTelegram.start();
   sandboxExecution.start();
+  keepAlive.start();
   researchCandidateHarvester.start();
   opportunityResearch.start();
   poll();
