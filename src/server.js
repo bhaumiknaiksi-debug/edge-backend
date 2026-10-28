@@ -138,7 +138,7 @@ let lastDecisionFingerprint = null;
 const outcomeHarvester = createOutcomeHarvester({ store: evidenceStore, snapshots: evidenceSnapshots, token: UPSTOX_TOKEN });
 const researchCandidateHarvester = createResearchCandidateHarvester({ store: evidenceStore, snapshots: evidenceSnapshots, token: UPSTOX_TOKEN });
 const opportunityResearch = createOpportunityResearch({pool:dataPool,store:evidenceStore,ownerToken:process.env.EDGE_PUSH_OWNER_TOKEN,
-  token:UPSTOX_TOKEN,enabled:process.env.EDGE_OPPORTUNITY_REPORTS_ENABLED!=='false'});
+  token:UPSTOX_TOKEN,enabled:process.env.EDGE_OPPORTUNITY_REPORTS_ENABLED==='true'});
 opportunityResearch.routes(app);
 
 // --- Market hours ---

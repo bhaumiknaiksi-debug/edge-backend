@@ -61,8 +61,8 @@ function matchCoverage({at,symbol,contract,observations}){
   const fingerprint=hash({...value,at:null,observationId:null,source:null});if(fingerprint!==previous)history.push(value);previous=fingerprint;
  }
  const recent=before.filter(o=>t-o.atMs<=GAP_MS);
- const latestComplete=recent.filter(o=>o.source!=='SAVED_SNAPSHOT'&&o.candidateCoverageKnown).at(-1);
- const matching=latestComplete?(latestComplete.candidates.some(c=>matchContract(c,contract))?latestComplete:null):recent.filter(o=>o.candidates.some(c=>matchContract(c,contract))).at(-1);
+ const latest=recent.at(-1);
+ const matching=latest?.candidates.some(c=>matchContract(c,contract))?latest:null;
  if(matching){const candidates=matching.candidates.filter(c=>matchContract(c,contract)),direct=candidates.filter(c=>candidateLegs(c).length===1),ready=direct.some(c=>c.tier==='A'&&c.executionAllowed===true);
   const rejectedBy=[...new Set(direct.flatMap(rejection))];
   return {status:ready?'FLAGGED_AND_READY':rejectedBy.length?'FLAGGED_BUT_REJECTED':'FLAGGED_GATE_DETAIL_UNKNOWN',
@@ -72,9 +72,9 @@ function matchCoverage({at,symbol,contract,observations}){
    gateScope:candidates.map(c=>({tier:c.tier,scope:c.gateScope})),authoritativeGateContext:matching.authoritativeGates||matching.authoritativeContext||null,history};
  }
  const postSnapshot=observations.some(o=>o.source==='SAVED_SNAPSHOT'&&o.atMs<=t&&o.knownAtMs>t&&o.candidates.some(c=>matchContract(c,contract)));
- const missingMetadata=recent.some(o=>o.source!=='SAVED_SNAPSHOT'&&!o.candidateCoverageKnown);
- return {status:latestComplete?'NOT_FLAGGED_AT_OBSERVED_POLL':missingMetadata?'UNKNOWN_CANDIDATE_RECORD':postSnapshot?'POST_TRADE_SNAPSHOT_ONLY':'UNKNOWN_RECORDING_GAP',
-  primaryMiss:latestComplete?'CONTRACT_NOT_FLAGGED':missingMetadata?'CANDIDATE_RECORD_UNAVAILABLE':postSnapshot?'CAPTURED_AFTER_TRADE':'RECORDING_GAP',observedAt:latestComplete?.at||null,history};
+ const knownAbsence=latest?.source!=='SAVED_SNAPSHOT'&&latest?.candidateCoverageKnown===true,missingMetadata=!!latest&&!knownAbsence;
+ return {status:knownAbsence?'NOT_FLAGGED_AT_OBSERVED_POLL':missingMetadata?'UNKNOWN_CANDIDATE_RECORD':postSnapshot?'POST_TRADE_SNAPSHOT_ONLY':'UNKNOWN_RECORDING_GAP',
+  primaryMiss:knownAbsence?'CONTRACT_NOT_FLAGGED':missingMetadata?'CANDIDATE_RECORD_UNAVAILABLE':postSnapshot?'CAPTURED_AFTER_TRADE':'RECORDING_GAP',observedAt:latest?.at||null,history};
 }
 function candidateEpisodes(observations,{axis='CANDIDATE_CARD'}={}){
  const episodes=[],active=new Map();let previous=null;

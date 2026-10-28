@@ -28,7 +28,7 @@ The outcome collector reads historical candles only, processes up to four episod
 
 The optional census records every successful OPEN poll independently of whether the owner traded, the signal tier, or whether a gate passed. It freezes each existing candidate's contracts, quotes, recorded lot size, current rule hash, and a read-only evaluation of the current gates for that candidate. These evaluations never authorize B/C trades or change the original decision. Failures are isolated from signal generation and reported as recording errors.
 
-`EDGE_OPPORTUNITY_REPORTS_ENABLED=false` disables the census, reports and collector. Otherwise they use the existing database and evidence store. No new infrastructure or schema migration is required.
+Set `EDGE_OPPORTUNITY_REPORTS_ENABLED=true` on the intended backend to enable the census, reports and collector. They are disabled by default and use the existing database and evidence store. No new infrastructure or schema migration is required. Setting the flag to `false` disables them again.
 
 `COVERAGE_AND_EXPECTANCY_REQUIRED_V1` leaves every proposed gate change unauthorized. The queue ranks the largest classified buy-order misses first, while collection gaps are assigned to coverage repair. Before changing a gate, a new implementation must link a frozen report fingerprint, exact candidate-specific gate rejections, all-candidate winners/losses/missing outcomes, chronological validation with overlap control, regression/replay results and rollback. No blanket B/C authorization follows from profitable owner-selected trades. Each accepted change must receive its own source rule fingerprint. This release applies no such change.
 
