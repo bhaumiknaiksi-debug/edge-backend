@@ -1,6 +1,7 @@
 'use strict';
 // Durable SANDBOX-only state machine. Pure functions; never calls a broker or alters EDGE decisions.
 const {createHash}=require('node:crypto');
+const {selectCandidate,MODES,DEFAULT_MODE}=require('./candidateSelection');
 const hash=x=>createHash('sha256').update(JSON.stringify(x)).digest('hex');
 const clone=x=>JSON.parse(JSON.stringify(x));
 const money=x=>Math.round(x*100)/100;
@@ -10,27 +11,57 @@ const minutes=t=>{const d=new Date(t+19800000);return d.getUTCHours()*60+d.getUT
 const terminal=o=>['COMPLETE','CANCELLED','REJECTED','EXPIRED'].includes(o.state);
 const working=o=>!terminal(o);
 function initialState(){return {version:1,mode:'SANDBOX',armed:false,armedDay:null,killed:true,haltReason:null,bootId:null,reconciledAt:null,
-  orders:{},trades:{},commands:{},lockedDays:[],policy:{capital:10000,dailyGoal:1000,perTradeRisk:250,dailyLoss:500,costReserve:100,maxTradesPerDay:3}};}
+  orders:{},trades:{},commands:{},lockedDays:[],policy:{capital:10000,dailyGoal:1000,perTradeRisk:250,dailyLoss:500,costReserve:100,maxTradesPerDay:3,entryMode:DEFAULT_MODE}};}
 function assertState(s){
   const p=s?.policy;
   if(s?.version!==1||s.mode!=='SANDBOX'||!p||!positive(p.capital)||p.capital>10000||!positive(p.perTradeRisk)||
     !positive(p.dailyLoss)||p.dailyLoss>1000||p.perTradeRisk>p.dailyLoss||!Number.isFinite(p.costReserve)||p.costReserve<0||
     !Number.isSafeInteger(p.maxTradesPerDay)||p.maxTradesPerDay<1||p.maxTradesPerDay>10||
-    (p.dailyGoal!==undefined&&(!positive(p.dailyGoal)||p.dailyGoal>100000))||
+    (p.dailyGoal!==undefined&&(!positive(p.dailyGoal)||p.dailyGoal>100000))||(p.entryMode!==undefined&&!MODES.includes(p.entryMode))||
     !s.orders||Array.isArray(s.orders)||!s.trades||Array.isArray(s.trades)||!s.commands||!Array.isArray(s.lockedDays))throw Error('INVALID_SANDBOX_STATE');
 }
 function configurePolicy(s,input,now=Date.now()){
   assertState(s);
-  const {dailyGoal,dailyLoss,requestId}=input;
+  const {dailyGoal,dailyLoss,requestId,perTradeRisk,entryMode}=input;
+  const extended=perTradeRisk!==undefined||entryMode!==undefined;
   if(!/^[a-zA-Z0-9_-]{16,100}$/.test(requestId||'')||!positive(dailyGoal)||dailyGoal>100000||!positive(dailyLoss)||dailyLoss>1000||
-    money(dailyGoal)!==dailyGoal||money(dailyLoss)!==dailyLoss)throw Error('INVALID_SANDBOX_POLICY');
-  const command='POLICY:'+hash([dailyGoal,dailyLoss]);
+    money(dailyGoal)!==dailyGoal||money(dailyLoss)!==dailyLoss||
+    (perTradeRisk!==undefined&&(!positive(perTradeRisk)||money(perTradeRisk)!==perTradeRisk||perTradeRisk>dailyLoss||perTradeRisk<=s.policy.costReserve))||
+    (entryMode!==undefined&&!MODES.includes(entryMode)))throw Error('INVALID_SANDBOX_POLICY');
+  // Requests that set only goal and loss keep their original idempotency fingerprint.
+  const command='POLICY:'+hash(extended?[dailyGoal,dailyLoss,perTradeRisk??null,entryMode??null]:[dailyGoal,dailyLoss]);
   if(s.commands[requestId]){if(s.commands[requestId]!==command)throw Error('REQUEST_ID_REUSED');return;}
   if(!s.killed||s.armed||Object.values(s.trades).some(t=>!t.closedAt)||Object.values(s.orders).some(working))throw Error('STOP_AND_FLATTEN_BEFORE_POLICY_CHANGE');
   if(Object.keys(s.commands).length>=1000)throw Error('COMMAND_LIMIT');
-  s.policy={...s.policy,dailyGoal,dailyLoss,perTradeRisk:Math.min(s.policy.perTradeRisk,dailyLoss)};
+  // Per-trade risk is its own setting. It is never raised implicitly; tightening the daily loss can only lower it.
+  s.policy={...s.policy,dailyGoal,dailyLoss,perTradeRisk:perTradeRisk??Math.min(s.policy.perTradeRisk,dailyLoss),
+    entryMode:entryMode??s.policy.entryMode??DEFAULT_MODE};
   const realized=Object.values(s.trades).filter(t=>t.closedAt&&day(t.closedAt)===day(now)).reduce((a,t)=>a+t.netPnl,0);
   if(realized<=-dailyLoss&&!s.lockedDays.includes(day(now)))s.lockedDays.push(day(now));
+  s.commands[requestId]=command;assertState(s);
+}
+// Owner command for a trade left open on a PRIOR day (broker books roll and intraday positions are squared off).
+// It never touches a same-day trade, which must be stopped and reconciled normally. Unsold quantity is valued at zero
+// (worst case) and the result is booked on the trade's own day, so today's loss lock is not charged for it.
+function resolveTrade(s,input,now=Date.now()){
+  assertState(s);
+  const {requestId,tradeId,reason}=input;
+  if(!/^[a-zA-Z0-9_-]{16,100}$/.test(requestId||'')||typeof tradeId!=='string'||!s.trades[tradeId]||
+    typeof reason!=='string'||reason.trim().length<3||reason.length>200)throw Error('INVALID_RESOLVE_REQUEST');
+  const command='RESOLVE:'+hash([tradeId,reason]);
+  if(s.commands[requestId]){if(s.commands[requestId]!==command)throw Error('REQUEST_ID_REUSED');return;}
+  const t=s.trades[tradeId];
+  if(!s.killed||s.armed)throw Error('STOP_BEFORE_RESOLVING_TRADE');
+  if(t.closedAt)throw Error('TRADE_ALREADY_CLOSED');
+  if(!(t.day<day(now)))throw Error('ONLY_PRIOR_DAY_TRADES_CAN_BE_RESOLVED');
+  if(Object.keys(s.commands).length>=1000)throw Error('COMMAND_LIMIT');
+  const q=quantities(s,t);
+  for(const o of Object.values(s.orders))if(o.tradeId===t.id&&working(o)){o.state='EXPIRED';o.cancelState=null;}
+  t.closedAt=Date.parse(t.day+'T15:30:00+05:30');t.buys=q.buys;
+  t.netPnl=q.buys?money(q.proceeds-q.cost-t.costReserve):0;
+  if(q.net>0)t.pnlBasis='OWNER_RESOLVED_UNSOLD_QUANTITY_AT_ZERO';
+  t.exitReason||='OWNER_RESOLVED';
+  t.resolution={at:now,reason:reason.trim(),netQuantity:q.net};
   s.commands[requestId]=command;assertState(s);
 }
 function halt(s,reason){s.haltReason=reason;s.armed=false;}
@@ -74,17 +105,14 @@ function recover(s,bootId){
 }
 function planEntry(s,result,quote,meta,now){
   assertState(s);
-  const d=result?.decision,leg=d?.tradeLegs?.buyLeg;
   if(!s.armed||s.killed||s.haltReason||s.armedDay!==day(now))return 'DISARMED';
   if(!s.reconciledAt||now-s.reconciledAt>10000||s.reconciledAt>now)return 'RECONCILIATION_STALE';
   if(minutes(now)<570||minutes(now)>=900||result?.market?.phase!=='OPEN')return 'ENTRY_WINDOW_CLOSED';
   const at=Date.parse(result.timestamp);
   if(!Number.isFinite(at)||at>now||now-at>60000)return 'STALE_DECISION';
-  if(d?.orchestration?.status!=='READY_TO_EXECUTE'||d.orchestration.executionAllowed!==true||
-    d.signalTier?.tier!=='A'||d.signalTier.researchOnly!==false||d.signalTier.executionAllowed!==true||
-    d.risk?.status!=='READY'||d.position?.status!=='READY')return 'BACKEND_NOT_READY';
-  if(!['LONG_CALL','LONG_PUT'].includes(d.strategy)||!leg?.instrumentKey||
-    ['sellLeg','ceShort','ceLong','peShort','peLong'].some(k=>d.tradeLegs[k]))return 'SINGLE_LONG_ONLY';
+  const pick=selectCandidate(s.policy,result);
+  if(pick.reason)return pick.reason;
+  const leg=pick.leg;
   if(!meta||meta.instrumentKey!==leg.instrumentKey||meta.underlying!=='NIFTY'||meta.expiry!==result.expiry||meta.expiry<day(now)||
     meta.optionType!==leg.type||meta.strike!==leg.strike||meta.session!==day(now)||!Number.isSafeInteger(meta.lotSize)||meta.lotSize<=0||
     !positive(meta.tickSizeRupees)||meta.lotSize>100000)return 'INSTRUMENT_METADATA_REQUIRED';
@@ -92,7 +120,7 @@ function planEntry(s,result,quote,meta,now){
     !Number.isFinite(quote.receivedAt)||quote.receivedAt>now||now-quote.receivedAt>10000)return 'FRESH_QUOTE_REQUIRED';
   if((quote.ask-quote.bid)/quote.ask>0.025)return 'SPREAD_TOO_WIDE';
   const tick=meta.tickSizeRupees,up=x=>money(Math.ceil((x-1e-8)/tick)*tick),down=x=>money(Math.floor((x+1e-8)/tick)*tick);
-  const price=up(quote.ask),stop=down(d.risk.stop?.value),target=down(d.risk.target1?.value);
+  const price=up(quote.ask),{stop,target}=pick.exitPlan({price,bid:quote.bid,ask:quote.ask,tick,down});
   const stopLimit=down(stop-Math.max(tick,stop*0.005));
   if(!positive(stop)||!positive(target)||stop>=price||target<=price||!positive(stopLimit))return 'EXECUTABLE_EXIT_PLAN_REQUIRED';
   const policy=s.policy;
@@ -107,10 +135,11 @@ function planEntry(s,result,quote,meta,now){
   if(risk>policy.perTradeRisk||risk>policy.dailyLoss-Math.max(0,-pnlToday))return 'RISK_LIMIT';
   if(price*meta.lotSize+policy.costReserve>Math.max(0,policy.capital+Math.min(0,totalPnl)))return 'CAPITAL_LIMIT';
   // One entry per original contract/session. Poll timestamps never manufacture new entry identities.
-  const id=hash([day(now),d.strategy,result.expiry,leg.instrumentKey,leg.contractId]);
+  const id=hash([day(now),pick.strategy,result.expiry,leg.instrumentKey,leg.contractId]);
   if(s.trades[id])return 'SIGNAL_ALREADY_CONSUMED';
   const t={id,day:day(now),createdAt:now,entryExpiresAt:now+15000,analysisAt:result.timestamp,
-    instrumentKey:leg.instrumentKey,contractId:leg.contractId,strategy:d.strategy,expiry:result.expiry,
+    instrumentKey:leg.instrumentKey,contractId:leg.contractId,strategy:pick.strategy,expiry:result.expiry,
+    tier:pick.tier,entrySource:pick.source,ruleVersion:pick.ruleVersion,riskModel:pick.riskModel,anchor:pick.anchor,
     tickSize:tick,quantity:meta.lotSize,stop,stopLimit,target,plannedRisk:risk,costReserve:policy.costReserve,
     exitReason:null,closedAt:null,netPnl:null,pnlBasis:'BROKER_FILLS_MINUS_ESTIMATED_FRICTION',buys:0};
   s.trades[id]=t;addOrder(s,t,'ENTRY',t.quantity,price);return 'QUEUED';
@@ -156,6 +185,7 @@ function reconcile(s,book,positions,now,{positionBasis='BROKER_POSITIONS'}={}){
   const expected={};
   for(const t of Object.values(s.trades)){
     const q=quantities(s,t);if(q.net<0)throw Error('OVERSELL_DETECTED');
+    if(t.resolution)continue; // owner-resolved prior-day trade: the broker has already squared off intraday exposure
     expected[t.instrumentKey]=(expected[t.instrumentKey]||0)+q.net;
     const orders=Object.values(s.orders).filter(o=>o.tradeId===t.id);
     if(!t.closedAt&&orders.every(terminal)&&q.net===0){
@@ -239,7 +269,7 @@ function finish(s,action,result){
   }
 }
 function claimEmergencyCancel(s,now){
-  assertState(s);if(!s.killed)return null;
+  assertState(s);if(!s.killed&&!s.haltReason)return null; // STOP or any error halt: unfilled entries must not stay live
   for(const o of Object.values(s.orders))if(o.kind==='ENTRY'&&o.orderId&&working(o)&&(o.cancelAttempts||0)<3&&
       (!o.cancelStartedAt||now-o.cancelStartedAt>=15000)){
     o.cancelState='SUBMITTING';o.cancelStartedAt=now;o.cancelAttempts=(o.cancelAttempts||0)+1;
@@ -247,4 +277,4 @@ function claimEmergencyCancel(s,now){
   }
   return null;
 }
-module.exports={initialState,assertState,control,configurePolicy,recover,planEntry,reconcile,manage,claim,finish,claimEmergencyCancel,quantities,terminal,halt,day};
+module.exports={initialState,assertState,control,configurePolicy,resolveTrade,selectCandidate,recover,planEntry,reconcile,manage,claim,finish,claimEmergencyCancel,quantities,terminal,halt,day};

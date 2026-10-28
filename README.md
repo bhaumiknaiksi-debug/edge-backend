@@ -46,3 +46,5 @@ See [Telegram send-only rollout](docs/audits/telegram-send-only.md) and run `npm
 ## Private opportunity coverage
 
 The owner report at `/api/v1/opportunities/control` matches imported Kite fills and saved snapshots to recorded tiers and rejection gates. It separates recording gaps from known misses, compares all flagged candidate/readiness episodes, and groups results by rule fingerprint. The sandbox page includes owner-set daily goal/loss controls. No gate loosening or live trading is enabled. See [methodology, limits and rollback](docs/execution/opportunity-coverage.md).
+
+The optional sandbox executor (`EDGE_SANDBOX_EXECUTION_ENABLED=true`, Upstox sandbox host only, no live mode) places test orders from an owner-armed worker and is controlled at `/api/v1/execution/sandbox/control`. By default it trades only authoritative Tier A; the owner can opt into an experimental mode that also trades B/C candidates after their fixed opening-range level is crossed. Every sandbox trade records its entry tier. See `docs/execution/upstox-sandbox.md`.
