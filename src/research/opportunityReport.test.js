@@ -27,6 +27,14 @@ function fill({strike=23000,time='2026-10-28T10:00:30',side='BUY',key='f1'}={}){
  const savedC={id:'zzzz-snapshot',payload:{analysisAt:iso(BASE),capturedAt:iso(BASE+10000),tier:'C',actualSignalTier:'A',expiry:'2026-11-03',strategy:'LONG_CALL',selectedCandidate:{strategy:'LONG_CALL',legs:{buyLeg:leg()}},authorization:{executionAllowed:false}}};
  const withSnapshot=R.buildOpportunityReport({...input,records:[observation(BASE,{ready:true,tier:'A'})],snapshots:[savedC]});
  assert.equal(withSnapshot.fills[0].coverage.status,'FLAGGED_AND_READY');assert.equal(withSnapshot.gateChangeQueue.length,0);assert.equal(withSnapshot.fills[0].coverage.history.length,1);assert.equal(withSnapshot.fills[0].coverage.history[0].source,'CENSUS');
+ const savedA=structuredClone(savedC);savedA.id='aaaa-snapshot';savedA.payload.tier='A';savedA.payload.selectedCandidate.legs.buyLeg=leg(23100);
+ for(const snapshots of [[savedA,savedC],[{...savedC,id:'aaaa-c'},{...savedA,id:'zzzz-a'}]]){
+  const savedOnly=R.buildOpportunityReport({...input,records:[],snapshots});
+  assert.equal(savedOnly.fills[0].coverage.status,'FLAGGED_BUT_REJECTED');assert.deepEqual(savedOnly.fills[0].coverage.candidateTiers,['C']);assert.equal(savedOnly.fills[0].coverage.history.length,1);assert.equal(savedOnly.fills[0].coverage.history[0].observationIds.length,2,'all pre-trade cards from one analysis are retained regardless of UUID ordering');
+  const complete=R.buildOpportunityReport({...input,records:[observation(BASE,{ready:true,tier:'A'})],snapshots});assert.equal(complete.fills[0].coverage.status,'FLAGGED_AND_READY');assert.equal(complete.fills[0].coverage.history[0].source,'CENSUS');
+ }
+ const lateC=structuredClone(savedC);lateC.payload.capturedAt=iso(BASE+60000);
+ assert.equal(R.buildOpportunityReport({...input,records:[],snapshots:[savedA,lateC]}).fills[0].coverage.status,'UNKNOWN_CANDIDATE_RECORD','same-analysis cards captured after the fill cannot enter the merged pre-trade evidence');
  const newer=structuredClone(savedC);newer.payload.analysisAt=iso(BASE+10000);newer.payload.capturedAt=iso(BASE+20000);newer.payload.actualSignalTier='C';
  const savedAfterPoll=R.buildOpportunityReport({...input,records:[observation(BASE,{strike:23100})],snapshots:[newer]});assert.equal(savedAfterPoll.fills[0].coverage.status,'FLAGGED_BUT_REJECTED');assert.equal(savedAfterPoll.fills[0].coverage.primaryMiss,'RESEARCH_ONLY','newer selected-contract evidence is not erased by an older complete poll');
  const partialOther=structuredClone(newer);partialOther.payload.selectedCandidate.legs.buyLeg=leg(23100);

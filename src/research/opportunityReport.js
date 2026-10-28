@@ -51,14 +51,20 @@ function matchCoverage({at,symbol,contract,observations}){
  if(!Number.isFinite(t)||!contract||contract.exact!==true)return {status:'UNRESOLVED_CONTRACT_OR_TIME',primaryMiss:'CONTRACT_IDENTITY_UNRESOLVED',history:[]};
  const priority={SAVED_SNAPSHOT:0,POLL:1,CENSUS:2},byTime=new Map();
  for(const o of observations.filter(o=>o.session===date&&o.atMs<=t&&Number.isFinite(o.knownAtMs)&&o.knownAtMs<=t)){
-  const previous=byTime.get(o.at);if(!previous||priority[o.source]>priority[previous.source])byTime.set(o.at,o);
+  const previous=byTime.get(o.at);
+  if(!previous||priority[o.source]>priority[previous.source])byTime.set(o.at,o);
+  else if(o.source==='SAVED_SNAPSHOT'&&previous.source==='SAVED_SNAPSHOT'){
+   const observationIds=[...(previous.observationIds||[previous.id]),o.id];
+   const candidates=[...new Map([...previous.candidates,...o.candidates].map(c=>[[c.tier,c.key,c.executionAllowed].join('|'),c])).values()];
+   byTime.set(o.at,{...previous,id:hash(observationIds),observationIds,candidates});
+  }
  }
  // A saved selected card supplements a complete same-time poll; it cannot replace its authorization.
  const before=[...byTime.values()].sort((a,b)=>a.atMs-b.atMs);
  const history=[];let previous=null;
  for(const o of before){const candidates=o.candidates.filter(c=>matchContract(c,contract));if(!candidates.length)continue;
-  const value={at:o.at,source:o.source,observationId:o.id,signalTier:o.signalTier,ruleVersion:o.ruleVersion,candidates:candidates.map(c=>({tier:c.tier,strategy:c.strategy,matchKind:candidateLegs(c).length===1?'SINGLE_LEG_STRUCTURE':'CONTRACT_LEG_ONLY',gateScope:c.gateScope,rejectedBy:rejection(c),blockers:c.blockers||[],executionAllowed:c.executionAllowed===true}))};
-  const fingerprint=hash({...value,at:null,observationId:null,source:null});if(fingerprint!==previous)history.push(value);previous=fingerprint;
+  const value={at:o.at,source:o.source,observationId:o.id,observationIds:o.observationIds||[o.id],signalTier:o.signalTier,ruleVersion:o.ruleVersion,candidates:candidates.map(c=>({tier:c.tier,strategy:c.strategy,matchKind:candidateLegs(c).length===1?'SINGLE_LEG_STRUCTURE':'CONTRACT_LEG_ONLY',gateScope:c.gateScope,rejectedBy:rejection(c),blockers:c.blockers||[],executionAllowed:c.executionAllowed===true}))};
+  const fingerprint=hash({...value,at:null,observationId:null,observationIds:null,source:null});if(fingerprint!==previous)history.push(value);previous=fingerprint;
  }
  const recent=before.filter(o=>t-o.atMs<=GAP_MS);
  const latest=recent.at(-1);
