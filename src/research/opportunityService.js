@@ -2,6 +2,7 @@
 const {readFileSync}=require('node:fs');
 const path=require('node:path');
 const {timingSafeOwnerToken}=require('../notifications/edgeWebPush');
+const {rejectOwner}=require('../health/authThrottle');
 const {loadOpportunitySource}=require('./opportunitySource');
 const {buildObservation}=require('./opportunityCensus');
 const {buildOpportunityReport,normalizeObservations,candidateEpisodes,indexOutcomes,outcomeFor,validateOutcome,HORIZON}=require('./opportunityReport');
@@ -53,8 +54,8 @@ function createOpportunityResearch({pool,store,ownerToken,token,enabled=true,dep
    res.type(type).send(readFileSync(path.join(__dirname,file),'utf8'));
   });
   const guard=fn=>async(req,res)=>{
-   res.set('Cache-Control','no-store');const auth=String(req.headers.authorization||'');
-   if(!ownerToken||!auth.startsWith('Bearer ')||!timingSafeOwnerToken(auth.slice(7),ownerToken))return res.status(401).json({error:'OWNER_AUTH_REQUIRED'});
+   res.set('Cache-Control','no-store');
+   if(rejectOwner(req,res,{ownerToken,compare:timingSafeOwnerToken,throttle:dependencies.throttle}))return;
    if(!enabled)return res.status(404).json({error:'OPPORTUNITY_REPORTS_DISABLED'});
    try{await fn(req,res);}catch(e){res.status(503).json({error:e.message==='REPORT_SOURCE_LIMIT'?e.message:'OPPORTUNITY_REPORT_UNAVAILABLE'});}
   };

@@ -59,6 +59,15 @@ A third, opt-in sandbox entry mode in which Claude makes the entry and exit call
 
 Every sandbox trade records `expiryBucket` (`EXPIRY_DAY`, `DAY_BEFORE_EXPIRY`, `OTHER_DAYS`; weekdays counted, NSE holidays not modelled). The owner summary reports realized estimated P&L by entry tier, by decision source (Tier A rules, level-crossing rules, Claude), by expiry bucket, and by source × expiry, so expiry-day results cannot hide normal-day losses.
 
+## Safety controls (hardening after a trading-agent security review)
+
+- **Durable archive.** Closed trades from earlier IST days, with their terminal orders, move each tick (up to 20) into the append-only `edge_sandbox_archive_v1` table, in the same database transaction that removes them from the hot state. This removes the former permanent stop at 100 stored trades. `archivedPnl` keeps every archived result, so past losses still lower the capital ceiling. Results on the control page combine archived and live trades.
+- **Every Claude decision is archived** (including SKIPs and the full snapshot it saw), not only the last 60. Owner-only `GET /api/v1/execution/sandbox/decisions?limit=500` returns them newest first.
+- **Losing-streak breaker.** After `maxConsecutiveLosses` (default 2, owner-settable 1-5) losing trades in a row today, no new entries until the next IST session (`LOSING_STREAK_LOCK`). It works alongside the daily loss limit.
+- **Alerts.** When Telegram is configured, the executor sends: entry filled, trade closed with estimated P&L, halted (with open-trade count), daily loss lock, and losing-streak pause. Each is sent once per event; the first observation after a restart is a silent baseline. Alerts are best effort and in memory.
+- **Wrong owner codes.** Owner-only sandbox and opportunity endpoints share a per-client throttle: 5 wrong codes in 15 minutes blocks that client (HTTP 429) for 15 minutes. Other clients, including the owner on another connection, are unaffected, so a guesser cannot lock the owner out of STOP.
+- **Snapshot labels.** Only short plain labels and numbers from EDGE's analysis reach the model; any other text is dropped.
+
 ## Order lifecycle
 
 1. Persist a deterministic entry intent, then claim it as SUBMITTING before any HTTP mutation. Session/contract identity deduplicates repeated polls.
