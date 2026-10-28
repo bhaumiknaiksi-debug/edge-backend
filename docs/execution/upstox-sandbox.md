@@ -43,6 +43,22 @@ These controls are sandbox-only, owner-authenticated, require STOP and a flat ac
 
 **Error halts cancel unfilled entries.** Any worker error that halts the sandbox (for example a broker read failure) now also requests cancellation of a known, working entry order, not only STOP. A halted worker still cannot submit another SELL until it reconciles. Arming afterwards requires a fresh reconciliation.
 
+## Claude decision mode (`CLAUDE_DECIDES_V1`)
+
+A third, opt-in sandbox entry mode in which Claude makes the entry and exit call and EDGE's code does everything else.
+
+- **Setup.** Set `ANTHROPIC_API_KEY` (an Anthropic Console API key, billed separately from any Claude chat subscription) on the backend. Optional `EDGE_CLAUDE_MODEL` (default `claude-sonnet-5-5`). Then, while stopped and flat, choose "Claude decides" on the control page and arm. Without a key the mode is inert: it never calls anything and never trades.
+- **Cadence and cost.** While armed in this mode, Claude is asked once per completed 5-minute candle between 09:30 and 15:15 IST (no new entries after 15:00), only when the analysis is fresh and the market is open. A hard cap of 90 calls per IST day applies. Requests go only to `api.anthropic.com` with a 30-second timeout.
+- **What Claude sees.** A compact JSON snapshot: time, spot, expiry and days-to-expiry bucket, opening range and latest 5-minute candles, prior-day levels, regime, momentum and option flow, IV/PCR/max pain, OI walls, expected move, EDGE's A/B/C cards (strike, type, bid/ask, delta, opening-range timing status), the open sandbox position, today's realized result and the limits. No credentials, tokens or instrument keys.
+- **What Claude can answer.** Structured output only (`output_config.format` JSON schema): `BUY` one lot of one offered single-leg card with an index invalidation level, `SKIP`, or `EXIT` the open position. Refusals, HTTP errors, timeouts, truncated or malformed answers are treated as no decision.
+- **What code still enforces.** Card must exist and be unchanged since the decision; decision no older than 90 seconds; single-leg long call/put only; one lot; stop on the correct side and within 1% of spot; premium stop from the stated level and the card's delta (never tighter than twice the spread); 1.5R target; per-trade risk, daily loss, capital, trade count, spread, quote freshness and time window; broker-held protective stop; STOP and error halts as before. `EXIT` uses the existing cancel-stop-then-sell path.
+- **Audit.** The last 60 decisions (including SKIPs) are kept in the sandbox state with time, action, card, level, confidence, reason, spot, expiry bucket and model. Trades record `entrySource: CLAUDE_DECIDES` and the decision.
+- **Evaluation.** Only forward days are a fair test: the model's training data includes past market history. Compare it with the rule-based modes over several weeks before any live use.
+
+## Results by source and days to expiry
+
+Every sandbox trade records `expiryBucket` (`EXPIRY_DAY`, `DAY_BEFORE_EXPIRY`, `OTHER_DAYS`; weekdays counted, NSE holidays not modelled). The owner summary reports realized estimated P&L by entry tier, by decision source (Tier A rules, level-crossing rules, Claude), by expiry bucket, and by source × expiry, so expiry-day results cannot hide normal-day losses.
+
 ## Order lifecycle
 
 1. Persist a deterministic entry intent, then claim it as SUBMITTING before any HTTP mutation. Session/contract identity deduplicates repeated polls.

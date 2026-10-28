@@ -40,7 +40,7 @@
     "test:shadow-timing": "node src/engine/shadowTiming.test.js",
     "test:shadow-events": "node src/evidence/shadowEvents.test.js",
     "test:signal-recording": "node src/evidence/signalRecording.test.js",
-    "test:upstox-sandbox": "node src/execution/upstoxSandbox.test.js && node src/execution/catalogQuotes.test.js && node src/execution/sandboxEngine.test.js && node src/execution/sandboxStore.test.js && node src/execution/sandboxService.test.js && node src/execution/sandboxPolicy.test.js && node src/execution/sandboxShadowEntry.test.js",
+    "test:upstox-sandbox": "node src/execution/upstoxSandbox.test.js && node src/execution/catalogQuotes.test.js && node src/execution/sandboxEngine.test.js && node src/execution/sandboxStore.test.js && node src/execution/sandboxService.test.js && node src/execution/sandboxPolicy.test.js && node src/execution/sandboxShadowEntry.test.js && node src/execution/claudeDecides.test.js",
     "check:sandbox-connection": "node scripts/check-sandbox-connection.js",
     "test:opportunities": "node src/research/opportunityReport.test.js && node src/research/opportunitySource.test.js && node src/research/opportunityService.test.js"
   },
