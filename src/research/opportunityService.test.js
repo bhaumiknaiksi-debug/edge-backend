@@ -19,6 +19,11 @@ const records=Array.from({length:5},(_,i)=>({id:'poll-'+i,recordType:'OPPORTUNIT
   const panel=await fetch(base+'/control');assert.equal(panel.status,200);assert.ok(panel.headers.get('content-security-policy').includes("connect-src 'self'"));
   const publicStatus=await (await fetch(base+'/status')).text();assert.ok(!publicStatus.includes(OWNER)&&!publicStatus.includes('server-only-secret'));
  }finally{service.stop();server.closeAllConnections();await new Promise(r=>server.close(r));}
+ const badRows=[structuredClone(records[4])],badWrites=[];let clock=BASE+3*3600000;
+ const bad=createOpportunityResearch({pool:{},store:{async append(r){badRows.push(r);badWrites.push(r);return true;}},token:'test',ownerToken:OWNER,
+  dependencies:{now:()=>clock,load:async()=>({records:structuredClone(badRows),ledger:{brokerFills:[]},snapshots:[]}),harvest:async()=>({status:'MEASURED'})}});
+ await bad.run();assert.equal(badWrites[0].outcome.status,'UNAVAILABLE');assert.equal(badWrites[0].terminal,false,'invalid measured payload must not terminate collection as a success');
+ await bad.run();assert.equal(badWrites.length,1);clock+=6*60000;await bad.run();assert.equal(badWrites.length,2,'unavailable result retries only after backoff');bad.stop();
  const analysis={timestamp:iso(BASE),expiry:'2026-11-03',spot:23000,support:{strike:22850},resistance:{strike:23150},structure:{ceWall:23200,peWall:22800},dte:5,
   expectedMove:{low:22700,high:23300},market:{phase:'OPEN',features:{trend30mPct:1}},decision:{regime:{direction:'BULLISH',evidenceCoverage:100},signalTier:{tier:'C'},ruleSpec:{implementationHash:'rules-test'},
    researchCandidatePlans:{plans:{C:{available:true,strategy:'LONG_CALL',legs:{buyLeg:{contractId:'contract',instrumentKey:'NSE_FO|1',strike:23000,type:'CE',premium:100,bid:99.95,ask:100}}}}}}};

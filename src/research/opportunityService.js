@@ -4,7 +4,7 @@ const path=require('node:path');
 const {timingSafeOwnerToken}=require('../notifications/edgeWebPush');
 const {loadOpportunitySource}=require('./opportunitySource');
 const {buildObservation}=require('./opportunityCensus');
-const {buildOpportunityReport,normalizeObservations,candidateEpisodes,outcomeFor,HORIZON}=require('./opportunityReport');
+const {buildOpportunityReport,normalizeObservations,candidateEpisodes,outcomeFor,validateOutcome,HORIZON}=require('./opportunityReport');
 const {harvestOutcome}=require('../evidence/outcomeHarvester');
 function createOpportunityResearch({pool,store,ownerToken,token,enabled=true,dependencies={}}){
  const now=dependencies.now||Date.now,load=dependencies.load||(previous=>loadOpportunitySource(pool,previous)),harvest=dependencies.harvest||harvestOutcome;
@@ -31,6 +31,7 @@ function createOpportunityResearch({pool,store,ownerToken,token,enabled=true,dep
     let outcome;
     if(end>close)outcome={status:'UNAVAILABLE',reason:'HORIZON_OUTSIDE_SESSION'};
     else try{outcome=await harvest(snapshot,{token,horizons:[HORIZON]});}catch(_){outcome={status:'UNAVAILABLE',reason:'CANDLE_FETCH_UNAVAILABLE'};}
+    if(outcome.status==='MEASURED'){const checked=validateOutcome(ep,{id:'new',outcome});if(checked.status!=='MEASURED')outcome={...outcome,status:'UNAVAILABLE',reason:checked.reason};}
     const attempt=prior.length+1,terminal=outcome.status==='MEASURED'||outcome.reason==='HORIZON_OUTSIDE_SESSION'||attempt>=3;
     const record={id:ep.id+'|OPPORTUNITY_OUTCOME|'+attempt,recordType:'OPPORTUNITY_OUTCOME',timestamp:new Date(now()).toISOString(),episodeId:ep.id,
      tier:ep.tier,cardTier:ep.cardTier,snapshotId:ep.firstObservationId,ruleVersion:ep.ruleVersion,measurementRule:'FIXED_60M_CANDLE_MARK_V1',attempt,terminal,

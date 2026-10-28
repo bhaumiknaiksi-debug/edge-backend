@@ -101,8 +101,13 @@ function outcomeFor(ep,records,now=Date.now()){
  if(ms(ep.at)+HORIZON*60000>now)return {status:'UNMEASURED',reason:'PENDING_HORIZON'};
  const linked=records.filter(r=>ms(r.timestamp)<=now&&(r.episodeId===ep.id||r.snapshotId===ep.firstObservationId&&
   (r.recordType==='OUTCOME'&&ep.cardTier==='A'||r.recordType==='RESEARCH_CANDIDATE_OUTCOME'&&r.tier===ep.cardTier||r.recordType==='OPPORTUNITY_OUTCOME'&&r.cardTier===ep.cardTier)));
- const measured=linked.filter(r=>r.outcome?.status==='MEASURED').sort((a,b)=>ms(a.timestamp)-ms(b.timestamp))[0];
- if(!measured)return {status:'UNMEASURED',reason:linked.at(-1)?.outcome?.reason||'OUTCOME_NOT_RECORDED'};
+ const measured=linked.filter(r=>r.outcome?.status==='MEASURED').sort((a,b)=>ms(a.timestamp)-ms(b.timestamp));
+ if(!measured.length)return {status:'UNMEASURED',reason:linked.at(-1)?.outcome?.reason||'OUTCOME_NOT_RECORDED'};
+ let unavailable;
+ for(const record of measured){const result=validateOutcome(ep,record);if(result.status==='MEASURED')return result;unavailable ||=result;}
+ return unavailable;
+}
+function validateOutcome(ep,measured){
  const out=measured.outcome,mark=out.horizonLegMarks?.[HORIZON],target=ms(ep.at)+HORIZON*60000;
  if(!mark||!Number.isFinite(ms(mark.timestamp))||ms(mark.timestamp)<target||ms(mark.timestamp)>target+120000)return {status:'UNMEASURED',reason:'EXACT_HORIZON_MARK_UNAVAILABLE'};
  const legs=candidateLegs(ep.candidate),entries=out.entryLegMarks||{};let grossPoints=0;
@@ -167,4 +172,4 @@ function buildOpportunityReport({records=[],ledger={},snapshots=[],now=Date.now(
   candidateEpisodes:results.map(({candidate,...e})=>({...e,strategy:candidate.strategy,expiry:candidate.expiry,legs:candidateLegs(candidate),rejectedBy:rejection(candidate),gateScope:candidate.gateScope})),
   gateChangeQueue:gateChanges,reportFingerprint:hash([VERSION,records.map(r=>r.id),fills.map(f=>f.key),snapshots.map(s=>s.id)])};
 }
-module.exports={VERSION,GAP_MS,HORIZON,normalizeObservations,candidateEpisodes,outcomeFor,buildOpportunityReport,matchCoverage,identity,stats};
+module.exports={VERSION,GAP_MS,HORIZON,normalizeObservations,candidateEpisodes,outcomeFor,validateOutcome,buildOpportunityReport,matchCoverage,identity,stats};

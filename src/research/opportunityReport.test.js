@@ -48,6 +48,10 @@ function fill({strike=23000,time='2026-10-28T10:00:30',side='BUY',key='f1'}={}){
  assert.equal(R.buildOpportunityReport({records,now:BASE+30*60000}).byCandidateTier.find(t=>t.tier==='C').measured,0,'future horizon results are not available before their observation time');
  const mutated=structuredClone(records);mutated[3].outcome.horizonLegMarks[60].timestamp=iso(BASE+7200000);
  assert.equal(R.buildOpportunityReport({records:mutated,now:BASE+7200000}).byCandidateTier.find(t=>t.tier==='C').measured,1,'distant candle not accepted as the requested horizon');
+ mutated.push({id:'repaired-loss',recordType:'OPPORTUNITY_OUTCOME',episodeId:episodes[0].id,timestamp:iso(BASE+3*3600000),outcome:{status:'MEASURED',entryLegMarks:{buyLeg:{contractId:leg().contractId,side:'BUY',price:100}},horizonLegMarks:{60:{timestamp:iso(BASE+3600000),marks:{buyLeg:99}}}}});
+ const repaired=R.buildOpportunityReport({records:mutated,now:BASE+4*3600000});assert.equal(repaired.candidateEpisodes[0].result.sourceId,'repaired-loss');assert.equal(repaired.byCandidateTier.find(t=>t.tier==='C').measured,2);
+ mutated.push({...mutated.at(-1),id:'later-bigger-win',timestamp:iso(BASE+3.5*3600000),outcome:{...mutated.at(-1).outcome,horizonLegMarks:{60:{timestamp:iso(BASE+3600000),marks:{buyLeg:150}}}}});
+ assert.equal(R.buildOpportunityReport({records:mutated,now:BASE+4*3600000}).candidateEpisodes[0].result.sourceId,'repaired-loss','choose first valid measurement, never the most profitable retry');
 }
 {
  const snapshot={id:'snapshot',payload:{analysisAt:iso(BASE),capturedAt:iso(BASE+60000),tier:'C',actualSignalTier:'C',expiry:'2026-11-03',strategy:'LONG_CALL',selectedCandidate:{strategy:'LONG_CALL',legs:{buyLeg:leg()}},authorization:{executionAllowed:false}}};
