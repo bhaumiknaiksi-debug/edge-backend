@@ -59,5 +59,10 @@ function fill({strike=23000,time='2026-10-28T10:00:30',side='BUY',key='f1'}={}){
  assert.equal(report.fills[0].coverage.status,'POST_TRADE_SNAPSHOT_ONLY');assert.equal(report.snapshots.length,1);
  assert.equal(report.snapshots[0].actualSignalTier,'C');assert.equal(report.totals.candidateEpisodes,0,'manual clicks are not a population of all flagged candidates');
 }
-console.log('Opportunity report PASS: exact contract/time matching, no hindsight, recording gaps, rule/episode dedupe, separate tier axes, losses and unavailable results');
+{
+ const records=Array.from({length:3000},(_,i)=>observation(BASE+i*1000,{strike:23000+i})),start=performance.now();
+ const report=R.buildOpportunityReport({records,now:BASE+4*3600000});
+ assert.equal(report.totals.candidateEpisodes,6000);assert.ok(performance.now()-start<5000,'large all-candidate report must not regress to quadratic outcome scans');
+}
+console.log('Opportunity report PASS: exact contract/time matching, no hindsight, gaps, dedupe, both tier axes, wins/losses/unavailable results and 3,000-poll scale regression');
 module.exports={observation,fill,BASE,iso};

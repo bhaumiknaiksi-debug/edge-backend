@@ -38,7 +38,7 @@ function normalizeObservations(records=[],snapshots=[]){
    candidates:[{tier:p.tier,strategy:p.strategy,legs:p.selectedCandidate?.legs||{},expiry:p.expiry,lotSize:p.selectedCandidate?.legs?.lotSize||null,
     gateScope:'UNAVAILABLE_FOR_CANDIDATE',gates:null,blockers:[],executionAllowed:p.authorization?.executionAllowed===true,key:identity(p.selectedCandidate,p.expiry)}],authoritativeContext:p.authorization||null});
  }
- return observations.sort((a,b)=>ms(a.at)-ms(b.at)||a.id.localeCompare(b.id));
+ return observations.map(o=>({...o,atMs:ms(o.at),knownAtMs:ms(o.knownAt),session:day(ms(o.at))})).sort((a,b)=>a.atMs-b.atMs||a.id.localeCompare(b.id));
 }
 function rejection(candidate){
  const failed=names.filter(k=>candidate.gates?.[k]===false).map(k=>k.toUpperCase());
@@ -50,28 +50,28 @@ function matchCoverage({at,symbol,contract,observations}){
  const t=ms(at),date=day(t);contract ||=contractFromKite(symbol);
  if(!Number.isFinite(t)||!contract||contract.exact!==true)return {status:'UNRESOLVED_CONTRACT_OR_TIME',primaryMiss:'CONTRACT_IDENTITY_UNRESOLVED',history:[]};
  const priority={SAVED_SNAPSHOT:0,POLL:1,CENSUS:2},byTime=new Map();
- for(const o of observations.filter(o=>day(ms(o.at))===date&&ms(o.at)<=t&&Number.isFinite(ms(o.knownAt))&&ms(o.knownAt)<=t)){
+ for(const o of observations.filter(o=>o.session===date&&o.atMs<=t&&Number.isFinite(o.knownAtMs)&&o.knownAtMs<=t)){
   const previous=byTime.get(o.at);if(!previous||priority[o.source]>priority[previous.source])byTime.set(o.at,o);
  }
  // A saved selected card supplements a complete same-time poll; it cannot replace its authorization.
- const before=[...byTime.values()].sort((a,b)=>ms(a.at)-ms(b.at));
+ const before=[...byTime.values()].sort((a,b)=>a.atMs-b.atMs);
  const history=[];let previous=null;
  for(const o of before){const candidates=o.candidates.filter(c=>matchContract(c,contract));if(!candidates.length)continue;
   const value={at:o.at,source:o.source,observationId:o.id,signalTier:o.signalTier,ruleVersion:o.ruleVersion,candidates:candidates.map(c=>({tier:c.tier,strategy:c.strategy,matchKind:candidateLegs(c).length===1?'SINGLE_LEG_STRUCTURE':'CONTRACT_LEG_ONLY',gateScope:c.gateScope,rejectedBy:rejection(c),blockers:c.blockers||[],executionAllowed:c.executionAllowed===true}))};
   const fingerprint=hash({...value,at:null,observationId:null,source:null});if(fingerprint!==previous)history.push(value);previous=fingerprint;
  }
- const recent=before.filter(o=>t-ms(o.at)<=GAP_MS);
+ const recent=before.filter(o=>t-o.atMs<=GAP_MS);
  const latestComplete=recent.filter(o=>o.source!=='SAVED_SNAPSHOT'&&o.candidateCoverageKnown).at(-1);
  const matching=latestComplete?(latestComplete.candidates.some(c=>matchContract(c,contract))?latestComplete:null):recent.filter(o=>o.candidates.some(c=>matchContract(c,contract))).at(-1);
  if(matching){const candidates=matching.candidates.filter(c=>matchContract(c,contract)),direct=candidates.filter(c=>candidateLegs(c).length===1),ready=direct.some(c=>c.tier==='A'&&c.executionAllowed===true);
   const rejectedBy=[...new Set(direct.flatMap(rejection))];
   return {status:ready?'FLAGGED_AND_READY':rejectedBy.length?'FLAGGED_BUT_REJECTED':'FLAGGED_GATE_DETAIL_UNKNOWN',
-   primaryMiss:ready?null:!direct.length?'STRUCTURE_ATTRIBUTION_UNRESOLVED':rejectedBy[0]||'GATE_DETAIL_UNAVAILABLE',rejectedBy:ready?[]:rejectedBy,observedAt:matching.at,ageSeconds:round((t-ms(matching.at))/1000),
+   primaryMiss:ready?null:!direct.length?'STRUCTURE_ATTRIBUTION_UNRESOLVED':rejectedBy[0]||'GATE_DETAIL_UNAVAILABLE',rejectedBy:ready?[]:rejectedBy,observedAt:matching.at,ageSeconds:round((t-matching.atMs)/1000),
    candidateTiers:[...new Set(candidates.map(c=>c.tier))],signalTier:matching.signalTier,ruleVersion:matching.ruleVersion,
    directCandidateTiers:direct.map(c=>c.tier),relatedPlanGates:candidates.filter(c=>candidateLegs(c).length!==1).map(c=>({tier:c.tier,strategy:c.strategy,rejectedBy:rejection(c),scope:'CONTRACT_LEG_ONLY_NOT_THIS_SINGLE_LEG_TRADE'})),
    gateScope:candidates.map(c=>({tier:c.tier,scope:c.gateScope})),authoritativeGateContext:matching.authoritativeGates||matching.authoritativeContext||null,history};
  }
- const postSnapshot=observations.some(o=>o.source==='SAVED_SNAPSHOT'&&ms(o.at)<=t&&ms(o.knownAt)>t&&o.candidates.some(c=>matchContract(c,contract)));
+ const postSnapshot=observations.some(o=>o.source==='SAVED_SNAPSHOT'&&o.atMs<=t&&o.knownAtMs>t&&o.candidates.some(c=>matchContract(c,contract)));
  const missingMetadata=recent.some(o=>o.source!=='SAVED_SNAPSHOT'&&!o.candidateCoverageKnown);
  return {status:latestComplete?'NOT_FLAGGED_AT_OBSERVED_POLL':missingMetadata?'UNKNOWN_CANDIDATE_RECORD':postSnapshot?'POST_TRADE_SNAPSHOT_ONLY':'UNKNOWN_RECORDING_GAP',
   primaryMiss:latestComplete?'CONTRACT_NOT_FLAGGED':missingMetadata?'CANDIDATE_RECORD_UNAVAILABLE':postSnapshot?'CAPTURED_AFTER_TRADE':'RECORDING_GAP',observedAt:latestComplete?.at||null,history};
@@ -96,11 +96,23 @@ function candidateEpisodes(observations,{axis='CANDIDATE_CARD'}={}){
  }
  return episodes;
 }
+function indexOutcomes(records,now=Date.now()){
+ const byEpisode=new Map(),bySnapshot=new Map();
+ const append=(map,key,row)=>{if(!key)return;const list=map.get(key)||[];list.push(row);map.set(key,list);};
+ function add(r,through=now){
+  if(!['OUTCOME','RESEARCH_CANDIDATE_OUTCOME','OPPORTUNITY_OUTCOME'].includes(r.recordType)||!(ms(r.timestamp)<=through))return;
+  append(byEpisode,r.episodeId,r);
+  const tier=r.recordType==='OUTCOME'?'A':r.recordType==='RESEARCH_CANDIDATE_OUTCOME'?r.tier:r.cardTier;
+  if(r.snapshotId&&tier)append(bySnapshot,r.snapshotId+'|'+tier,r);
+ }
+ for(const row of records)add(row);
+ return {byEpisode,bySnapshot,add};
+}
 function outcomeFor(ep,records,now=Date.now()){
  if(ep.marketPhase==='NOT_OPEN'||ep.marketPhase==='CLOSED'||ep.marketPhase==='PRE_OPEN')return {status:'UNMEASURED',reason:'MARKET_NOT_OPEN'};
  if(ms(ep.at)+HORIZON*60000>now)return {status:'UNMEASURED',reason:'PENDING_HORIZON'};
- const linked=records.filter(r=>ms(r.timestamp)<=now&&(r.episodeId===ep.id||r.snapshotId===ep.firstObservationId&&
-  (r.recordType==='OUTCOME'&&ep.cardTier==='A'||r.recordType==='RESEARCH_CANDIDATE_OUTCOME'&&r.tier===ep.cardTier||r.recordType==='OPPORTUNITY_OUTCOME'&&r.cardTier===ep.cardTier)));
+ const index=Array.isArray(records)?indexOutcomes(records,now):records;
+ const linked=[...new Set([...(index.byEpisode.get(ep.id)||[]),...(index.bySnapshot.get(ep.firstObservationId+'|'+ep.cardTier)||[])])];
  const measured=linked.filter(r=>r.outcome?.status==='MEASURED').sort((a,b)=>ms(a.timestamp)-ms(b.timestamp));
  if(!measured.length)return {status:'UNMEASURED',reason:linked.at(-1)?.outcome?.reason||'OUTCOME_NOT_RECORDED'};
  let unavailable;
@@ -138,15 +150,19 @@ function stats(rows){
   observedDays:new Set(rows.map(r=>day(ms(r.at)))).size,missingReasons:reasons};
 }
 function buildOpportunityReport({records=[],ledger={},snapshots=[],now=Date.now(),source={}}={}){
- const observations=normalizeObservations(records,snapshots).filter(o=>ms(o.at)<=now),episodes=candidateEpisodes(observations);
- const fills=(ledger.brokerFills||[]).map(f=>({key:f.key,orderId:f.orderId,symbol:f.symbol,side:f.side,quantity:f.quantity,price:f.price,time:f.time,
-  coverage:matchCoverage({symbol:f.symbol,at:f.time+'+05:30',observations})}));
+ const observations=normalizeObservations(records,snapshots).filter(o=>o.atMs<=now),episodes=candidateEpisodes(observations),byDay=new Map(),fillsByContract=new Map();
+ for(const o of observations){const list=byDay.get(o.session)||[];list.push(o);byDay.set(o.session,list);}
+ const fillRows=(ledger.brokerFills||[]).map((f,index)=>({fill:f,index,contract:contractFromKite(f.symbol),timeMs:ms(f.time+'+05:30')}));
+ for(const row of fillRows)if(row.contract?.exact){const c=row.contract,key=[c.expiry,c.strike,c.type].join('|'),list=fillsByContract.get(key)||[];list.push(row);fillsByContract.set(key,list);}
+ const fills=fillRows.map(({fill:f,contract,timeMs})=>({key:f.key,orderId:f.orderId,symbol:f.symbol,side:f.side,quantity:f.quantity,price:f.price,time:f.time,
+  coverage:matchCoverage({symbol:f.symbol,contract,at:f.time+'+05:30',observations:byDay.get(day(timeMs))||[]})}));
  const snapshotRows=snapshots.map(s=>{const p=s.payload||s;return {id:s.id,at:p.analysisAt,capturedAt:p.capturedAt,tier:p.tier,
   actualSignalTier:p.actualSignalTier||'UNKNOWN',ruleVersion:rule(p.ruleSpec),strategy:p.strategy,expiry:p.expiry,
   selectedLegs:p.selectedLegs||candidateLegs(p.selectedCandidate),authorization:p.authorization||null,
-  importedFillKeys:(ledger.brokerFills||[]).filter(f=>candidateLegs(p.selectedCandidate).some(l=>{const c=contractFromKite(f.symbol);return c?.exact&&c.expiry===p.expiry&&l.strike===c.strike&&l.type===c.type;})&&Math.abs(ms(f.time+'+05:30')-ms(p.capturedAt))<=20*60000).map(f=>f.key),
+  importedFillKeys:[...new Map(candidateLegs(p.selectedCandidate).flatMap(l=>fillsByContract.get([p.expiry,l.strike,l.type].join('|'))||[]).filter(r=>Math.abs(r.timeMs-ms(p.capturedAt))<=20*60000).map(r=>[r.fill.key,r])).values()].sort((a,b)=>a.index-b.index).map(r=>r.fill.key),
   pnlAttribution:'NOT_INFERRED_FROM_A_CLICK'};});
- const results=episodes.map(e=>({...e,result:outcomeFor(e,records,now)})),readinessResults=candidateEpisodes(observations,{axis:'READINESS_TIER'}).map(e=>({...e,result:outcomeFor(e,records,now)})),groups={};
+ const outcomeIndex=indexOutcomes(records,now);
+ const results=episodes.map(e=>({...e,result:outcomeFor(e,outcomeIndex,now)})),readinessResults=candidateEpisodes(observations,{axis:'READINESS_TIER'}).map(e=>({...e,result:outcomeFor(e,outcomeIndex,now)})),groups={};
  for(const e of [...results,...readinessResults]){const key=e.axis+'|'+e.ruleVersion+'|'+e.tier;(groups[key]||={axis:e.axis,ruleVersion:e.ruleVersion,tier:e.tier,rows:[]}).rows.push(e);}
  const missCounts={};for(const f of fills.filter(f=>f.side==='BUY'))for(const gate of new Set(f.coverage.rejectedBy?.length?f.coverage.rejectedBy:f.coverage.primaryMiss?[f.coverage.primaryMiss]:[])){
   const group=missCounts[gate]||={fills:0,orders:new Set(),versions:new Set(),fillKeys:[]};group.fills++;group.orders.add([f.time?.slice(0,10),f.symbol,f.orderId||f.key].join('|'));group.versions.add(f.coverage.ruleVersion||'UNKNOWN');group.fillKeys.push(f.key);
@@ -172,4 +188,4 @@ function buildOpportunityReport({records=[],ledger={},snapshots=[],now=Date.now(
   candidateEpisodes:results.map(({candidate,...e})=>({...e,strategy:candidate.strategy,expiry:candidate.expiry,legs:candidateLegs(candidate),rejectedBy:rejection(candidate),gateScope:candidate.gateScope})),
   gateChangeQueue:gateChanges,reportFingerprint:hash([VERSION,records.map(r=>r.id),fills.map(f=>f.key),snapshots.map(s=>s.id)])};
 }
-module.exports={VERSION,GAP_MS,HORIZON,normalizeObservations,candidateEpisodes,outcomeFor,validateOutcome,buildOpportunityReport,matchCoverage,identity,stats};
+module.exports={VERSION,GAP_MS,HORIZON,normalizeObservations,candidateEpisodes,indexOutcomes,outcomeFor,validateOutcome,buildOpportunityReport,matchCoverage,identity,stats};

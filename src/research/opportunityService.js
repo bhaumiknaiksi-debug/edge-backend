@@ -4,7 +4,7 @@ const path=require('node:path');
 const {timingSafeOwnerToken}=require('../notifications/edgeWebPush');
 const {loadOpportunitySource}=require('./opportunitySource');
 const {buildObservation}=require('./opportunityCensus');
-const {buildOpportunityReport,normalizeObservations,candidateEpisodes,outcomeFor,validateOutcome,HORIZON}=require('./opportunityReport');
+const {buildOpportunityReport,normalizeObservations,candidateEpisodes,indexOutcomes,outcomeFor,validateOutcome,HORIZON}=require('./opportunityReport');
 const {harvestOutcome}=require('../evidence/outcomeHarvester');
 function createOpportunityResearch({pool,store,ownerToken,token,enabled=true,dependencies={}}){
  const now=dependencies.now||Date.now,load=dependencies.load||(previous=>loadOpportunitySource(pool,previous)),harvest=dependencies.harvest||harvestOutcome;
@@ -20,10 +20,10 @@ function createOpportunityResearch({pool,store,ownerToken,token,enabled=true,dep
  async function run(){
   if(!enabled||!pool||!token||running||stopped)return {running};running=true;status.lastHarvestAt=new Date(now()).toISOString();status.harvestError=null;
   try{
-   const input=await source(),localRecords=input.records.slice(),observations=normalizeObservations(localRecords,[]),episodes=[...candidateEpisodes(observations),...candidateEpisodes(observations,{axis:'READINESS_TIER'})].sort((a,b)=>Date.parse(a.at)-Date.parse(b.at));let processed=0;
+   const input=await source(),observations=normalizeObservations(input.records,[]),outcomeIndex=indexOutcomes(input.records,now()),episodes=[...candidateEpisodes(observations),...candidateEpisodes(observations,{axis:'READINESS_TIER'})].sort((a,b)=>Date.parse(a.at)-Date.parse(b.at));let processed=0;
    for(const ep of episodes){
-    if(stopped||processed>=4)break;if(['NOT_OPEN','CLOSED','PRE_OPEN'].includes(ep.marketPhase)||outcomeFor(ep,localRecords,now()).status==='MEASURED')continue;
-    const prior=localRecords.filter(r=>r.recordType==='OPPORTUNITY_OUTCOME'&&r.episodeId===ep.id);
+    if(stopped||processed>=4)break;if(['NOT_OPEN','CLOSED','PRE_OPEN'].includes(ep.marketPhase)||outcomeFor(ep,outcomeIndex,now()).status==='MEASURED')continue;
+    const prior=outcomeIndex.byEpisode.get(ep.id)||[];
     if(prior.some(r=>r.terminal)||prior.at(-1)?.nextRetryAt&&Date.parse(prior.at(-1).nextRetryAt)>now())continue;
     const at=Date.parse(ep.at),end=at+HORIZON*60000,close=Date.parse(new Date(at+19800000).toISOString().slice(0,10)+'T15:30:00+05:30');
     if(end+120000>now())continue;
@@ -36,7 +36,7 @@ function createOpportunityResearch({pool,store,ownerToken,token,enabled=true,dep
     const record={id:ep.id+'|OPPORTUNITY_OUTCOME|'+attempt,recordType:'OPPORTUNITY_OUTCOME',timestamp:new Date(now()).toISOString(),episodeId:ep.id,
      tier:ep.tier,cardTier:ep.cardTier,snapshotId:ep.firstObservationId,ruleVersion:ep.ruleVersion,measurementRule:'FIXED_60M_CANDLE_MARK_V1',attempt,terminal,
      nextRetryAt:terminal?null:new Date(now()+attempt*300000).toISOString(),outcome};
-    if(await store.append(record)===false)throw Error();localRecords.push(record);invalidate();processed++;
+    if(await store.append(record)===false)throw Error();outcomeIndex.add(record,now());invalidate();processed++;
    }
    status.lastProcessed=processed;
   }catch(_){status.harvestError='OUTCOME_COLLECTION_UNAVAILABLE';}finally{running=false;}
