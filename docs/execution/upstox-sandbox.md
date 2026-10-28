@@ -19,13 +19,29 @@ A read-only broker smoke is available with `npm run check:sandbox-connection` fr
 
 ## Decisions and limits
 
-The worker reads the untouched current EDGE result. It accepts only existing authoritative Tier A, explicit READY_TO_EXECUTE/executionAllowed, risk READY and position READY. It supports one long NIFTY call or put, one broker-defined lot, and one open sandbox trade at a time. C/B research candidates are not promoted by the executor. The original instrument, strike, expiry, strategy and contract remain fixed for each trade. Multi-leg strategies are not supported in V1.
+The worker reads the untouched current EDGE result. By default (`AUTHORITATIVE_A_ONLY`) it accepts only existing authoritative Tier A, explicit READY_TO_EXECUTE/executionAllowed, risk READY and position READY. An owner-selected experimental mode (below) can also trade B/C candidates. It supports one long NIFTY call or put, one broker-defined lot, and one open sandbox trade at a time. C/B research candidates are not promoted by the executor. The original instrument, strike, expiry, strategy and contract remain fixed for each trade. Multi-leg strategies are not supported in V1.
 
 Pilot sandbox settings are Rs 10,000 capital, Rs 250 planned risk per trade, Rs 500 daily loss threshold, Rs 100 estimated round-trip friction and at most three entries per IST date. These do not change the live ledger and are not measured brokerage charges. Broker-reported fill P&L minus the friction estimate is labeled as estimated P&L. Losses reduce the capital ceiling; profits do not expand it. Stops and daily thresholds are not guaranteed loss caps.
 
 New entries are considered from 09:30 until 15:00 IST, rechecked immediately before sending, and expire after 15 seconds while queued. Existing EDGE market/calendar and eligibility gates still apply. The worker requests closure after 15:15 IST. These are sandbox pilot restrictions, not a claim that this strategy is profitable.
 
 Instrument lot, strike, expiry and tick size come from the official NSE BOD CSV (rupee tick values, e.g. 0.05). A current IST-date Last-Modified header is required, preventing silent use of stale files. One-lot requests do not use slicing; broker/exchange limits may still reject an order. Full market quotes are fetched independently for the original open contract as well as the currently displayed candidate. They require fresh exchange timestamps and two-sided depth; LTP is not substituted. No decision or selected candidate is mutated.
+
+## Entry modes, per-trade risk and owner recovery
+
+These controls are sandbox-only, owner-authenticated, require STOP and a flat account to change, and do not touch EDGE's decision, tiers or the live ledger.
+
+**Entry mode.** `AUTHORITATIVE_A_ONLY` (default) is the behaviour described above. `OPENING_RANGE_SHADOW_V1` lets the executor trade a single-leg long call or put from the Tier A, B or C research card (A preferred) once that card's `OPENING_RANGE_SHADOW_V1` timing is CONFIRMED and shadow-entry-ready. That timing freezes the day's opening-range high/low and waits for a completed 5-minute candle to close through it, so a crossing is a detectable event (the original trigger compares spot with a level recomputed three strikes from spot, which cannot be reached). It requires `EDGE_SHADOW_TIMING_ENABLED=true`. A confirmed call is refused when the regime is bearish, a confirmed put when it is bullish, and when spot has fallen back through the level. The executor's own gates still apply unchanged: fresh two-sided quote, spread, instrument metadata, one open trade, trade count, capital, daily loss, per-trade risk and time window. This mode does not use the setup-qualification gate; it is the experiment whose evidence the opportunity report exists to judge.
+
+**Stop and target in this mode.** `ANCHOR_INVALIDATION_V1`: the stop is the premium implied by price returning to the frozen level (entry minus delta times the points travelled beyond the level, never tighter than twice the quoted spread), and the target is 1.5 times that planned premium risk. These are delta estimates, not guaranteed fills. The broker-held stop-limit and the existing quote-driven exits are unchanged. A candidate that has already run far past its level is rejected by the risk budget instead of being chased.
+
+**Tier is recorded.** Each sandbox trade stores the tier it entered at, the entry source, the rule version, the risk model and the frozen level. The owner page and `GET /api/v1/execution/sandbox` report realized estimated P&L by entry tier. Estimated P&L is broker fills minus the Rs 100 friction reserve.
+
+**Per-trade risk.** `perTradeRisk` is now its own setting (`POST /policy`), above the Rs 100 friction reserve and never above the daily loss threshold (pilot maximum Rs 1,000). It is never raised implicitly; lowering the daily loss threshold can only lower it. Capital stays fixed at Rs 10,000.
+
+**Resolving a prior-day trade.** The sandbox order book resets daily, so a trade left open overnight cannot be reconciled and blocks everything. After STOP, the owner can `POST /resolve` (`requestId`, `tradeId`, `reason`, `confirmSandbox:true`). It applies only to trades from an earlier IST day: working orders are marked expired, unsold quantity is valued at zero (worst case), and the result is booked on the trade's own day so today's loss lock is unaffected. Same-day trades cannot be resolved this way.
+
+**Error halts cancel unfilled entries.** Any worker error that halts the sandbox (for example a broker read failure) now also requests cancellation of a known, working entry order, not only STOP. A halted worker still cannot submit another SELL until it reconciles. Arming afterwards requires a fresh reconciliation.
 
 ## Order lifecycle
 
