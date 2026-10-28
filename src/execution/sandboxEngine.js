@@ -10,13 +10,28 @@ const minutes=t=>{const d=new Date(t+19800000);return d.getUTCHours()*60+d.getUT
 const terminal=o=>['COMPLETE','CANCELLED','REJECTED','EXPIRED'].includes(o.state);
 const working=o=>!terminal(o);
 function initialState(){return {version:1,mode:'SANDBOX',armed:false,armedDay:null,killed:true,haltReason:null,bootId:null,reconciledAt:null,
-  orders:{},trades:{},commands:{},lockedDays:[],policy:{capital:10000,perTradeRisk:250,dailyLoss:500,costReserve:100,maxTradesPerDay:3}};}
+  orders:{},trades:{},commands:{},lockedDays:[],policy:{capital:10000,dailyGoal:1000,perTradeRisk:250,dailyLoss:500,costReserve:100,maxTradesPerDay:3}};}
 function assertState(s){
   const p=s?.policy;
   if(s?.version!==1||s.mode!=='SANDBOX'||!p||!positive(p.capital)||p.capital>10000||!positive(p.perTradeRisk)||
     !positive(p.dailyLoss)||p.dailyLoss>1000||p.perTradeRisk>p.dailyLoss||!Number.isFinite(p.costReserve)||p.costReserve<0||
     !Number.isSafeInteger(p.maxTradesPerDay)||p.maxTradesPerDay<1||p.maxTradesPerDay>10||
+    (p.dailyGoal!==undefined&&(!positive(p.dailyGoal)||p.dailyGoal>100000))||
     !s.orders||Array.isArray(s.orders)||!s.trades||Array.isArray(s.trades)||!s.commands||!Array.isArray(s.lockedDays))throw Error('INVALID_SANDBOX_STATE');
+}
+function configurePolicy(s,input,now=Date.now()){
+  assertState(s);
+  const {dailyGoal,dailyLoss,requestId}=input;
+  if(!/^[a-zA-Z0-9_-]{16,100}$/.test(requestId||'')||!positive(dailyGoal)||dailyGoal>100000||!positive(dailyLoss)||dailyLoss>1000||
+    money(dailyGoal)!==dailyGoal||money(dailyLoss)!==dailyLoss)throw Error('INVALID_SANDBOX_POLICY');
+  const command='POLICY:'+hash([dailyGoal,dailyLoss]);
+  if(s.commands[requestId]){if(s.commands[requestId]!==command)throw Error('REQUEST_ID_REUSED');return;}
+  if(!s.killed||s.armed||Object.values(s.trades).some(t=>!t.closedAt)||Object.values(s.orders).some(working))throw Error('STOP_AND_FLATTEN_BEFORE_POLICY_CHANGE');
+  if(Object.keys(s.commands).length>=1000)throw Error('COMMAND_LIMIT');
+  s.policy={...s.policy,dailyGoal,dailyLoss,perTradeRisk:Math.min(s.policy.perTradeRisk,dailyLoss)};
+  const realized=Object.values(s.trades).filter(t=>t.closedAt&&day(t.closedAt)===day(now)).reduce((a,t)=>a+t.netPnl,0);
+  if(realized<=-dailyLoss&&!s.lockedDays.includes(day(now)))s.lockedDays.push(day(now));
+  s.commands[requestId]=command;assertState(s);
 }
 function halt(s,reason){s.haltReason=reason;s.armed=false;}
 function quantities(s,t){
@@ -232,4 +247,4 @@ function claimEmergencyCancel(s,now){
   }
   return null;
 }
-module.exports={initialState,assertState,control,recover,planEntry,reconcile,manage,claim,finish,claimEmergencyCancel,quantities,terminal,halt,day};
+module.exports={initialState,assertState,control,configurePolicy,recover,planEntry,reconcile,manage,claim,finish,claimEmergencyCancel,quantities,terminal,halt,day};

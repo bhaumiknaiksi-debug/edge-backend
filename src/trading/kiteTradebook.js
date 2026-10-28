@@ -53,7 +53,7 @@ function importBrokerFills(state,input){
   state.brokerFills=existing.concat(next);
   return {added:next.length,duplicates:input.fills.length-next.length};
 }
-function summarizeBroker(state){
+function summarizeBroker(state,{limit=200}={}){
   const fills=Array.isArray(state.brokerFills)?state.brokerFills:[];
   const byContract=new Map();
   for(const f of fills){if(!byContract.has(f.symbol))byContract.set(f.symbol,[]);byContract.get(f.symbol).push(f);}
@@ -96,7 +96,7 @@ function summarizeBroker(state){
     summary:{source:'KITE_TRADEBOOK',importedFills:fills.length,completedTrades:episodes.length,
       grossPnl,chargesKnown:false,unmatchedSellQuantity,openBuyQuantity,matchedQuantity,
       affectsRiskLedger:false},
-    episodes:episodes.slice(0,200)
+    episodes:episodes.slice(0,limit)
   };
 }
 module.exports={normalizeFill,importBrokerFills,summarizeBroker,MAX_BATCH};
