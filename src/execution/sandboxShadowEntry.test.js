@@ -150,6 +150,7 @@ assert.equal(E.planEntry(armed(),analysis({spot:23040}),quote(),meta(),BASE),'RI
   assert.equal(rows.length,1,'the confirmed Tier C card reached the broker as one sandbox entry');assert.equal(rows[0].instrument_token,KEY);
   assert.ok(asked.includes('quote:'+KEY)&&asked.includes('meta:'+KEY),'quote and metadata were fetched for the selected candidate, not the (empty) Tier A leg');
   const state=await store.read(),trade=Object.values(state.trades)[0];assert.equal(trade.tier,'C');
+  const st=service.status();assert.ok(st.tickCount>=2&&st.lastTickAt&&st.lastTickStartedAt,'status reports worker progress so a silent worker is distinguishable from a failing one');
   // the frozen level is lost before a second candidate could be sent: nothing new is placed
   context=analysis({spot:22995,tier:'C'});now+=1000;await service.tick();assert.equal(rows.length,1);
 

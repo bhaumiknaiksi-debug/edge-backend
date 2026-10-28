@@ -19,7 +19,10 @@
    el('positions').textContent=trades.filter(t=>!t.closedAt).length;
    el('position-basis').textContent=s.positionBasis==='SANDBOX_ORDER_BOOK_DERIVED'?'Exposure is derived from sandbox order fills; it is not independently confirmed by a positions API.':s.positionBasis==='BROKER_POSITIONS'?'Exposure is checked against broker positions.':'';
    el('arm').disabled=s.armed;el('stop').disabled=false;
-   message(s.haltReason?human(s.haltReason):data.status.reason?human(data.status.reason):human(data.status.lastEntryResult||'Connected'));
+   const live=data.status,fresh=live.lastTickAt&&Date.now()-Date.parse(live.lastTickAt)<30000,at=v=>v?new Date(v).toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata'}):null;
+   el('worker-line').textContent=live.lastTickAt?'Last successful check '+at(live.lastTickAt)+' IST'+(fresh?'':' (not recent)')+(live.lastErrorAt?' · last error '+at(live.lastErrorAt)+' IST':''):'No successful check since the server started'+(live.tickCount?' ('+live.tickCount+' attempts, none completed)':' (worker has not started a check)');
+   const problem=live.reason?'Now: '+human(live.reason):'',halted=s.haltReason?'Halted: '+human(s.haltReason)+(!live.reason&&fresh?' (the broker is reachable again; tap Arm sandbox to clear)':''):'';
+   message(problem&&halted?problem+' · '+halted:problem||halted||human(live.lastEntryResult||'Connected'));
    renderTiers(data.tierSummary);renderStuck(s,trades);
    el('list').replaceChildren();
    for(const order of orders.slice(-15).reverse()){

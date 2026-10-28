@@ -19,9 +19,9 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
   const broker=reason?null:dependencies.broker||createSandbox({token:env.EDGE_UPSTOX_SANDBOX_TOKEN});
   const catalog=reason?null:dependencies.catalog||createCatalog({now});
   const quoteSource=reason?null:dependencies.quotes||createMarketQuotes({token:env.UPSTOX_ACCESS_TOKEN,now});
-  let running=false,stopped=false,timer=null,lastError=reason,lastTickAt=null,lastEntryResult=null,brokerReads=null,positionBasis=null;
+  let running=false,stopped=false,timer=null,lastError=reason,lastTickAt=null,lastEntryResult=null,brokerReads=null,positionBasis=null,tickCount=0,lastTickStartedAt=null,lastErrorAt=null;
   const publicStatus=()=>({version:'EDGE_SANDBOX_EXECUTION_V1',enabled,mode:'SANDBOX',liveOrdersSupported:false,
-    liveDecisionImpact:false,configured:!reason,reason:lastError,lastTickAt,lastEntryResult,brokerReads,positionBasis});
+    liveDecisionImpact:false,configured:!reason,reason:lastError,lastTickAt,lastEntryResult,brokerReads,positionBasis,tickCount,lastTickStartedAt,lastErrorAt});
   const clean=e=>/^[A-Z_]{3,80}$/.test(e?.message||'')?e.message:'SANDBOX_SERVICE_UNAVAILABLE';
   // Same candidate rules the planner used; re-checked just before any entry is sent.
   function currentAllowed(order,context,time,policy){
@@ -33,7 +33,7 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
       !!q&&q.bid>0&&q.ask>=q.bid&&(q.ask-q.bid)/q.ask<=0.025&&q.receivedAt<=time&&time-q.receivedAt<=10000;
   }
   async function tick(){
-    if(reason||running||stopped)return publicStatus();running=true;
+    if(reason||running||stopped)return publicStatus();running=true;tickCount++;lastTickStartedAt=new Date(now()).toISOString();
     try{
       const time=now();
       const lease=await store.mutate(s=>{
@@ -83,7 +83,7 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
       }
       lastError=null;lastTickAt=new Date(now()).toISOString();
     }catch(e){
-      lastError=clean(e);
+      lastError=clean(e);lastErrorAt=new Date(now()).toISOString();
       if(store){
         const emergency=await store.mutate(s=>{
           if(s.lease?.owner!==bootId)return null;
