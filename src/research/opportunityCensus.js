@@ -12,10 +12,13 @@ function buildObservation(analysis,{lotSize,budget,observedAt=Date.now()}={}){
   const plan=d.researchCandidatePlans?.plans?.[tier];if(!plan?.available||!candidateLegs(plan).length)continue;
   const legs={...clone(plan.legs),lotSize:plan.legs?.lotSize||lotSize};
   if(plan.executableNetDebit!=null)legs.netDebit=plan.executableNetDebit;
+  const directional=['LONG_CALL','LONG_PUT'].includes(plan.strategy);
+  if(tier!=='A'&&directional&&legs.legDelta==null)legs.legDelta=legs.buyLeg?.delta;
+  const deltaAvailable=typeof legs.legDelta==='number'&&Number.isFinite(legs.legDelta)&&Math.abs(legs.legDelta)>0&&Math.abs(legs.legDelta)<=1;
   const input={strategy:plan.strategy,tradeLegs:legs,spot:analysis.spot,support:analysis.support?.strike,resistance:analysis.resistance?.strike,
    ceWall:analysis.structure?.ceWall,peWall:analysis.structure?.peWall,expectedMove:analysis.expectedMove,regime:d.regime,
    features:analysis.market.features,marketPhase:analysis.market.phase,dte:analysis.dte};
-  const setup=qualifySetup(input),entry=tier==='A'?d.entry:buildEntryPlan(input),risk=tier==='A'?d.risk:buildRiskPlan(input);
+  const setup=qualifySetup(input),entry=tier==='A'?d.entry:buildEntryPlan(input),risk=tier==='A'?d.risk:directional&&!deltaAvailable?{status:'UNAVAILABLE',reason:'Recorded option delta is unavailable.'}:buildRiskPlan(input);
   const position=tier==='A'?d.position:buildPositionPlan({...input,risk,budget});
   const gates={market:true,regime:!!d.regime?.direction&&(plan.strategy==='IRON_CONDOR'||d.regime.direction!=='NEUTRAL'),strategy:plan.strategy!=='WAIT',
    setup:setup.qualified,trigger:entry?.triggerReady===true,price:entry?.priceReady===true,liquidity:entry?.liquidityReady===true,

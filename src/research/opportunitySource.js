@@ -3,8 +3,8 @@ const {gunzipSync}=require('node:zlib');
 const TYPES=['POLL_SNAPSHOT','OPPORTUNITY_OBSERVATION','OUTCOME','RESEARCH_CANDIDATE_OUTCOME','OPPORTUNITY_OUTCOME'];
 const pick=(x,keys)=>Object.fromEntries(keys.filter(k=>x?.[k]!==undefined).map(k=>[k,x[k]]));
 function compactLegs(legs){
- const result=pick(legs,['lotSize']);
- for(const name of ['buyLeg','sellLeg','ceShort','ceLong','peShort','peLong'])if(legs?.[name])result[name]=pick(legs[name],['contractId','instrumentKey','strike','type','bid','ask','premium']);
+ const result=pick(legs,['lotSize','legDelta']);
+ for(const name of ['buyLeg','sellLeg','ceShort','ceLong','peShort','peLong'])if(legs?.[name])result[name]=pick(legs[name],['contractId','instrumentKey','strike','type','bid','ask','premium','delta']);
  return result;
 }
 function compactPlan(p){return {...pick(p,['available','strategy','executionAllowed']),legs:compactLegs(p?.legs)};}

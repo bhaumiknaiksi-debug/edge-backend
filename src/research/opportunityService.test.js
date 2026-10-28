@@ -29,5 +29,8 @@ const records=Array.from({length:5},(_,i)=>({id:'poll-'+i,recordType:'OPPORTUNIT
    researchCandidatePlans:{plans:{C:{available:true,strategy:'LONG_CALL',legs:{buyLeg:{contractId:'contract',instrumentKey:'NSE_FO|1',strike:23000,type:'CE',premium:100,bid:99.95,ask:100}}}}}}};
  const original=JSON.stringify(analysis),observation=buildObservation(analysis,{lotSize:65,budget:{confirmed:false},observedAt:BASE});
  assert.equal(JSON.stringify(analysis),original);assert.equal(observation.candidates[0].executionAllowed,false);assert.equal(observation.candidates[0].gates.trigger,false);assert.equal(observation.candidates[0].lotSize,65);
+ const affordable=structuredClone(analysis);affordable.support.strike=22990;affordable.decision.researchCandidatePlans.plans.C.legs.buyLeg.delta=0.45;
+ const positive=buildObservation(affordable,{lotSize:65,budget:{confirmed:true,locked:false,availableRisk:1000,availableCapital:10000,checkedAt:new Date().toISOString()},observedAt:BASE});
+ assert.equal(positive.candidates[0].legs.legDelta,0.45);assert.equal(positive.candidates[0].gates.risk,true);assert.equal(positive.candidates[0].gates.position,true,'recorded delta must allow affordable candidate sizing');assert.equal(positive.candidates[0].executionAllowed,false);
  console.log('Opportunity service/census PASS: private HTTP report, all-candidate outcome collection, loss inclusion, static CSP, sanitized status and unchanged decisions');
 })().catch(e=>{console.error(e);process.exitCode=1;});
