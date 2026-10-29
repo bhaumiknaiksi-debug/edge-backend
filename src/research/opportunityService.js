@@ -6,11 +6,16 @@ const {rejectOwner}=require('../health/authThrottle');
 const {loadOpportunitySource}=require('./opportunitySource');
 const {buildObservation}=require('./opportunityCensus');
 const {buildOpportunityReport,normalizeObservations,candidateEpisodes,indexOutcomes,outcomeFor,validateOutcome,HORIZON}=require('./opportunityReport');
-const {harvestOutcome}=require('../evidence/outcomeHarvester');
+const {harvestOutcome,fetchLegCandles}=require('../evidence/outcomeHarvester');
+const {measureCard}=require('./quickExit');
+// Quick-exit backfill budget per pass: distinct contract-day candle fetches and records written.
+const QUICK_FETCHES=10,QUICK_WRITES=60,QUICK_WAIT_MS=32*60000;
 function createOpportunityResearch({pool,store,ownerToken,token,enabled=true,dependencies={}}){
  const now=dependencies.now||Date.now,load=dependencies.load||(previous=>loadOpportunitySource(pool,previous)),harvest=dependencies.harvest||harvestOutcome;
- let timer=null,running=false,recording=false,stopped=false,cache=null,cacheAt=0,pending=null;
- const status={enabled:!!enabled,lastRecordedAt:null,recordingError:null,lastHarvestAt:null,harvestError:null,lastProcessed:0};
+ const fetchCandles=dependencies.fetchCandles||((leg,snapshot)=>fetchLegCandles(snapshot,leg,token));
+ let timer=null,running=false,quickRunning=false,recording=false,stopped=false,cache=null,cacheAt=0,pending=null;
+ const status={enabled:!!enabled,lastRecordedAt:null,recordingError:null,lastHarvestAt:null,harvestError:null,lastProcessed:0,
+  quickExit:{lastRunAt:null,error:null,lastWritten:0,lastFetches:0}};
  function invalidate(){cacheAt=0;}
  async function source(fresh=false){if(!fresh&&cache&&now()-cacheAt<30000)return cache;if(!pending)pending=load(cache).then(x=>{cache=x;cacheAt=now();return x;}).finally(()=>{pending=null;});return pending;}
  async function observe(analysis,options){
@@ -43,7 +48,44 @@ function createOpportunityResearch({pool,store,ownerToken,token,enabled=true,dep
   }catch(_){status.harvestError='OUTCOME_COLLECTION_UNAVAILABLE';}finally{running=false;}
   return {...status,running};
  }
- function start(){if(!enabled||timer)return;stopped=false;timer=setInterval(()=>{void run();},60000);timer.unref?.();void run();}
+ // Research only: for every flagged single-leg card, the quick-target / hard-stop / time-limit result on that
+ // contract's own 1-minute candles (see quickExit.js). One candle download per contract and day serves every card on it.
+ async function runQuickExit(){
+  if(!enabled||!pool||!token||quickRunning||stopped)return {...status.quickExit,running:quickRunning};
+  quickRunning=true;Object.assign(status.quickExit,{lastRunAt:new Date(now()).toISOString(),error:null,lastWritten:0,lastFetches:0});
+  try{
+   const input=await source(),observations=normalizeObservations(input.records,[]),done=new Map();
+   for(const r of input.records){if(r.recordType!=='OPPORTUNITY_QUICK_EXIT'||!r.episodeId)continue;const list=done.get(r.episodeId)||[];list.push(r);done.set(r.episodeId,list);}
+   const candles=new Map();let fetches=0,written=0;
+   for(const ep of candidateEpisodes(observations)){
+    if(stopped||written>=QUICK_WRITES)break;
+    const c=ep.candidate,leg=c?.legs?.buyLeg;
+    if(ep.marketPhase!=='OPEN'||!['LONG_CALL','LONG_PUT'].includes(c?.strategy)||!leg?.instrumentKey||c.legs.sellLeg)continue;
+    const at=Date.parse(ep.at),session=new Date(at+19800000).toISOString().slice(0,10),close=Date.parse(session+'T15:30:00+05:30');
+    if(Math.min(at+QUICK_WAIT_MS,close)+120000>now())continue;
+    const prior=done.get(ep.id)||[];
+    if(prior.some(r=>r.terminal)||prior.at(-1)?.nextRetryAt&&Date.parse(prior.at(-1).nextRetryAt)>now())continue;
+    const key=leg.instrumentKey+'|'+session;
+    if(!candles.has(key)){
+     if(fetches>=QUICK_FETCHES)continue;
+     fetches++;candles.set(key,await fetchCandles(leg,{timestamp:ep.at,expiry:c.expiry}).catch(()=>null));
+    }
+    const rows=candles.get(key);
+    const outcome=rows?measureCard({candidate:c,at:ep.at,candles:rows}):{status:'UNAVAILABLE',reason:'CANDLE_FETCH_UNAVAILABLE'};
+    const attempt=prior.length+1,terminal=outcome.status==='MEASURED'||['NOT_SINGLE_LEG_LONG','NO_EXECUTABLE_ENTRY_PRICE','LOT_SIZE_UNAVAILABLE','FLAG_TIME_UNAVAILABLE'].includes(outcome.reason)||attempt>=3;
+    const record={id:ep.id+'|OPPORTUNITY_QUICK_EXIT|'+attempt,recordType:'OPPORTUNITY_QUICK_EXIT',timestamp:new Date(now()).toISOString(),episodeId:ep.id,
+     tier:ep.tier,cardTier:ep.cardTier,snapshotId:ep.firstObservationId,ruleVersion:ep.ruleVersion,measurementRule:'QUICK_EXIT_V1',attempt,terminal,
+     nextRetryAt:terminal?null:new Date(now()+attempt*300000).toISOString(),outcome};
+    if(await store.append(record)===false)throw Error();
+    done.set(ep.id,[...prior,record]);written++;
+   }
+   if(written)invalidate();
+   Object.assign(status.quickExit,{lastWritten:written,lastFetches:fetches});
+  }catch(_){status.quickExit.error='QUICK_EXIT_COLLECTION_UNAVAILABLE';}finally{quickRunning=false;}
+  return {...status.quickExit,running:false};
+ }
+ const cycle=async()=>{await run();await runQuickExit();};
+ function start(){if(!enabled||timer)return;stopped=false;timer=setInterval(()=>{void cycle();},60000);timer.unref?.();void cycle();}
  function stop(){stopped=true;if(timer)clearInterval(timer);timer=null;}
  function routes(app){
   const base='/api/v1/opportunities';
@@ -60,8 +102,8 @@ function createOpportunityResearch({pool,store,ownerToken,token,enabled=true,dep
    try{await fn(req,res);}catch(e){res.status(503).json({error:e.message==='REPORT_SOURCE_LIMIT'?e.message:'OPPORTUNITY_REPORT_UNAVAILABLE'});}
   };
   app.get(base,guard(async(_req,res)=>res.json({...buildOpportunityReport({...await source(true),now:now()}),collection:{...status,running}})));
-  app.post(base+'/measure',guard(async(_req,res)=>{void run();res.status(202).json({accepted:true,running,ordersPlaced:0});}));
+  app.post(base+'/measure',guard(async(_req,res)=>{void cycle();res.status(202).json({accepted:true,running,ordersPlaced:0});}));
  }
- return {observe,start,stop,routes,run,status:()=>({...status,running}),invalidate};
+ return {observe,start,stop,routes,run,runQuickExit,status:()=>({...status,running}),invalidate};
 }
 module.exports={createOpportunityResearch};

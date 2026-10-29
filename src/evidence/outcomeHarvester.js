@@ -151,4 +151,4 @@ function createOutcomeHarvester({store,snapshots,token,intervalMs=60000,horizonM
   return{run,start,getStatus};
 }
 
-module.exports={eligible,isExpired,opportunityKey,episodeStartIds,harvestOutcome,createOutcomeHarvester,normalizeCandles,retryDelay,expiredCandlePath};
+module.exports={eligible,isExpired,opportunityKey,episodeStartIds,harvestOutcome,fetchLegCandles,createOutcomeHarvester,normalizeCandles,retryDelay,expiredCandlePath};

@@ -1,6 +1,6 @@
 'use strict';
 const {gunzipSync}=require('node:zlib');
-const TYPES=['POLL_SNAPSHOT','OPPORTUNITY_OBSERVATION','OUTCOME','RESEARCH_CANDIDATE_OUTCOME','OPPORTUNITY_OUTCOME'];
+const TYPES=['POLL_SNAPSHOT','OPPORTUNITY_OBSERVATION','OUTCOME','RESEARCH_CANDIDATE_OUTCOME','OPPORTUNITY_OUTCOME','OPPORTUNITY_QUICK_EXIT'];
 const pick=(x,keys)=>Object.fromEntries(keys.filter(k=>x?.[k]!==undefined).map(k=>[k,x[k]]));
 function compactLegs(legs){
  const result=pick(legs,['lotSize','legDelta']);
@@ -17,7 +17,8 @@ function projectRecord(r){
  if(r.orchestration)out.orchestration=pick(r.orchestration,['status','gates','blockers']);
  if(r.researchCandidatePlans)out.researchCandidatePlans={plans:Object.fromEntries(Object.entries(r.researchCandidatePlans.plans||{}).map(([t,p])=>[t,compactPlan(p)]))};
  if(r.candidates)out.candidates=r.candidates.map(c=>({...pick(c,['tier','strategy','expiry','lotSize','gateScope','gates','blockers','executionAllowed']),legs:compactLegs(c.legs)}));
- if(r.outcome)out.outcome={...pick(r.outcome,['status','reason','entryLegMarks']),horizonLegMarks:r.outcome.horizonLegMarks?.[60]?{60:r.outcome.horizonLegMarks[60]}:{}};
+ if(r.outcome)out.outcome=r.recordType==='OPPORTUNITY_QUICK_EXIT'?pick(r.outcome,['status','reason','version','entry','lotSize','results'])
+  :{...pick(r.outcome,['status','reason','entryLegMarks']),horizonLegMarks:r.outcome.horizonLegMarks?.[60]?{60:r.outcome.horizonLegMarks[60]}:{}};
  return out;
 }
 async function loadOpportunitySource(pool,previous=null){
