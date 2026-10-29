@@ -133,11 +133,12 @@ function directionFamily(direction) {
 
 function buildResearchCandidatePlans({
   strikes=[], regime=null, strategy=null, tradeLegs=null, orchestration=null,
-  expiryDate=null, lotSize=1, chartIntelligence=null
+  expiryDate=null, lotSize=1, chartIntelligence=null, singleStrikeOnly=false
 }={}) {
   const direction=directionFamily(regime?.direction);
   const A=copyAuthoritative(strategy,tradeLegs,orchestration);
-  const B=direction==='NEUTRAL'?null:buildDebitSpread(strikes,direction,expiryDate,lotSize);
+  // Owner policy: single strikes only, so no spread card is offered.
+  const B=direction==='NEUTRAL'||singleStrikeOnly?null:buildDebitSpread(strikes,direction,expiryDate,lotSize);
   const C=direction==='NEUTRAL'?null:buildLong(strikes,direction,expiryDate,lotSize);
   const chartAgreement=chartIntelligence?.verdict===direction?'AGREES':
     ['BULLISH','BEARISH'].includes(chartIntelligence?.verdict)&&direction!=='NEUTRAL'?'CONTRADICTS':'UNRESOLVED';
@@ -158,6 +159,7 @@ function buildResearchCandidatePlans({
       },
       B:{
         tier:'B',label:'STRONG_CANDIDATE',available:!!B,researchOnly:true,executionAllowed:false,
+        ...(singleStrikeOnly?{unavailableReason:'SINGLE_STRIKE_POLICY'}:{}),
         description:'Research-only defined-risk directional spread chosen near 0.50/0.25 delta with liquidity preference.',
         ...(B||{})
       },

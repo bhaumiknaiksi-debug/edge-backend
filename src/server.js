@@ -88,6 +88,9 @@ let tokenExpired = false;
 
 // NIFTY 50 lot size (65 from Jan 2026 expiries, per NSE Oct 2025 circular). Update here if NSE revises it.
 const NIFTY_LOT_SIZE = 65;
+// Owner policy (29 Oct 2026): he trades one option strike at a time with about Rs 10,000, never spreads or condors.
+// Fixed in code, not an env setting, so the signal rule fingerprint changes with it and evidence stays separated.
+const SINGLE_STRIKE_ONLY = true;
 const MONTHS_SHORT = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC'];
 
 // Format "2026-06-09" -> "09 JUN" (broker display style)
@@ -453,7 +456,7 @@ function analyse(chain, expiryDate, marketContext = null) {
     indiaVix: marketContext?.indiaVix ?? null,
     expectedMovePoints: preliminaryExpectedMove
   });
-  const strategyPick = selectStrategy(regime, ivRegime, volatility);
+  const strategyPick = selectStrategy(regime, ivRegime, volatility, { singleStrikeOnly: SINGLE_STRIKE_ONLY });
   let strategy = strategyPick.name;
   let strategyReason = strategyPick.reason;
 
@@ -806,6 +809,7 @@ function analyse(chain, expiryDate, marketContext = null) {
   // Three concrete candidate expressions for research/UX. A is the exact
   // authoritative structure; B/C are counterfactual research candidates only.
   const researchCandidatePlans = buildResearchCandidatePlans({
+    singleStrikeOnly: SINGLE_STRIKE_ONLY,
     strikes,
     regime,
     strategy,

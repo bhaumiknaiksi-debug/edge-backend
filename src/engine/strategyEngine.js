@@ -6,12 +6,18 @@
  * HIGH/rich -> defined-risk credit, NORMAL/fair -> vertical debit spread,
  * LOW/cheap -> outright long premium. Neutral/high remains a range thesis.
  */
-function selectStrategy(regime, ivRegime, volatility = null) {
+function selectStrategy(regime, ivRegime, volatility = null, { singleStrikeOnly = false } = {}) {
   const d=regime?.direction || 'NEUTRAL';
   const bull=['STRONG_BULLISH','BULLISH','MILD_BULLISH'].includes(d);
   const bear=['STRONG_BEARISH','BEARISH','MILD_BEARISH'].includes(d);
   const rich=volatility?.richness === 'RICH' || ivRegime === 'HIGH';
   const cheap=volatility?.richness === 'CHEAP' || ivRegime === 'LOW';
+  // Owner policy: one option strike at a time (no spreads, condors or straddles), whatever the volatility.
+  if (singleStrikeOnly) {
+    if (bull) return {name:'LONG_CALL',candidates:['LONG_CALL','WAIT'],reason:'Bullish direction; owner trades a single strike, so the expression is an outright call.'};
+    if (bear) return {name:'LONG_PUT',candidates:['LONG_PUT','WAIT'],reason:'Bearish direction; owner trades a single strike, so the expression is an outright put.'};
+    return {name:'WAIT',candidates:['WAIT'],reason:'Neutral regime; no single-strike directional trade.'};
+  }
 
   if (bull) {
     if (rich) return {name:'BULL_PUT_SPREAD',candidates:['BULL_PUT_SPREAD','BULL_CALL_SPREAD','WAIT'],reason:'Bullish direction with rich/high volatility; defined-risk credit expression.'};
