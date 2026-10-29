@@ -1,7 +1,11 @@
 'use strict';
 const { randomUUID } = require('node:crypto');
 const { buildEntryPlan } = require('./entryEngine');
-const VERSION = 'OPENING_RANGE_SHADOW_V1';
+// V2: an episode follows the session and direction, not the exact contract, so a breakout stays confirmed while the
+// ATM strike rolls with price; an expired or invalidated episode restarts on the next candle and a fresh crossing
+// confirms again. V1 restarted (and lost the crossing) on every strike change.
+const VERSION = 'OPENING_RANGE_SHADOW_V2';
+const TERMINAL = new Set(['EXPIRED','INVALIDATED']);
 const FIVE = 300000;
 const finite = v => typeof v === 'number' && Number.isFinite(v);
 const session = t => new Date(t + 19800000).toISOString().slice(0, 10);
@@ -63,17 +67,32 @@ function createShadowTiming() {
           !source.latest || now - (source.latest.time + FIVE) > 2 * FIVE || source.latest.time + FIVE > now) {
         states.delete(tier); result.reason=input.marketPhase !== 'OPEN' ? 'MARKET_CLOSED' : 'MISSING_OR_STALE_CANDLES'; continue;
       }
-      const key = JSON.stringify([source.session, plan.strategy, ids]);
+      const key = JSON.stringify([source.session, bullish ? 'UP' : 'DOWN']);
+      const episode = (lastTime, lastClose, reason) => ({ key, episodeId:randomUUID(), startedAt:new Date(now).toISOString(),
+        expiresAt:Math.min(now + 30 * 60000, Date.parse(source.session + 'T15:30:00+05:30')),
+        high:source.high, low:source.low, completedAt:source.completedAt, lastTime, lastClose, status:'UNKNOWN', reason });
       let state = states.get(tier);
-      if (!state || state.key !== key) {
-        const expiresAt = Math.min(now + 30 * 60000, Date.parse(source.session + 'T15:30:00+05:30'));
-        state = { key, episodeId:randomUUID(), startedAt:new Date(now).toISOString(), expiresAt,
-          high:source.high, low:source.low, completedAt:source.completedAt,
-          lastTime:source.latest.time, lastClose:source.latest.close, status:'UNKNOWN', reason:'NEW_EPISODE_WAIT_FOR_NEXT_CANDLE' };
+      const revisedFor = st => !!st && (source.high !== st.high || source.low !== st.low || source.completedAt !== st.completedAt);
+      if (state && state.key === key && TERMINAL.has(state.status) && source.latest.time !== state.lastTime) {
+        // Restart on the next candle. The last observed close carries over when it is continuous and trustworthy,
+        // so a crossing on this very candle counts as a fresh one.
+        const trusted = !revisedFor(state) && !state.untrustedClose && state.reason !== 'OBSERVED_CANDLE_REVISED';
+        state = trusted ? episode(state.lastTime, state.lastClose, 'RESTARTED_AFTER_' + state.reason)
+          : episode(source.latest.time, source.latest.close, 'NEW_EPISODE_WAIT_FOR_NEXT_CANDLE');
         states.set(tier, state);
-      } else if (now >= state.expiresAt) {
+      }
+      if (!state || state.key !== key) {
+        state = episode(source.latest.time, source.latest.close, 'NEW_EPISODE_WAIT_FOR_NEXT_CANDLE');
+        states.set(tier, state);
+      } else if (!TERMINAL.has(state.status) && now >= state.expiresAt) {
         state.status='EXPIRED'; state.reason='EPISODE_TIME_LIMIT';
-      } else if (source.high !== state.high || source.low !== state.low || source.completedAt !== state.completedAt) {
+        if (source.latest.time !== state.lastTime) { // keep the last close so a restart can judge the next crossing
+          state.untrustedClose = !(source.latest.time === state.lastTime + FIVE && source.previous?.time === state.lastTime && source.previous.close === state.lastClose);
+          state.lastTime=source.latest.time; state.lastClose=source.latest.close;
+        }
+      } else if (TERMINAL.has(state.status)) {
+        // waiting for the next candle to restart
+      } else if (revisedFor(state)) {
         state.status='INVALIDATED'; state.reason='ANCHOR_SOURCE_REVISED';
       } else if (source.latest.time < state.lastTime) {
         result.reason='OUT_OF_ORDER_CANDLES'; continue;

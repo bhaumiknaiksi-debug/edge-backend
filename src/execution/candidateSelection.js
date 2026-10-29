@@ -5,7 +5,8 @@
 
 const MODES=['AUTHORITATIVE_A_ONLY','OPENING_RANGE_SHADOW_V1','CLAUDE_DECIDES_V1'];
 const DEFAULT_MODE='AUTHORITATIVE_A_ONLY';
-const SHADOW_VERSION='OPENING_RANGE_SHADOW_V1';
+// The policy keeps the mode name OPENING_RANGE_SHADOW_V1 (saved owner setting); the timing rule it trades is V2.
+const SHADOW_VERSION='OPENING_RANGE_SHADOW_V2';
 const RISK_MODEL='ANCHOR_INVALIDATION_V1';
 const TARGET_R=1.5; // reward:risk used for the shadow-mode target; a stated sandbox assumption, not a forecast
 const SINGLE_LONG=['LONG_CALL','LONG_PUT'];
