@@ -52,6 +52,8 @@ function summarizeDecision(result) {
   const ready = marketPhase === 'OPEN' &&
     orchestration?.status === 'READY_TO_EXECUTE' &&
     orchestration?.executionAllowed === true;
+  const t = result?.decision?.limitsToken;
+  const approval = t && /^[a-f0-9]{16}$/.test(t.version || '') && Number.isSafeInteger(t.generation) ? t.version + ':' + t.generation : null;
   const strategy = String(result?.decision?.strategy || 'WAIT').slice(0, 40);
   const contractId = String(result?.decision?.tradeLegs?.buyLeg?.contractId ||
     result?.decision?.tradeLegs?.sellLeg?.contractId || '').slice(0, 80);
@@ -63,6 +65,7 @@ function summarizeDecision(result) {
     strategy,
     contractId,
     tier: String(result?.decision?.signalTier?.tier || 'OBSERVING').slice(0, 12),
+    approval,
     observedAt: result.timestamp
   };
 }
@@ -72,8 +75,10 @@ function makeTransition(previous, current, nowMs = Date.now()) {
   const priorTime = Date.parse(String(previous.observedAt || ''));
   if (!Number.isFinite(priorTime) || nowMs - priorTime > 120000 || nowMs < priorTime) return null;
 
-  // Only send readiness when the authoritative gate transitions to READY.
-  if (!previous.ready && current.ready) {
+  // Only send readiness when the authoritative gate transitions to READY, or when READY is re-approved under different
+  // owner limits (a new approval, not a continuation of the old one).
+  const reapproved = previous.ready && current.ready && !!previous.approval && !!current.approval && previous.approval !== current.approval;
+  if ((!previous.ready && current.ready) || reapproved) {
     return {
       type: 'EXECUTION_READY',
       title: 'EDGE · Execution ready',
@@ -282,7 +287,13 @@ function buildWebPush(env = process.env, dependencies = {}) {
     // A READY waits on storage and the subscription lookup; the owner's limits may have changed, failed or expired
     // meanwhile. Revalidate right before sending.
     const ready = event.type === 'EXECUTION_READY';
-    await Promise.allSettled(targets.map(t => (!ready || stillApproved(result)) ? sendStored(t, event) : null));
+    if (ready && !stillApproved(result)) {
+      // Vetoed after it was recorded as ready: record it as not ready, so the next valid READY is a fresh transition.
+      await pool.query("UPDATE edge_push_state SET payload=$1::jsonb,observed_at=NOW() WHERE state_id='latest' AND payload->>'observedAt'=$2",
+        [JSON.stringify({ ...current, ready: false, vetoed: true }), current.observedAt]).catch(() => {});
+      return;
+    }
+    await Promise.allSettled(targets.map(t => sendStored(t, event)));
   }
 
   function onSuccessfulPoll(result) {

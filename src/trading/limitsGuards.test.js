@@ -109,10 +109,12 @@ const READY=token=>({decision:{orchestration:{status:'READY_TO_EXECUTE'},limitsT
    if(sql.includes('INSERT INTO edge_push_state')){if(!state)state=JSON.parse(params[0]);return {rows:[],rowCount:1};}
    if(sql.includes('SELECT payload FROM edge_push_state'))return {rows:[{payload:state}],rowCount:1};
    if(sql.includes('UPDATE edge_push_state')){state=JSON.parse(params[0]);return {rows:[],rowCount:1};}throw Error(sql);},release(){}};
-  const fakePool={async query(sql){if(sql.includes('CREATE TABLE'))return {rows:[]};
-   if(sql.includes('SELECT endpoint_hash, subscription FROM edge_push_subscriptions')){if(gate)await gate;return {rows:[{endpoint_hash:'h',subscription:{endpoint:'https://push.example/x',keys:{}}}]};}throw Error(sql);},
+  const fakePool={async query(sql,params){if(sql.includes('CREATE TABLE'))return {rows:[]};
+   if(sql.includes('SELECT endpoint_hash, subscription FROM edge_push_subscriptions')){if(gate)await gate;return {rows:[{endpoint_hash:'h',subscription:{endpoint:'https://push.example/x',keys:{}}}]};}
+   if(sql.includes('UPDATE edge_push_state')&&sql.includes("payload->>'observedAt'")){if(state&&state.observedAt===params[1])state=JSON.parse(params[0]);return {rows:[],rowCount:1};}throw Error(sql);},
    async connect(){return client;}};
-  const limits=createOwnerLimits({read:async()=>({policy:policy(660)})});await limits.refresh();
+  let lclock=Date.now(),pdb=policy(660);const limits=createOwnerLimits({read:async()=>({policy:structuredClone(pdb)}),now:()=>lclock});await limits.refresh();
+  const save=p=>{pdb=p;limits.set(p);};
   const env={EDGE_PUSH_VAPID_PUBLIC_KEY:'A'.repeat(87),EDGE_PUSH_VAPID_PRIVATE_KEY:'B'.repeat(43),EDGE_PUSH_VAPID_SUBJECT:'mailto:edge@example.com',
    EDGE_PUSH_OWNER_TOKEN:'z'.repeat(32),EDGE_PUSH_DATABASE_URL:'postgresql://localhost/fake',EDGE_PUSH_AUTO_ALERTS:'true'};
   const push=buildWebPush(env,{pool:fakePool,sender:{setVapidDetails(){},async sendNotification(_s,payload){sends.push(JSON.parse(payload).type);return {statusCode:201};}},
@@ -124,12 +126,53 @@ const READY=token=>({decision:{orchestration:{status:'READY_TO_EXECUTE'},limitsT
   gate=new Promise(r=>{release=r;});
   const pending=push.onSuccessfulPoll(result('READY_TO_EXECUTE'));
   await new Promise(r=>setTimeout(r,20));                       // paused in the subscription lookup
-  limits.set(policy(450));                                      // owner saves a tighter limit
+  save(policy(450));                                      // owner saves a tighter limit
   release();await pending;
   assert.ok(!sends.includes('EXECUTION_READY'),'push does not deliver a READY whose limits changed while it was queued');
-  // Control: a READY under current limits is delivered.
-  gate=null;await push.onSuccessfulPoll(result('WAIT_FOR_TRIGGER'));await push.onSuccessfulPoll(result('READY_TO_EXECUTE'));
-  assert.ok(sends.includes('EXECUTION_READY'),'control: delivered under current limits');
+  // Reviewer v4: the next valid READY comes straight after the vetoed one, with no WAIT in between. It must alert.
+  gate=null;await push.onSuccessfulPoll(result('READY_TO_EXECUTE'));
+  assert.ok(sends.includes('EXECUTION_READY'),'a vetoed READY does not consume the next valid READY');
+  // And a READY re-approved under different limits, while still ready, is a new alert.
+  const before=sends.filter(x=>x==='EXECUTION_READY').length;save(policy(500));
+  await push.onSuccessfulPoll(result('READY_TO_EXECUTE'));
+  assert.equal(sends.filter(x=>x==='EXECUTION_READY').length,before+1,'READY under new limits alerts again');
+  await push.onSuccessfulPoll(result('READY_TO_EXECUTE'));
+  assert.equal(sends.filter(x=>x==='EXECUTION_READY').length,before+1,'the same approval does not repeat');
+  // Limits expire while a READY waits in the subscription lookup, then come back unchanged (same version and
+  // generation). The vetoed READY must be recorded as not ready, or the next READY under the same approval is missed.
+  await push.onSuccessfulPoll(result('WAIT_FOR_TRIGGER'));
+  const count=()=>sends.filter(x=>x==='EXECUTION_READY').length,base=count();
+  const tokenVetoed=limits.token();
+  gate=new Promise(r=>{release=r;});const paused=push.onSuccessfulPoll(result('READY_TO_EXECUTE'));
+  await new Promise(r=>setTimeout(r,20));lclock+=61000;release();await paused;
+  assert.equal(count(),base,'expired while queued: not sent');
+  gate=null;const tokenBefore=limits.token();await limits.refresh();const tokenAfter=limits.token();
+  assert.equal(tokenBefore,null,'expired before the refresh');assert.deepEqual(tokenAfter,tokenVetoed,'limits came back unchanged: same approval');
+  await push.onSuccessfulPoll(result('READY_TO_EXECUTE'));
+  assert.equal(count(),base+1,'the next READY under the same approval still alerts');
+  assert.ok(tokenAfter,'limits recovered');
+ }
+ // --- 5b. Telegram (reviewer v4): rate-limited READY under Rs 660, owner saves Rs 450, a fresh valid READY for the
+ //     same strike appears, delivery retries. The old alert must not be sent on the new approval.
+ {
+  const {buildTelegram}=require('../notifications/edgeTelegram');const {TelegramError}=require('../notifications/telegramTransport');
+  const {fakeTelegramPool,decision,testEnv}=require('../notifications/telegramTestHelpers');
+  const {fake,pool}=fakeTelegramPool();let time=Date.parse('2026-10-26T05:00:00Z'),current=null,limited=true;const sent=[];
+  let db=policy(660);const limits=createOwnerLimits({read:async()=>({policy:structuredClone(db)}),now:()=>time});await limits.refresh();
+  const api=async(method,params)=>{if(method==='getChat')return {id:Number(testEnv.EDGE_TELEGRAM_CHAT_ID),type:'private'};
+   if(limited)throw new TelegramError('TELEGRAM_RATE_LIMIT',{retryAfterMs:5000});sent.push(params.text);return {message_id:sent.length,chat:{type:'private',id:Number(testEnv.EDGE_TELEGRAM_CHAT_ID)}};};
+  const tg=buildTelegram({pool,env:testEnv,getMarketPhase:()=>'OPEN',getCurrentResult:()=>limits.approvedOnly(current),approvalValid:t=>limits.valid(t),dependencies:{api,now:()=>time,bootId:'b'}});
+  const stamped=ready=>{const r=decision(time,ready);r.decision.limitsToken=limits.token();return r;};
+  current=stamped(false);await tg.onSuccessfulPoll(current);time+=10000;
+  current=stamped(true);await tg.onSuccessfulPoll(current);await tg.tick();       // READY under Rs 660, rate-limited
+  const oldIds=[...fake.outbox.keys()];assert.ok(oldIds.length>=1);
+  db=policy(450);limits.set(db);                                                    // owner saves Rs 450
+  time+=6000;current=stamped(true);await tg.onSuccessfulPoll(current);              // fresh valid READY, same strike
+  limited=false;for(let i=0;i<4;i++){time+=6000;await tg.tick();}                   // delivery retries
+  for(const id of oldIds)assert.notEqual(fake.outbox.get(id)?.status,'SENT','the alert approved under Rs 660 is never delivered');
+  assert.deepEqual(sent.map(x=>x.split('\n')[0]),['EDGE · Previous ready state ended','EDGE · Backend-confirmed readiness'],'the old approval is reported as ended, then the new one alerts');
+  const fresh=[...fake.outbox.entries()].filter(([id,o])=>!oldIds.includes(id)&&o.status==='SENT'&&fake.events.get(id)?.payload?.type==='EXECUTION_READY');
+  assert.equal(fresh.length,1,'the readiness alert delivered is the one approved under Rs 450');
  }
  // --- 7. An impossible protective stop: the signal refuses, as the executor does. ---
  {
@@ -153,5 +196,5 @@ const READY=token=>({decision:{orchestration:{status:'READY_TO_EXECUTE'},limitsT
    assert.ok(/servable\(lastResult\)\) return res\.status\(503\)/.test(prev||''),'unguarded read of lastResult at server.js:'+(i+1)+': '+l.trim());
   }
  }
- console.log('Limits guards PASS: superseded reads discarded, failed reads stop approvals, READY served/published only under current fresh limits, signal and real executor agree on stop rounding, queued Telegram and push READY revalidated, impossible stops refused, every server outlet guarded');
+ console.log('Limits guards PASS: superseded reads discarded, failed reads stop approvals, READY served/published only under current fresh limits, signal and real executor agree on stop rounding, queued Telegram and push READY revalidated (own stamp, no inherited approval, veto does not swallow the next READY), impossible stops refused, every server outlet guarded');
 })().catch(e=>{console.error(e);process.exit(1);});
