@@ -20,7 +20,7 @@ function setup(shared){
   async placeOrder(o){calls.push('place:'+o.kind);const id='broker-'+(rows.length+1);rows.push({order_id:id,tag:o.tag,instrument_token:o.instrumentKey,quantity:o.quantity,price:o.price,trigger_price:o.trigger,transaction_type:o.side,product:'I',order_type:o.orderType,status:'open',filled_quantity:0,average_price:0});if(loseAck){loseAck=false;store.failNext();}return {state:'ACKNOWLEDGED',orderId:id};},
   async cancel(id){calls.push('cancel');rows.find(o=>o.order_id===id).status='cancelled';return {state:'ACKNOWLEDGED',orderId:id};}
  };
- const dependencies={store,broker,now:()=>now,bootId:'one',catalog:{async get(){return {instrumentKey:'NSE_FO|12345',underlying:'NIFTY',optionType:'CE',strike:23000,expiry:'2026-11-03',session:'2026-10-28',lotSize:65,tickSizeRupees:0.05};},status:()=>({ready:true})},quotes:{async get(keys){calls.push('quotes:'+keys.join(','));return keys.includes(quote.instrumentKey)?{[quote.instrumentKey]:{...quote,receivedAt:now}}:{};}}};
+ const dependencies={store,broker,now:()=>now,bootId:'one',idleTickMs:0,catalog:{async get(){return {instrumentKey:'NSE_FO|12345',underlying:'NIFTY',optionType:'CE',strike:23000,expiry:'2026-11-03',session:'2026-10-28',lotSize:65,tickSizeRupees:0.05};},status:()=>({ready:true})},quotes:{async get(keys){calls.push('quotes:'+keys.join(','));return keys.includes(quote.instrumentKey)?{[quote.instrumentKey]:{...quote,receivedAt:now}}:{};}}};
  const service=createSandboxService({ownerToken:OWNER,getContext:()=>({analysis:result}),env:{EDGE_SANDBOX_EXECUTION_ENABLED:'true'},dependencies});
  return {service,store,rows,calls,result,dependencies,advance(n=1000){now+=n;},setQuote(q){quote={...quote,...q};},loseNextAck(){loseAck=true;},time:()=>now};
 }

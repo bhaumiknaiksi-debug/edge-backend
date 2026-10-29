@@ -121,7 +121,9 @@ const closedTrade=(id,day,netPnl,closedAt)=>({id,day,instrumentKey:KEY,contractI
     const exit=rows.find(r=>r.transaction_type==='SELL'&&r.order_type==='LIMIT');Object.assign(exit,{status:'complete',filled_quantity:65,average_price:104});
     now+=1000;await service.tick();
     assert.ok(alerts.some(a=>a.k.startsWith('CLOSE:')&&a.text.includes('estimated net Rs 160')),'trade close alert with P&L');
-    broker.getOrders=async()=>{const e=Error('x');e.httpStatus=500;throw e;};now+=1000;await service.tick();now+=1000;await service.tick();
+    broker.getOrders=async()=>{const e=Error('x');e.httpStatus=500;throw e;};now+=1000;await service.tick();
+    assert.equal(alerts.filter(a=>a.k.startsWith('HALT:')).length,0,'flat account: a brief read outage is retried, not halted');
+    now+=60000;await service.tick();now+=1000;await service.tick();
     const halts=alerts.filter(a=>a.k.startsWith('HALT:'));assert.equal(halts.length,1,'one halt alert, not one per tick');assert.ok(halts[0].text.includes('sandbox read unavailable'));
 
     const app=express();app.use(express.json());service.routes(app);const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));

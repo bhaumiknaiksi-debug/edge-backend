@@ -31,8 +31,21 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
   // The analysis the executor sees, with the latest model decision attached alongside (never inside) EDGE's decision.
   const context=()=>{const c=getContext()||{};return advice&&c.analysis?{...c,analysis:{...c.analysis,claudeDecision:advice}}:c;};
   let running=false,stopped=false,timer=null,lastError=reason,lastTickAt=null,lastEntryResult=null,brokerReads=null,positionBasis=null,tickCount=0,lastTickStartedAt=null,lastErrorAt=null;
+  // A failed broker read while flat (no open trade, no working order) carries no exposure: entries pause
+  // (reconciliation goes stale) and reads are retried for READ_GRACE_MS before halting. Auth failures and any
+  // failure while exposed still halt at once.
+  const readGraceMs=Number.isFinite(dependencies.readGraceMs)?dependencies.readGraceMs:60000;
+  // While disarmed and flat, broker reads run every idleTickMs instead of every tick; still inside the 10s
+  // reconciliation freshness that ARM requires.
+  const idleTickMs=Number.isFinite(dependencies.idleTickMs)?dependencies.idleTickMs:5000;
+  // The sandbox positions endpoint answers 404; after one, it is only re-probed every positionsRetryMs.
+  const positionsRetryMs=Number.isFinite(dependencies.positionsRetryMs)?dependencies.positionsRetryMs:300000;
+  let readFailingSince=null,lastReadFailure=null,lastCompletedAt=null,positionsMissingUntil=0;
+  const iso=t=>t===null?null:new Date(t).toISOString();
+  const flat=s=>!Object.values(s.orders||{}).some(o=>!engine.terminal(o))&&!Object.values(s.trades||{}).some(t=>!t.closedAt);
   const publicStatus=()=>({version:'EDGE_SANDBOX_EXECUTION_V1',enabled,mode:'SANDBOX',liveOrdersSupported:false,
-    liveDecisionImpact:false,configured:!reason,reason:lastError,lastTickAt,lastEntryResult,brokerReads,positionBasis,tickCount,lastTickStartedAt,lastErrorAt,advisorConfigured:!!advisor});
+    liveDecisionImpact:false,configured:!reason,reason:lastError,lastTickAt,lastEntryResult,brokerReads,positionBasis,tickCount,lastTickStartedAt,lastErrorAt,
+    readFailingSince:iso(readFailingSince),lastReadFailure,readGraceSeconds:readGraceMs/1000,advisorConfigured:!!advisor});
   const clean=e=>/^[A-Z_]{3,80}$/.test(e?.message||'')?e.message:'SANDBOX_SERVICE_UNAVAILABLE';
   const human=x=>String(x||'').toLowerCase().replaceAll('_',' ');
   const send=(key,text)=>{try{notify(key,text);}catch(_){}};
@@ -70,6 +83,10 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
   async function tick(){
     if(reason||running||stopped)return publicStatus();running=true;tickCount++;lastTickStartedAt=new Date(now()).toISOString();
     try{
+      if(idleTickMs>0&&lastCompletedAt!==null&&now()-lastCompletedAt<idleTickMs){
+        const idle=await store.read().catch(()=>null);
+        if(idle&&!idle.armed&&flat(idle))return publicStatus();
+      }
       const time=now();
       const lease=await store.mutate(s=>{
         if(s.lease&&s.lease.owner!==bootId&&s.lease.until>time)return false;
@@ -82,12 +99,24 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
       if(instrumentKey)keys.push(instrumentKey);
       let readAt;
       const [brokerState,quotes,meta]=await Promise.all([
-        Promise.allSettled([broker.getOrders(),broker.getPositions()]).then(results=>{
+        (()=>{
+          const skipPositions=now()<positionsMissingUntil;
+          const missing=()=>{const e=Error('SANDBOX_READ_UNAVAILABLE');e.httpStatus=404;return Promise.reject(e);};
+          return Promise.allSettled([broker.getOrders(),skipPositions?missing():broker.getPositions()]).then(results=>{
           const describe=r=>r.status==='fulfilled'?{ok:true}:{ok:false,httpStatus:Number.isInteger(r.reason?.httpStatus)&&r.reason.httpStatus>=100&&r.reason.httpStatus<=599?r.reason.httpStatus:null};
           brokerReads={orders:describe(results[0]),positions:describe(results[1])};
-          if(results[0].status==='rejected'||(results[1].status==='rejected'&&results[1].reason?.httpStatus!==404))throw Error('SANDBOX_READ_UNAVAILABLE');
+          if(results[1].status==='fulfilled')positionsMissingUntil=0;
+          else if(results[1].reason?.httpStatus===404&&!skipPositions)positionsMissingUntil=now()+positionsRetryMs;
+          if(results[0].status==='rejected'||(results[1].status==='rejected'&&results[1].reason?.httpStatus!==404)){
+            lastReadFailure={at:new Date(now()).toISOString(),...brokerReads};
+            const error=Error('SANDBOX_READ_UNAVAILABLE');
+            error.auth=[brokerReads.orders.httpStatus,brokerReads.positions.httpStatus].some(c=>c===401||c===403);
+            throw error;
+          }
+          readFailingSince=null;
           readAt=now();return [results[0].value,results[1].status==='fulfilled'?results[1].value:null];
-        }),
+          });
+        })(),
         quoteSource.get(keys).catch(()=>({})),catalog.get(instrumentKey).catch(()=>null)]);
       const [book,positions]=brokerState;
       if(stopped)return publicStatus();
@@ -121,12 +150,17 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
         const result=action.action==='CANCEL'?await broker.cancel(action.order.orderId):await broker.placeOrder(action.order);
         await store.mutate(s=>{if(s.lease?.owner===bootId)engine.finish(s,action,result);});
       }
-      lastError=null;lastTickAt=new Date(now()).toISOString();
+      lastError=null;lastTickAt=new Date(now()).toISOString();lastCompletedAt=now();
     }catch(e){
-      lastError=clean(e);lastErrorAt=new Date(now()).toISOString();
+      const failedAt=now();
+      lastError=clean(e);lastErrorAt=new Date(failedAt).toISOString();lastCompletedAt=null;
+      const transientRead=lastError==='SANDBOX_READ_UNAVAILABLE'&&!e?.auth;
+      if(transientRead&&readFailingSince===null)readFailingSince=failedAt;
+      const withinGrace=transientRead&&failedAt-readFailingSince<readGraceMs;
       if(store){
         const emergency=await store.mutate(s=>{
           if(s.lease?.owner!==bootId)return null;
+          if(withinGrace&&flat(s))return null; // no exposure: retry next tick, entries stay paused by stale reconciliation
           engine.halt(s,lastError);s.reconciledAt=null;return engine.claimEmergencyCancel(s,now());
         }).catch(()=>null);
         watch(emergency?.state);

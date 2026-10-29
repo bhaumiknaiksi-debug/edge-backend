@@ -43,6 +43,10 @@ These controls are sandbox-only, owner-authenticated, require STOP and a flat ac
 
 **Error halts cancel unfilled entries.** Any worker error that halts the sandbox (for example a broker read failure) now also requests cancellation of a known, working entry order, not only STOP. A halted worker still cannot submit another SELL until it reconciles. Arming afterwards requires a fresh reconciliation.
 
+**Brief broker read outages while flat are retried, not halted.** When the account is flat (no open trade and no working order), a failed order-book or positions read does not halt. Entries pause on their own because reconciliation goes stale, and reads are retried every tick. If reads still fail after 60 seconds, the worker halts as before. A 401 or 403 (expired or rejected sandbox token) halts at once, and so does any read failure while a trade or order is live. The status endpoint reports `readFailingSince` and `lastReadFailure` (time plus the HTTP code of each read), so the cause stays visible after reads recover.
+
+**Fewer broker calls.** The sandbox positions endpoint answers 404, so after a 404 it is only re-probed every 5 minutes and positions are derived from the order book in between. While disarmed and flat, broker reads run every 5 seconds instead of every 2, which still keeps reconciliation fresh enough for ARM (10 seconds). Once armed, or with anything open, reads run every tick.
+
 ## Claude decision mode (`CLAUDE_DECIDES_V1`)
 
 A third, opt-in sandbox entry mode in which Claude makes the entry and exit call and EDGE's code does everything else.
