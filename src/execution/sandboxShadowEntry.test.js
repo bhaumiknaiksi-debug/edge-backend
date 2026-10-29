@@ -17,7 +17,7 @@ function analysis({tier='C',strategy='LONG_CALL',spot=23010,high=23000,low=22900
     orchestration:{status:'WAIT',executionAllowed:false},signalTier:{tier:'C',researchOnly:true,executionAllowed:false},
     risk:{status:'UNAVAILABLE'},position:{status:'UNAVAILABLE'},
     researchCandidatePlans:{plans:{[tier]:{available:true,strategy,legs:{buyLeg:leg,legDelta:delta}}}},
-    shadowTiming:{version:'OPENING_RANGE_SHADOW_V1',researchOnly:true,executionAllowed:false,plans:{[tier]:{status,shadowEntryReady:ready,strategy,
+    shadowTiming:{version:'OPENING_RANGE_SHADOW_V2',researchOnly:true,executionAllowed:false,plans:{[tier]:{status,shadowEntryReady:ready,strategy,
       contracts:[KEY],episodeId:'episode-1',anchor:{source:'NIFTY_INDEX_5M_OPENING_RANGE',high,low}}}}}};
 }
 const meta=(key=KEY)=>({instrumentKey:key,underlying:'NIFTY',optionType:'CE',strike:23000,expiry:'2026-11-03',session:'2026-10-28',lotSize:65,tickSizeRupees:0.05});
@@ -39,7 +39,7 @@ function armed(policy={}){
   const s=armed(),before=JSON.stringify(analysis());
   assert.equal(E.planEntry(s,analysis(),quote(),meta(),BASE),'QUEUED');
   const t=Object.values(s.trades)[0];
-  assert.equal(t.tier,'C');assert.equal(t.entrySource,'SHADOW_OPENING_RANGE');assert.equal(t.ruleVersion,'OPENING_RANGE_SHADOW_V1');
+  assert.equal(t.tier,'C');assert.equal(t.entrySource,'SHADOW_OPENING_RANGE');assert.equal(t.ruleVersion,'OPENING_RANGE_SHADOW_V2');
   assert.equal(t.riskModel,'ANCHOR_INVALIDATION_V1');assert.equal(t.anchor.level,23000);assert.equal(t.anchor.distance,10);
   assert.equal(t.stop,95,'stop = entry minus delta x distance back to the frozen level (0.5 x 10)');
   assert.equal(t.target,107.5,'target = entry plus 1.5 x the planned premium risk');
