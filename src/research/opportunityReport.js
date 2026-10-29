@@ -3,6 +3,7 @@
 const {createHash}=require('node:crypto');
 const {contractFromKite,candidateLegs}=require('../trading/tradeSnapshots');
 const {summarizeBroker}=require('../trading/kiteTradebook');
+const {buildQuickExitReport,PRIMARY:QUICK_PRIMARY}=require('./quickExit');
 const VERSION='OPPORTUNITY_REPORT_V1', GAP_MS=90000, HORIZON=60;
 const hash=x=>createHash('sha256').update(JSON.stringify(x)).digest('hex');
 const ms=x=>typeof x==='string'?Date.parse(x):NaN;
@@ -167,7 +168,10 @@ function buildOpportunityReport({records=[],ledger={},snapshots=[],now=Date.now(
   selectedLegs:p.selectedLegs||candidateLegs(p.selectedCandidate),authorization:p.authorization||null,
   importedFillKeys:[...new Map(candidateLegs(p.selectedCandidate).flatMap(l=>fillsByContract.get([p.expiry,l.strike,l.type].join('|'))||[]).filter(r=>Math.abs(r.timeMs-ms(p.capturedAt))<=20*60000).map(r=>[r.fill.key,r])).values()].sort((a,b)=>a.index-b.index).map(r=>r.fill.key),
   pnlAttribution:'NOT_INFERRED_FROM_A_CLICK'};});
- const outcomeIndex=indexOutcomes(records,now);
+ const outcomeIndex=indexOutcomes(records,now),quickByEpisode=new Map();
+ for(const r of records)if(r.recordType==='OPPORTUNITY_QUICK_EXIT'&&r.episodeId&&ms(r.timestamp)<=now){const list=quickByEpisode.get(r.episodeId)||[];list.push(r);quickByEpisode.set(r.episodeId,list);}
+ const quickFor=ep=>{const list=(quickByEpisode.get(ep.id)||[]).sort((a,b)=>ms(a.timestamp)-ms(b.timestamp));
+  const hit=list.filter(r=>r.outcome?.status==='MEASURED').at(-1);return hit?hit.outcome:{status:'UNMEASURED',reason:list.at(-1)?.outcome?.reason||'NOT_YET_MEASURED'};};
  const results=episodes.map(e=>({...e,result:outcomeFor(e,outcomeIndex,now)})),readinessResults=candidateEpisodes(observations,{axis:'READINESS_TIER'}).map(e=>({...e,result:outcomeFor(e,outcomeIndex,now)})),groups={};
  for(const e of [...results,...readinessResults]){const key=e.axis+'|'+e.ruleVersion+'|'+e.tier;(groups[key]||={axis:e.axis,ruleVersion:e.ruleVersion,tier:e.tier,rows:[]}).rows.push(e);}
  const missCounts={};for(const f of fills.filter(f=>f.side==='BUY'))for(const gate of new Set(f.coverage.rejectedBy?.length?f.coverage.rejectedBy:f.coverage.primaryMiss?[f.coverage.primaryMiss]:[])){
@@ -191,7 +195,10 @@ function buildOpportunityReport({records=[],ledger={},snapshots=[],now=Date.now(
   bySignalTier:['A','B','C'].map(tier=>({tier,...stats(readinessResults.filter(e=>e.tier===tier)),scope:'AUTHORITATIVE_STRUCTURE_ON_EACH_READINESS_TIER_EPISODE'})),
   byRuleVersion:Object.values(groups).map(g=>({axis:g.axis,ruleVersion:g.ruleVersion,tier:g.tier,...stats(g.rows)})),
   readinessEpisodes:readinessResults.map(({candidate,...e})=>({...e,strategy:candidate.strategy,legs:candidateLegs(candidate)})),
-  candidateEpisodes:results.map(({candidate,...e})=>({...e,strategy:candidate.strategy,expiry:candidate.expiry,legs:candidateLegs(candidate),rejectedBy:rejection(candidate),gateScope:candidate.gateScope})),
+  candidateEpisodes:results.map(({candidate,...e})=>{const q=quickFor(e),p=q.results?.[QUICK_PRIMARY];return {...e,strategy:candidate.strategy,expiry:candidate.expiry,legs:candidateLegs(candidate),rejectedBy:rejection(candidate),gateScope:candidate.gateScope,
+   quickExit:p?{rule:QUICK_PRIMARY,exit:p.exit,minutes:p.minutes,estimatedNetRupees:p.estimatedNetRupees}:{status:q.status,reason:q.reason||p?.reason||null}};}),
+  quickExit:buildQuickExitReport(results.filter(e=>e.marketPhase==='OPEN'&&['LONG_CALL','LONG_PUT'].includes(e.candidate.strategy)&&!e.candidate.legs?.sellLeg).map(e=>{const q=quickFor(e);
+   return {tier:e.tier,strategy:e.candidate.strategy,expiry:e.candidate.expiry,session:day(ms(e.at)),at:e.at,status:q.status,reason:q.reason,results:q.results};})),
   gateChangeQueue:gateChanges,reportFingerprint:hash([VERSION,records.map(r=>r.id),fills.map(f=>f.key),snapshots.map(s=>s.id)])};
 }
 module.exports={VERSION,GAP_MS,HORIZON,normalizeObservations,candidateEpisodes,indexOutcomes,outcomeFor,validateOutcome,buildOpportunityReport,matchCoverage,identity,stats};

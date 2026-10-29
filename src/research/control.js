@@ -17,6 +17,13 @@
   table('tiers',report.byCandidateTier,t=>[t.tier,t.flagged,t.measured,t.unmeasured,t.monetaryMeasured,t.wins+' / '+t.losses+' / '+t.flat,money(t.estimatedMeanNetRupees),t.observedDays]);
   table('readiness',report.bySignalTier,t=>[t.tier,t.flagged,t.measured,t.unmeasured,t.wins+' / '+t.losses+' / '+t.flat,money(t.estimatedMeanNetRupees)]);
   table('versions',report.byRuleVersion,t=>[t.ruleVersion+' · '+human(t.axis),t.tier,t.flagged,t.measured,money(t.estimatedMeanNetRupees)]);
+  const q=report.quickExit;if(q){const P=q.primaryRule,line=r=>[r.measured,r.winRatePct==null?'–':r.winRatePct+'%',r.targetHits+' / '+r.stopHits+' / '+r.timeExits,money(r.meanNetRupees),money(r.totalNetRupees)];
+   const rule=q.rules.find(r=>r.id===P);el('quick-basis').textContent='Primary rule (fixed in advance): buy at the flagged ask, exit at +'+rule.target+' or −'+rule.stop+' premium points, else at market after '+rule.maxMinutes+' minutes. '+q.basis;
+   const missing=Object.entries(q.unmeasuredReasons).map(([k,v])=>human(k)+' '+v).join(' · ');el('quick-progress').textContent=q.overall[P].measured+' of '+q.episodes+' single-leg cards measured'+(missing?' · not yet: '+missing:'');
+   table('quick-tier',[{key:'All cards',...q.overall[P]},...q.byCardTier[P].map(r=>({...r,key:'Card '+r.key}))],r=>[r.key,...line(r),r.medianMinutes??'–',r.days]);
+   table('quick-split',[...q.byDirection[P],...q.byExpiry[P].map(r=>({...r,key:human(r.key)})),...q.byTimeOfDay[P]],r=>[r.key,...line(r),r.medianMinutes??'–',r.days]);
+   table('quick-rules',q.rules.map(r=>({...q.overall[r.id],key:'+'+r.target+' / −'+r.stop+' / '+r.maxMinutes+'m'+(r.primary?' (primary)':'')})),r=>[r.key,...line(r)]);
+   el('quick-limits').textContent=q.limits.join(' ');}
   shown=50;renderEpisodes();el('gates').replaceChildren();for(const g of report.gateChangeQueue){const p=document.createElement('p');p.textContent=human(g.gate)+' · '+g.missedEntryOrders+' buy orders / '+g.missedEntryFills+' fills · '+human(g.status);el('gates').append(p);}if(!report.gateChangeQueue.length)el('gates').textContent='No classified missed entry fills.';
   el('fingerprint').textContent='Report '+report.reportFingerprint+' · '+when(report.generatedAt);el('status').textContent='Report loaded. No trading rules changed.';
  }catch(e){el('status').textContent=e.message;}}
