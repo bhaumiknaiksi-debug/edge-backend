@@ -36,6 +36,8 @@ const { createEvidenceArchive } = require('./evidence/evidenceArchive');
 const { buildWebPush } = require('./notifications/edgeWebPush');
 const { buildTelegram } = require('./notifications/edgeTelegram');
 const { createSandboxService } = require('./execution/sandboxService');
+const { createSandboxStore } = require('./execution/sandboxStore');
+const { createOwnerLimits } = require('./execution/ownerLimits');
 const { createKeepAlive } = require('./health/keepAlive');
 const { createOpportunityResearch } = require('./research/opportunityService');
 const { dashboardAvailability, isLiveDataFresh } = require('./health/marketFreshness');
@@ -50,14 +52,19 @@ const express = require('express');
 
 const app = express();
 app.use(express.json());
-const edgeWebPush = buildWebPush();
+const edgeWebPush = buildWebPush(process.env,{stillApproved:result=>ownerLimits.servable(result)});
 const dataPool = createDatabase();
-const edgeTelegram = buildTelegram({pool:dataPool,getMarketPhase,getCurrentResult:()=>lastResult});
-const sandboxExecution = createSandboxService({pool:dataPool,ownerToken:process.env.EDGE_PUSH_OWNER_TOKEN,getContext:()=>({analysis:lastResult}),
+const edgeTelegram = buildTelegram({pool:dataPool,getMarketPhase,getCurrentResult:()=>ownerLimits.approvedOnly(lastResult)});
+// One set of limits: the owner's saved sandbox policy, read straight from the database (not via the sandbox worker).
+// A change invalidates cached and in-flight approvals through the same epoch as ledger changes.
+const invalidateApprovals = () => { ledgerEpoch++; lastResult = null; lastFetchTime = 0; };
+const ownerLimitsStore = dataPool ? createSandboxStore({pool:dataPool}) : null;
+const ownerLimits = createOwnerLimits({read:async()=>{ if(!ownerLimitsStore) throw new Error('NO_DATABASE'); return ownerLimitsStore.read(); },onChange:()=>invalidateApprovals()});
+const sandboxExecution = createSandboxService({pool:dataPool,ownerToken:process.env.EDGE_PUSH_OWNER_TOKEN,getContext:()=>({analysis:ownerLimits.approvedOnly(lastResult)}),onPolicyChange:policy=>ownerLimits.set(policy),
   notify:(key,text)=>edgeTelegram.alert(key,text)}); // edgeTelegram is defined below; only called after startup
 const shadowEvents = createShadowEvents({pool:dataPool,enabled:process.env.EDGE_SHADOW_EVENTS_ENABLED === 'true'});
 let ledgerEpoch = 0;
-const ledger = createLedger({getPlan:()=>lastResult?{timestamp:lastResult.timestamp,strategy:lastResult.decision?.strategy,entry:lastResult.decision?.entry,risk:lastResult.decision?.risk,position:lastResult.decision?.position,orchestration:lastResult.decision?.orchestration}:null,pool:dataPool,ownerToken:process.env.EDGE_PUSH_OWNER_TOKEN,onChange:()=>{ledgerEpoch++;lastResult=null;lastFetchTime=0;},onBrokerImport:()=>tradeSnapshots.reconcile()});
+const ledger = createLedger({getLimits:()=>ownerLimits.get(),getPlan:()=>{const lastResult_=ownerLimits.approvedOnly(lastResult);return lastResult_?{timestamp:lastResult_.timestamp,strategy:lastResult_.decision?.strategy,entry:lastResult_.decision?.entry,risk:lastResult_.decision?.risk,position:lastResult_.decision?.position,orchestration:lastResult_.decision?.orchestration}:null;},pool:dataPool,ownerToken:process.env.EDGE_PUSH_OWNER_TOKEN,onChange:()=>{ledgerEpoch++;lastResult=null;lastFetchTime=0;},onBrokerImport:()=>tradeSnapshots.reconcile()});
 
 const ALLOWED_ORIGINS = (process.env.EDGE_ALLOWED_ORIGINS || 'https://edge-backend-mbcs.vercel.app,http://localhost:3000,capacitor://localhost,http://localhost')
   .split(',').map(s => s.trim()).filter(Boolean);
@@ -80,7 +87,7 @@ sandboxExecution.routes(app);
 const keepAlive = createKeepAlive();
 ledger.routes(app);
 // Capture only the unchanged, backend-generated candidate plan; never change execution gates.
-const tradeSnapshots = createTradeSnapshots({app,pool:dataPool,ownerToken:process.env.EDGE_PUSH_OWNER_TOKEN,getAnalysis:()=>lastResult});
+const tradeSnapshots = createTradeSnapshots({app,pool:dataPool,ownerToken:process.env.EDGE_PUSH_OWNER_TOKEN,getAnalysis:()=>ownerLimits.approvedOnly(lastResult)});
 
 const PORT = process.env.PORT || 10000;
 const UPSTOX_TOKEN = process.env.UPSTOX_ACCESS_TOKEN || '';
@@ -1068,10 +1075,13 @@ async function poll() {
     } catch (contextErr) {
       console.error('[market context]', contextErr.message);
     }
+    await ownerLimits.refresh();
     await ledger.refresh();
     const analysedEpoch = ledgerEpoch;
+    const limitsToken = ownerLimits.token(); // the limits this analysis sizes under
     const result = analyse(chain, nearestExpiry, marketContext);
     if (result) {
+      if (result.decision) result.decision.limitsToken = limitsToken;
       try {
         const tracking = await shadowEvents.observe({now:Date.now(),marketPhase:phase,
           source:marketContext?.timingSource,candidates:result.decision?.researchCandidatePlans,ruleSpec:result.decision?.ruleSpec,
@@ -1194,6 +1204,8 @@ async function poll() {
         else console.error('[evidence] optional transition append failed; live decision preserved');
       }
       if (analysedEpoch !== ledgerEpoch) throw new Error('LEDGER_CHANGED_DURING_PERSISTENCE');
+      // A READY computed under limits that changed, failed or expired meanwhile is never published.
+      if (!ownerLimits.servable(result)) throw new Error('OWNER_LIMITS_CHANGED_DURING_ANALYSIS');
       lastResult = result;
       // Optional census observes every successful OPEN poll, independent of execution gates.
       // Recording failures are isolated from the live dashboard and never promote a signal.
@@ -1234,6 +1246,8 @@ const dataHandler = (req, res) => {
     lastError
   });
   if (lastResult?.decision?.orchestration?.status === 'READY_TO_EXECUTE' && !ledger.snapshot().confirmed) return res.status(503).json({error:'TRADE_LOG_RECHECK_REQUIRED',phase});
+  // A cached READY is served only while the exact limits it was sized under are still current and fresh.
+  if (!ownerLimits.servable(lastResult)) return res.status(503).json({error:'OWNER_LIMITS_RECHECK_REQUIRED',phase});
   res.json(lastResult);
 };
 app.get('/data', dataHandler);
@@ -1244,6 +1258,7 @@ app.get('/api/v1/trade-plans', (req,res)=>{
   if(process.env.EDGE_TRADE_PLANNER_ENABLED!=='true')return res.status(404).json({error:'TRADE_PLANNER_DISABLED'});
   const available=dashboardAvailability(getMarketPhase(),lastResult,lastFetchTime);
   if(!available.ok)return res.status(503).json({error:available.reason,mode:'SHADOW'});
+  if (!ownerLimits.servable(lastResult)) return res.status(503).json({error:'OWNER_LIMITS_RECHECK_REQUIRED'});
   res.json(buildTradePlans(lastResult));
 });
 app.get('/api/v1/dashboard', dataHandler);
