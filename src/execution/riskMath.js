@@ -10,7 +10,10 @@ const money = n => Math.round(n * 100) / 100;
 const up = (x, tick) => money(Math.ceil((x - 1e-8) / tick) * tick);
 const down = (x, tick) => money(Math.floor((x + 1e-8) / tick) * tick);
 const entryPrice = (ask, tick = NIFTY_OPTION_TICK) => up(ask, tick);
-const stopLimitPrice = (stop, tick = NIFTY_OPTION_TICK) => down(stop - Math.max(tick, stop * 0.005), tick);
+// The stop is first normalized DOWN to the tick, exactly as the executor's exit plan does, so a raw stop such as
+// 92.04 and its executable 92.00 give the same stop-limit. Idempotent for stops already on the tick.
+const normalizeStop = (stop, tick = NIFTY_OPTION_TICK) => down(stop, tick);
+const stopLimitPrice = (stop, tick = NIFTY_OPTION_TICK) => { const s = normalizeStop(stop, tick); return down(s - Math.max(tick, s * 0.005), tick); };
 function orderRisk({ price, stopLimit, lotSize, costReserve }) {
   return { risk: money((price - stopLimit) * lotSize + costReserve), capital: money(price * lotSize + costReserve) };
 }
@@ -19,4 +22,4 @@ function plannedLongRisk({ ask, stop, lotSize, costReserve = 100, tick = NIFTY_O
   const price = entryPrice(ask, tick), stopLimit = stopLimitPrice(stop, tick);
   return { price, stopLimit, ...orderRisk({ price, stopLimit, lotSize, costReserve }) };
 }
-module.exports = { NIFTY_OPTION_TICK, up, down, entryPrice, stopLimitPrice, orderRisk, plannedLongRisk };
+module.exports = { NIFTY_OPTION_TICK, up, down, entryPrice, normalizeStop, stopLimitPrice, orderRisk, plannedLongRisk };

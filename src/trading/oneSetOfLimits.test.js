@@ -103,5 +103,10 @@ const size=(b,extra={})=>buildPositionPlan({strategy:'LONG_CALL',tradeLegs:{...l
  assert.match(src,/await ownerLimits\.refresh\(\);\n\s*await ledger\.refresh\(\);\n\s*const analysedEpoch = ledgerEpoch;/);
  assert.match(src,/onChange:\(\)=>invalidateApprovals\(\)/);
  assert.ok(!/limits\?\.\(\)/.test(src),'the worker-cached limits path is gone');
+ // Approvals are stamped with their limits and only published or served while those limits are current (behaviour of
+ // servable() is tested in limitsGuards.test.js; these lines check it is applied at both exits).
+ assert.match(src,/const limitsToken = ownerLimits\.token\(\);/);assert.match(src,/result\.decision\.limitsToken = limitsToken;/);
+ assert.match(src,/if \(!ownerLimits\.servable\(result\)\) throw new Error\('OWNER_LIMITS_CHANGED_DURING_ANALYSIS'\);\n\s*lastResult = result;/);
+ assert.match(src,/if \(!ownerLimits\.servable\(lastResult\)\) return res\.status\(503\)[^\n]*\n\s*res\.json\(lastResult\);/);
  console.log('One set of limits PASS: fail closed (no wider fallback), every owner field honoured, executor stop-limit parity, createLedger uses getLimits, store-backed and stale-safe, saved changes in force before the response with approvals invalidated');
 })().catch(e=>{console.error(e);process.exit(1);});

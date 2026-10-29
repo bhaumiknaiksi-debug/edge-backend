@@ -1078,8 +1078,10 @@ async function poll() {
     await ownerLimits.refresh();
     await ledger.refresh();
     const analysedEpoch = ledgerEpoch;
+    const limitsToken = ownerLimits.token(); // the limits this analysis sizes under
     const result = analyse(chain, nearestExpiry, marketContext);
     if (result) {
+      if (result.decision) result.decision.limitsToken = limitsToken;
       try {
         const tracking = await shadowEvents.observe({now:Date.now(),marketPhase:phase,
           source:marketContext?.timingSource,candidates:result.decision?.researchCandidatePlans,ruleSpec:result.decision?.ruleSpec,
@@ -1202,6 +1204,8 @@ async function poll() {
         else console.error('[evidence] optional transition append failed; live decision preserved');
       }
       if (analysedEpoch !== ledgerEpoch) throw new Error('LEDGER_CHANGED_DURING_PERSISTENCE');
+      // A READY computed under limits that changed, failed or expired meanwhile is never published.
+      if (!ownerLimits.servable(result)) throw new Error('OWNER_LIMITS_CHANGED_DURING_ANALYSIS');
       lastResult = result;
       // Optional census observes every successful OPEN poll, independent of execution gates.
       // Recording failures are isolated from the live dashboard and never promote a signal.
@@ -1242,6 +1246,8 @@ const dataHandler = (req, res) => {
     lastError
   });
   if (lastResult?.decision?.orchestration?.status === 'READY_TO_EXECUTE' && !ledger.snapshot().confirmed) return res.status(503).json({error:'TRADE_LOG_RECHECK_REQUIRED',phase});
+  // A cached READY is served only while the exact limits it was sized under are still current and fresh.
+  if (!ownerLimits.servable(lastResult)) return res.status(503).json({error:'OWNER_LIMITS_RECHECK_REQUIRED',phase});
   res.json(lastResult);
 };
 app.get('/data', dataHandler);

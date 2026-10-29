@@ -9,9 +9,11 @@ The signal engine's position check sizes with the owner's saved sandbox policy: 
 - **Store-backed.** `execution/ownerLimits.js` reads the policy straight from the sandbox store before every analysis. This works whether or not the sandbox worker is running, armed, or holding its lease.
 - **Fail closed.** Missing, malformed or stale limits (older than 60 seconds) leave the budget `UNAVAILABLE`, and nothing can pass the position check. There is no fallback to the old ₹10,000 / ₹1,000 / ₹1,000. Those numbers remain only for legacy callers that supply no limits at all. A missing number never locks the day.
 - **Immediate.** Saving the policy updates the limits before the response returns, and bumps the same epoch that ledger changes use. That clears any cached approval and aborts any analysis already under way.
+- **Stamped approvals.** Each analysis records the limits it sized under (a version and generation token). A READY is published, and served from cache, only while those exact limits are still current and fresh. A changed, failed or expired read voids it, even if a cache was not cleared. A database read that began before a save can never reinstall the older limits, and a failed read stops approvals at once.
 - **One formula.** `execution/riskMath.js` computes a single option's planned loss for both the signal engine and the sandbox executor:
   - entry at the ask rounded up to the tick
-  - a stop-limit fill at the stop minus max(tick, 0.5% of the stop), rounded down
+  - the stop rounded down to the tick, as the executor's exit plan does
+  - a stop-limit fill at that stop minus max(tick, 0.5% of the stop), rounded down
   - plus the cost reserve
 
   A READY signal is therefore one the executor would accept on risk.
@@ -24,6 +26,12 @@ The owner funds Upstox with ₹10,000 and wants one place to set limits. The fir
 3. A tighter limit did not invalidate existing approvals.
 4. The signal and the executor computed risk differently: ₹620 versus ₹652.50 for an entry of 100 and a stop of 92.
 5. The tests did not prove the wiring.
+
+A second review of the revision found four more problems, also reproduced and fixed:
+1. A slow read could undo a saved tighter limit.
+2. A failed read kept old limits approving.
+3. Expired limits could accompany a cached READY.
+4. The signal and the executor rounded stops differently: ₹649.25 versus ₹652.50 for a stop of 92.04.
 
 ## Consequences
 
