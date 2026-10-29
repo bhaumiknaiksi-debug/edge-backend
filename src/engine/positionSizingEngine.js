@@ -161,7 +161,9 @@ function ledgerPosition({strategy,tradeLegs,risk,budget}) {
   const quoteRisk = strategy.startsWith('LONG_') ? (buy-n(risk.stop?.value))*lotSize : debit*lotSize;
   const riskPerLot=round(Math.max(perLot.rupees,quoteRisk)+costsPerLot);
   const capitalPerLot=round(debit*lotSize+costsPerLot);
-  const riskBudget=Math.min(1000,budget.availableRisk),capitalBudget=Math.min(10000,budget.availableCapital);
+  // Ceilings come from the budget (the owner's control-page limits when readable, else the ledger defaults).
+  const cap=(x,fallback)=>typeof x==='number'&&Number.isFinite(x)&&x>0?x:fallback;
+  const riskBudget=Math.min(cap(budget.perTradeLimit,1000),budget.availableRisk),capitalBudget=Math.min(cap(budget.capitalLimit,10000),budget.availableCapital);
   const lots=Math.floor(Math.min(riskBudget/riskPerLot,capitalBudget/capitalPerLot));
   if(lots<1)return {...blocked('One lot exceeds remaining capital or planned loss allowance.'),riskPerLotRupees:riskPerLot,capitalPerLotRupees:capitalPerLot};
   return {status:'READY',model:'MANUAL_LEDGER_RISK',recommendedLots:lots,lotSize,actualRiskRupees:round(lots*riskPerLot),riskPerLotRupees:riskPerLot,availableRiskRupees:riskBudget,capitalRequiredRupees:round(lots*capitalPerLot),availableCapitalRupees:capitalBudget,estimatedCostsRupees:costsPerLot*lots,rule:'Planned stop risk plus ₹100 per lot cost/slippage reserve. Actual fills can exceed planned loss. Manual records must include all open positions.'};

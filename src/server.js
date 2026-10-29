@@ -57,7 +57,8 @@ const sandboxExecution = createSandboxService({pool:dataPool,ownerToken:process.
   notify:(key,text)=>edgeTelegram.alert(key,text)}); // edgeTelegram is defined below; only called after startup
 const shadowEvents = createShadowEvents({pool:dataPool,enabled:process.env.EDGE_SHADOW_EVENTS_ENABLED === 'true'});
 let ledgerEpoch = 0;
-const ledger = createLedger({getPlan:()=>lastResult?{timestamp:lastResult.timestamp,strategy:lastResult.decision?.strategy,entry:lastResult.decision?.entry,risk:lastResult.decision?.risk,position:lastResult.decision?.position,orchestration:lastResult.decision?.orchestration}:null,pool:dataPool,ownerToken:process.env.EDGE_PUSH_OWNER_TOKEN,onChange:()=>{ledgerEpoch++;lastResult=null;lastFetchTime=0;},onBrokerImport:()=>tradeSnapshots.reconcile()});
+// One set of limits: the signal engine sizes with the owner's sandbox control-page limits (fallback: ledger defaults).
+const ledger = createLedger({getLimits:()=>sandboxExecution?.limits?.()||null,getPlan:()=>lastResult?{timestamp:lastResult.timestamp,strategy:lastResult.decision?.strategy,entry:lastResult.decision?.entry,risk:lastResult.decision?.risk,position:lastResult.decision?.position,orchestration:lastResult.decision?.orchestration}:null,pool:dataPool,ownerToken:process.env.EDGE_PUSH_OWNER_TOKEN,onChange:()=>{ledgerEpoch++;lastResult=null;lastFetchTime=0;},onBrokerImport:()=>tradeSnapshots.reconcile()});
 
 const ALLOWED_ORIGINS = (process.env.EDGE_ALLOWED_ORIGINS || 'https://edge-backend-mbcs.vercel.app,http://localhost:3000,capacitor://localhost,http://localhost')
   .split(',').map(s => s.trim()).filter(Boolean);

@@ -50,9 +50,16 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
   const human=x=>String(x||'').toLowerCase().replaceAll('_',' ');
   const send=(key,text)=>{try{notify(key,text);}catch(_){}};
   // Alerts on state transitions only. The first observation after a restart is a silent baseline.
-  let seen=null;
+  let seen=null,lastPolicy=null;
+  // The owner's control-page limits, as last read from the store. The signal engine sizes with these.
+  function limits(){
+    const p=lastPolicy,ok=x=>typeof x==='number'&&Number.isFinite(x)&&x>0;
+    if(!p||!ok(p.capital)||!ok(p.dailyLoss)||!ok(p.perTradeRisk))return null;
+    return {capital:p.capital,daily:p.dailyLoss,perTrade:Math.min(p.perTradeRisk,p.dailyLoss),source:'SANDBOX_POLICY'};
+  }
   function watch(state){
     if(!state)return;
+    if(state.policy)lastPolicy=state.policy;
     const today=engine.day(now()),trades=Object.values(state.trades),orders=Object.values(state.orders);
     const snap={halt:state.haltReason||null,locked:state.lockedDays.includes(today),
       closed:new Set(trades.filter(t=>t.closedAt).map(t=>t.id)),filled:new Set(orders.filter(o=>o.kind==='ENTRY'&&o.filled>0).map(o=>o.tradeId))};
@@ -85,6 +92,7 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
     try{
       if(idleTickMs>0&&lastCompletedAt!==null&&now()-lastCompletedAt<idleTickMs){
         const idle=await store.read().catch(()=>null);
+        if(idle?.policy)lastPolicy=idle.policy;
         if(idle&&!idle.armed&&flat(idle))return publicStatus();
       }
       const time=now();
@@ -255,6 +263,6 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
       res.json({mode:'SANDBOX',armed:updated.state.armed,killed:updated.state.killed,liveOrdersSupported:false});
     }));
   }
-  return {start,stop,tick,advise,routes,status:publicStatus};
+  return {start,stop,tick,advise,routes,limits,status:publicStatus};
 }
 module.exports={createSandboxService};
