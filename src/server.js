@@ -36,6 +36,8 @@ const { createEvidenceArchive } = require('./evidence/evidenceArchive');
 const { buildWebPush } = require('./notifications/edgeWebPush');
 const { buildTelegram } = require('./notifications/edgeTelegram');
 const { createSandboxService } = require('./execution/sandboxService');
+const { createSandboxStore } = require('./execution/sandboxStore');
+const { createOwnerLimits } = require('./execution/ownerLimits');
 const { createKeepAlive } = require('./health/keepAlive');
 const { createOpportunityResearch } = require('./research/opportunityService');
 const { dashboardAvailability, isLiveDataFresh } = require('./health/marketFreshness');
@@ -53,12 +55,16 @@ app.use(express.json());
 const edgeWebPush = buildWebPush();
 const dataPool = createDatabase();
 const edgeTelegram = buildTelegram({pool:dataPool,getMarketPhase,getCurrentResult:()=>lastResult});
-const sandboxExecution = createSandboxService({pool:dataPool,ownerToken:process.env.EDGE_PUSH_OWNER_TOKEN,getContext:()=>({analysis:lastResult}),
+// One set of limits: the owner's saved sandbox policy, read straight from the database (not via the sandbox worker).
+// A change invalidates cached and in-flight approvals through the same epoch as ledger changes.
+const invalidateApprovals = () => { ledgerEpoch++; lastResult = null; lastFetchTime = 0; };
+const ownerLimitsStore = dataPool ? createSandboxStore({pool:dataPool}) : null;
+const ownerLimits = createOwnerLimits({read:async()=>{ if(!ownerLimitsStore) throw new Error('NO_DATABASE'); return ownerLimitsStore.read(); },onChange:()=>invalidateApprovals()});
+const sandboxExecution = createSandboxService({pool:dataPool,ownerToken:process.env.EDGE_PUSH_OWNER_TOKEN,getContext:()=>({analysis:lastResult}),onPolicyChange:policy=>ownerLimits.set(policy),
   notify:(key,text)=>edgeTelegram.alert(key,text)}); // edgeTelegram is defined below; only called after startup
 const shadowEvents = createShadowEvents({pool:dataPool,enabled:process.env.EDGE_SHADOW_EVENTS_ENABLED === 'true'});
 let ledgerEpoch = 0;
-// One set of limits: the signal engine sizes with the owner's sandbox control-page limits (fallback: ledger defaults).
-const ledger = createLedger({getLimits:()=>sandboxExecution?.limits?.()||null,getPlan:()=>lastResult?{timestamp:lastResult.timestamp,strategy:lastResult.decision?.strategy,entry:lastResult.decision?.entry,risk:lastResult.decision?.risk,position:lastResult.decision?.position,orchestration:lastResult.decision?.orchestration}:null,pool:dataPool,ownerToken:process.env.EDGE_PUSH_OWNER_TOKEN,onChange:()=>{ledgerEpoch++;lastResult=null;lastFetchTime=0;},onBrokerImport:()=>tradeSnapshots.reconcile()});
+const ledger = createLedger({getLimits:()=>ownerLimits.get(),getPlan:()=>lastResult?{timestamp:lastResult.timestamp,strategy:lastResult.decision?.strategy,entry:lastResult.decision?.entry,risk:lastResult.decision?.risk,position:lastResult.decision?.position,orchestration:lastResult.decision?.orchestration}:null,pool:dataPool,ownerToken:process.env.EDGE_PUSH_OWNER_TOKEN,onChange:()=>{ledgerEpoch++;lastResult=null;lastFetchTime=0;},onBrokerImport:()=>tradeSnapshots.reconcile()});
 
 const ALLOWED_ORIGINS = (process.env.EDGE_ALLOWED_ORIGINS || 'https://edge-backend-mbcs.vercel.app,http://localhost:3000,capacitor://localhost,http://localhost')
   .split(',').map(s => s.trim()).filter(Boolean);
@@ -1069,6 +1075,7 @@ async function poll() {
     } catch (contextErr) {
       console.error('[market context]', contextErr.message);
     }
+    await ownerLimits.refresh();
     await ledger.refresh();
     const analysedEpoch = ledgerEpoch;
     const result = analyse(chain, nearestExpiry, marketContext);

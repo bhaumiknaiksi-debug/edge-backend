@@ -3,13 +3,16 @@ const { istParts } = require('../evidence/evidenceHealth');
 const { timingSafeOwnerToken } = require('../notifications/edgeWebPush');
 const { importBrokerFills, summarizeBroker } = require('./kiteTradebook');
 const { importStatement, summarizedReports } = require('./kitePnl');
-// Fallback only. When the owner's control-page limits are readable, the signal engine sizes with those instead,
-// so there is one set of numbers. Bounds keep a bad value from widening risk.
-const DEFAULT_LIMITS = Object.freeze({ capital:10000, daily:1000, perTrade:1000, source:'DEFAULT' });
+// DEFAULT_LIMITS apply only when a caller supplies no limits at all (legacy callers and tests). The server always
+// supplies the owner's limits; if those are missing or malformed the budget is UNAVAILABLE and approves nothing.
+// Nothing ever falls back to wider numbers.
+const DEFAULT_LIMITS = Object.freeze({ capital:10000, daily:1000, perTrade:1000, costReserve:100, source:'DEFAULT', version:null });
+const UNAVAILABLE_LIMITS = Object.freeze({ capital:0, daily:0, perTrade:0, costReserve:100, source:'UNAVAILABLE', version:null });
 function resolveLimits(l) {
   const ok = (x, max) => typeof x === 'number' && Number.isFinite(x) && x > 0 && x <= max;
-  if (!l || !ok(l.capital, 1000000) || !ok(l.daily, 100000) || !ok(l.perTrade, 100000)) return DEFAULT_LIMITS;
-  return { capital:money(l.capital), daily:money(l.daily), perTrade:money(Math.min(l.perTrade, l.daily)), source:l.source || 'OWNER_POLICY' };
+  if (!l || !ok(l.capital, 1000000) || !ok(l.daily, 100000) || !ok(l.perTrade, 100000)) return UNAVAILABLE_LIMITS;
+  const costReserve = typeof l.costReserve === 'number' && Number.isFinite(l.costReserve) && l.costReserve >= 0 ? money(l.costReserve) : 100;
+  return { capital:money(l.capital), daily:money(l.daily), perTrade:money(Math.min(l.perTrade, l.daily)), costReserve, source:l.source || 'OWNER_POLICY', version:l.version || null };
 }
 const money = n => Math.round(n * 100) / 100;
 function number(v, name, min = 0) {
@@ -18,17 +21,19 @@ function number(v, name, min = 0) {
 }
 function day(now) { const p=istParts(now); return p.minutes<555 ? istParts(new Date(new Date(now).getTime()-86400000)).date : p.date; }
 function budget(state, now = new Date(), limits = DEFAULT_LIMITS) {
-  const { capital:CAPITAL, daily:DAILY, perTrade:PER_TRADE } = resolveLimits(limits);
+  const resolved = resolveLimits(limits), unavailable = resolved.source === 'UNAVAILABLE';
+  const { capital:CAPITAL, daily:DAILY, perTrade:PER_TRADE } = resolved;
   const today = day(now), trades = state.trades || [];
   const closed = trades.filter(t => t.closedAt && day(new Date(t.closedAt)) === today).sort((a,b)=>a.closedAt.localeCompare(b.closedAt));
   let net = 0, hit = (state.lockedDays || []).includes(today);
-  for (const t of closed) { net = money(net + t.netPnl); if (net <= -DAILY) hit = true; }
+  // Without limits, nothing is approved, but the day is never locked from a missing number.
+  for (const t of closed) { net = money(net + t.netPnl); if (!unavailable && net <= -DAILY) hit = true; }
   const totalNet = money(trades.filter(t=>t.closedAt).reduce((a,t)=>a+t.netPnl,0));
   const open = trades.filter(t => !t.closedAt);
   const openRisk = money(open.reduce((a,t)=>a+t.reservedRisk,0));
   const openCapital = money(open.reduce((a,t)=>a+t.capitalUsed,0));
   const remaining = hit ? 0 : money(Math.max(0, DAILY - Math.max(0,-net) - openRisk));
-  return { day:today, confirmed:state.confirmedDay === today, locked:hit, capitalLimit:CAPITAL, perTradeLimit:PER_TRADE, dailyLossLimit:DAILY, limitsSource:resolveLimits(limits).source, netRealizedPnl:net, openRisk, openCapital, availableRisk:Math.min(PER_TRADE,remaining), availableCapital:money(Math.max(0,CAPITAL - Math.max(0,-totalNet) - openCapital)), openTrades:open.length, source:'MANUAL_LEDGER', checkedAt:new Date(now).toISOString() };
+  return { day:today, confirmed:state.confirmedDay === today, locked:hit, capitalLimit:CAPITAL, perTradeLimit:PER_TRADE, dailyLossLimit:DAILY, limitsSource:resolved.source, limitsVersion:resolved.version, costReserve:resolved.costReserve, netRealizedPnl:net, openRisk, openCapital, availableRisk:Math.min(PER_TRADE,remaining), availableCapital:money(Math.max(0,CAPITAL - Math.max(0,-totalNet) - openCapital)), openTrades:open.length, source:'MANUAL_LEDGER', checkedAt:new Date(now).toISOString() };
 }
 function apply(state, operation, input, now = new Date(), limits = DEFAULT_LIMITS) {
   const s = JSON.parse(JSON.stringify(state));
@@ -71,12 +76,14 @@ function apply(state, operation, input, now = new Date(), limits = DEFAULT_LIMIT
     Object.assign(t,{ exit, charges, grossPnl:gross, netPnl:money(gross-charges), closedAt:time });
   } else throw new Error('INVALID_OPERATION');
   s.operations.push(input.requestId);
-  if (budget(s,now,limits).locked && !s.lockedDays.includes(day(now))) s.lockedDays.push(day(now));
+  const after = budget(s,now,limits);
+  if (after.limitsSource !== 'UNAVAILABLE' && after.locked && !s.lockedDays.includes(day(now))) s.lockedDays.push(day(now));
   return s;
 }
 function numberSigned(v) { if(typeof v!=='number'||!Number.isFinite(v)||Math.abs(v)>10000000)throw new Error('INVALID_GROSS_PNL');return money(v); }
-function createLedger({ pool, ownerToken, onChange = ()=>{}, onBrokerImport = ()=>{}, getPlan = ()=>null, getLimits = ()=>null }) {
-  const limits = () => { try { return resolveLimits(getLimits()); } catch (_) { return DEFAULT_LIMITS; } };
+function createLedger({ pool, ownerToken, onChange = ()=>{}, onBrokerImport = ()=>{}, getPlan = ()=>null, getLimits }) {
+  // With getLimits, the owner's limits or UNAVAILABLE; never a wider fallback. Without it (legacy), the defaults.
+  const limits = () => { if (typeof getLimits !== 'function') return DEFAULT_LIMITS; try { return getLimits() || null; } catch (_) { return null; } };
   let current = null, error = 'LEDGER_NOT_LOADED', loadedAt = 0, generation = 0;
   async function refresh() {
     const started = generation;
@@ -123,4 +130,4 @@ function createLedger({ pool, ownerToken, onChange = ()=>{}, onBrokerImport = ()
   }
   return { refresh, snapshot, routes };
 }
-module.exports={budget,apply,createLedger,resolveLimits,DEFAULT_LIMITS};
+module.exports={budget,apply,createLedger,resolveLimits,DEFAULT_LIMITS,UNAVAILABLE_LIMITS};

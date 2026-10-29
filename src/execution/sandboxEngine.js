@@ -2,6 +2,7 @@
 // Durable SANDBOX-only state machine. Pure functions; never calls a broker or alters EDGE decisions.
 const {createHash}=require('node:crypto');
 const {selectCandidate,expiryBucket,MODES,DEFAULT_MODE}=require('./candidateSelection');
+const {entryPrice,stopLimitPrice,orderRisk}=require('./riskMath');
 const hash=x=>createHash('sha256').update(JSON.stringify(x)).digest('hex');
 const clone=x=>JSON.parse(JSON.stringify(x));
 const money=x=>Math.round(x*100)/100;
@@ -150,8 +151,9 @@ function planEntry(s,result,quote,meta,now){
     !Number.isFinite(quote.receivedAt)||quote.receivedAt>now||now-quote.receivedAt>10000)return 'FRESH_QUOTE_REQUIRED';
   if((quote.ask-quote.bid)/quote.ask>0.025)return 'SPREAD_TOO_WIDE';
   const tick=meta.tickSizeRupees,up=x=>money(Math.ceil((x-1e-8)/tick)*tick),down=x=>money(Math.floor((x+1e-8)/tick)*tick);
-  const price=up(quote.ask),{stop,target}=pick.exitPlan({price,bid:quote.bid,ask:quote.ask,tick,down});
-  const stopLimit=down(stop-Math.max(tick,stop*0.005));
+  // Entry, stop-limit and planned loss come from riskMath, the same formula the signal engine sizes with.
+  const price=entryPrice(quote.ask,tick),{stop,target}=pick.exitPlan({price,bid:quote.bid,ask:quote.ask,tick,down});
+  const stopLimit=stopLimitPrice(stop,tick);
   if(!positive(stop)||!positive(target)||stop>=price||target<=price||!positive(stopLimit))return 'EXECUTABLE_EXIT_PLAN_REQUIRED';
   const policy=s.policy;
   const closed=Object.values(s.trades).filter(t=>t.closedAt&&t.buys>0);
@@ -162,7 +164,7 @@ function planEntry(s,result,quote,meta,now){
   if(Object.values(s.trades).some(t=>!t.closedAt)||Object.values(s.orders).some(o=>working(o)))return 'EXPOSURE_ALREADY_EXISTS';
   if(Object.keys(s.orders).length>=500||Object.keys(s.trades).length>=100)return 'STATE_CAPACITY_LIMIT';
   if(Object.values(s.trades).filter(t=>t.day===day(now)).length>=policy.maxTradesPerDay)return 'DAILY_TRADE_LIMIT';
-  const risk=money((price-stopLimit)*meta.lotSize+policy.costReserve);
+  const risk=orderRisk({price,stopLimit,lotSize:meta.lotSize,costReserve:policy.costReserve}).risk;
   if(risk>policy.perTradeRisk||risk>policy.dailyLoss-Math.max(0,-pnlToday))return 'RISK_LIMIT';
   if(price*meta.lotSize+policy.costReserve>Math.max(0,policy.capital+Math.min(0,totalPnl)))return 'CAPITAL_LIMIT';
   // One entry per original contract/session. Poll timestamps never manufacture new entry identities.

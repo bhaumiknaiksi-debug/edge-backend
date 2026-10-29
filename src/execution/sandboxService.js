@@ -10,7 +10,7 @@ const {createMarketQuotes}=require('./marketQuotes');
 const {timingSafeOwnerToken}=require('../notifications/edgeWebPush');
 const {createClaudeAdvisor,buildSnapshot}=require('./claudeAdvisor');
 const {rejectOwner}=require('../health/authThrottle');
-function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.env,dependencies={},notify=()=>{}}){
+function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.env,dependencies={},notify=()=>{},onPolicyChange=()=>{}}){
   const enabled=env.EDGE_SANDBOX_EXECUTION_ENABLED==='true';
   const tokenValid=t=>typeof t==='string'&&!!t.trim()&&!/[\r\n]/.test(t);
   const reason=!enabled?'DISABLED':!ownerToken?'OWNER_AUTH_REQUIRED':!pool&&!dependencies.store?'DATABASE_REQUIRED':
@@ -50,16 +50,9 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
   const human=x=>String(x||'').toLowerCase().replaceAll('_',' ');
   const send=(key,text)=>{try{notify(key,text);}catch(_){}};
   // Alerts on state transitions only. The first observation after a restart is a silent baseline.
-  let seen=null,lastPolicy=null;
-  // The owner's control-page limits, as last read from the store. The signal engine sizes with these.
-  function limits(){
-    const p=lastPolicy,ok=x=>typeof x==='number'&&Number.isFinite(x)&&x>0;
-    if(!p||!ok(p.capital)||!ok(p.dailyLoss)||!ok(p.perTradeRisk))return null;
-    return {capital:p.capital,daily:p.dailyLoss,perTrade:Math.min(p.perTradeRisk,p.dailyLoss),source:'SANDBOX_POLICY'};
-  }
+  let seen=null;
   function watch(state){
     if(!state)return;
-    if(state.policy)lastPolicy=state.policy;
     const today=engine.day(now()),trades=Object.values(state.trades),orders=Object.values(state.orders);
     const snap={halt:state.haltReason||null,locked:state.lockedDays.includes(today),
       closed:new Set(trades.filter(t=>t.closedAt).map(t=>t.id)),filled:new Set(orders.filter(o=>o.kind==='ENTRY'&&o.filled>0).map(o=>o.tradeId))};
@@ -92,7 +85,6 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
     try{
       if(idleTickMs>0&&lastCompletedAt!==null&&now()-lastCompletedAt<idleTickMs){
         const idle=await store.read().catch(()=>null);
-        if(idle?.policy)lastPolicy=idle.policy;
         if(idle&&!idle.armed&&flat(idle))return publicStatus();
       }
       const time=now();
@@ -255,7 +247,10 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
     app.post(base+'/policy',guard(async(req,res)=>{
       if(req.body?.confirmSandbox!==true)return res.status(400).json({error:'SANDBOX_CONFIRMATION_REQUIRED'});
       const updated=await store.mutate(s=>engine.configurePolicy(s,req.body||{},now()));
-      const p=updated.state.policy;res.json({mode:'SANDBOX',policy:p,dailyLossGoalRatio:p.dailyLoss/(p.dailyGoal||1000),liveOrdersSupported:false});
+      const p=updated.state.policy;
+      // The signal engine sizes with these limits: tell it now, before the response, so no approval outlives the change.
+      try{onPolicyChange(p);}catch(_){}
+      res.json({mode:'SANDBOX',policy:p,dailyLossGoalRatio:p.dailyLoss/(p.dailyGoal||1000),liveOrdersSupported:false});
     }));
     for(const [path,operation] of [['arm','ARM'],['stop','STOP']])app.post(base+'/'+path,guard(async(req,res)=>{
       if(req.body?.confirmSandbox!==true)return res.status(400).json({error:'SANDBOX_CONFIRMATION_REQUIRED'});
@@ -263,6 +258,6 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
       res.json({mode:'SANDBOX',armed:updated.state.armed,killed:updated.state.killed,liveOrdersSupported:false});
     }));
   }
-  return {start,stop,tick,advise,routes,limits,status:publicStatus};
+  return {start,stop,tick,advise,routes,status:publicStatus};
 }
 module.exports={createSandboxService};
