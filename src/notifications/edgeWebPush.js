@@ -115,6 +115,8 @@ function buildWebPush(env = process.env, dependencies = {}) {
   let lastInitAttemptAt = 0;
   let initPromise = null;
   const sender = dependencies.sender || webpush;
+  // Is this READY still approved under the owner's current limits? Checked immediately before each send.
+  const stillApproved = typeof dependencies.stillApproved === 'function' ? dependencies.stillApproved : () => true;
 
   if (required) {
     try {
@@ -277,7 +279,10 @@ function buildWebPush(env = process.env, dependencies = {}) {
     // No delivery if market/observation has moved while the storage transaction was running.
     if (Date.now() - Date.parse(current.observedAt) > 60000) return;
     const targets = await subscriptions();
-    await Promise.allSettled(targets.map(t => sendStored(t, event)));
+    // A READY waits on storage and the subscription lookup; the owner's limits may have changed, failed or expired
+    // meanwhile. Revalidate right before sending.
+    const ready = event.type === 'EXECUTION_READY';
+    await Promise.allSettled(targets.map(t => (!ready || stillApproved(result)) ? sendStored(t, event) : null));
   }
 
   function onSuccessfulPoll(result) {

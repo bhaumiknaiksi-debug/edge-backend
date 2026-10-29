@@ -168,6 +168,8 @@ function ledgerPosition({strategy,tradeLegs,risk,budget}) {
     const stop=n(risk.stop?.value);
     if(!(stop>0)||stop>=buy)return blocked('A premium stop below the entry is required to size a single option.');
     const order=plannedLongRisk({ask:buy,stop,lotSize,costReserve:reserve});
+    // As the executor: the protective stop-limit must be a real price below the entry.
+    if(!(order.stopLimit>0)||order.stopLimit>=order.price)return blocked('The protective stop-limit price would be zero or not below the entry.');
     riskPerLot=round(Math.max(perLot.rupees+reserve,order.risk));capitalPerLot=order.capital;
   }else{
     riskPerLot=round(Math.max(perLot.rupees,debit*lotSize)+reserve);capitalPerLot=round(debit*lotSize+reserve);

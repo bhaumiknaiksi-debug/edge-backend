@@ -83,5 +83,75 @@ const READY=token=>({decision:{orchestration:{status:'READY_TO_EXECUTE'},limitsT
   assert.equal(await verdict(650),'RISK_LIMIT');assert.equal(signal(650),'BLOCKED','Rs 650: the executor refuses, and so does the signal');
   const at660=await verdict(660);assert.equal(at660,'QUEUED','Rs 660: the executor queues the entry');assert.equal(signal(660),'READY','and so does the signal');
  }
- console.log('Limits guards PASS: superseded reads discarded, failed reads stop approvals, READY served/published only under current fresh limits, signal and real executor agree on stop rounding');
+
+ // --- 5. Telegram: a READY queued under fresh limits is not sent after they expire (real manager, fake API). ---
+ {
+  const {buildTelegram}=require('../notifications/edgeTelegram');const {fakeTelegramPool,decision,testEnv}=require('../notifications/telegramTestHelpers');
+  const {pool}=fakeTelegramPool();let time=Date.parse('2026-10-26T05:00:00Z'),current=null;const sends=[];
+  const limits=createOwnerLimits({read:async()=>({policy:policy(660)}),now:()=>time});await limits.refresh();
+  const api=async(method)=>{if(method==='getChat')return {id:Number(testEnv.EDGE_TELEGRAM_CHAT_ID),type:'private'};sends.push(method);return {message_id:sends.length,chat:{type:'private',id:Number(testEnv.EDGE_TELEGRAM_CHAT_ID)}};};
+  const tg=buildTelegram({pool,env:testEnv,getMarketPhase:()=>'OPEN',getCurrentResult:()=>limits.approvedOnly(current),dependencies:{api,now:()=>time,bootId:'b'}});
+  const stamped=ready=>{const r=decision(time,ready);r.decision.limitsToken=limits.token();return r;};
+  current=stamped(false);await tg.onSuccessfulPoll(current);time+=10000;
+  current=stamped(true);await tg.onSuccessfulPoll(current);   // READY queued while limits are current
+  limits.set(policy(450));                                     // owner tightens limits before delivery (no time passes,
+  await tg.tick();                                             // so only the limits guard can stop this send)
+  assert.equal(sends.filter(m=>m==='sendMessage').length,0,'Telegram does not deliver a READY whose limits changed while queued');
+  // Control: with fresh limits the same flow delivers.
+  time+=61000;await limits.refresh();current=stamped(false);await tg.onSuccessfulPoll(current);time+=10000;current=stamped(true);await tg.onSuccessfulPoll(current);await tg.tick();
+  assert.equal(sends.filter(m=>m==='sendMessage').length,1,'control: a READY under current limits is delivered');
+ }
+ // --- 6. Push: a READY paused in the subscription lookup is not sent after a tighter save (real manager, fake pool). ---
+ {
+  const {buildWebPush}=require('../notifications/edgeWebPush');
+  let state=null,gate=null,release=null;const sends=[];
+  const client={async query(sql,params){if(['BEGIN','COMMIT','ROLLBACK'].includes(sql))return {rows:[]};
+   if(sql.includes('INSERT INTO edge_push_state')){if(!state)state=JSON.parse(params[0]);return {rows:[],rowCount:1};}
+   if(sql.includes('SELECT payload FROM edge_push_state'))return {rows:[{payload:state}],rowCount:1};
+   if(sql.includes('UPDATE edge_push_state')){state=JSON.parse(params[0]);return {rows:[],rowCount:1};}throw Error(sql);},release(){}};
+  const fakePool={async query(sql){if(sql.includes('CREATE TABLE'))return {rows:[]};
+   if(sql.includes('SELECT endpoint_hash, subscription FROM edge_push_subscriptions')){if(gate)await gate;return {rows:[{endpoint_hash:'h',subscription:{endpoint:'https://push.example/x',keys:{}}}]};}throw Error(sql);},
+   async connect(){return client;}};
+  const limits=createOwnerLimits({read:async()=>({policy:policy(660)})});await limits.refresh();
+  const env={EDGE_PUSH_VAPID_PUBLIC_KEY:'A'.repeat(87),EDGE_PUSH_VAPID_PRIVATE_KEY:'B'.repeat(43),EDGE_PUSH_VAPID_SUBJECT:'mailto:edge@example.com',
+   EDGE_PUSH_OWNER_TOKEN:'z'.repeat(32),EDGE_PUSH_DATABASE_URL:'postgresql://localhost/fake',EDGE_PUSH_AUTO_ALERTS:'true'};
+  const push=buildWebPush(env,{pool:fakePool,sender:{setVapidDetails(){},async sendNotification(_s,payload){sends.push(JSON.parse(payload).type);return {statusCode:201};}},
+   stillApproved:r=>limits.servable(r)});
+  assert.equal(await push.initialize(),true);
+  const result=status=>({timestamp:new Date().toISOString(),market:{phase:'OPEN'},decision:{orchestration:{status,executionAllowed:status==='READY_TO_EXECUTE'},
+   strategy:'LONG_CALL',signalTier:{tier:'A'},tradeLegs:{buyLeg:{contractId:'NIFTY TEST CE'}},limitsToken:limits.token()}});
+  await push.onSuccessfulPoll(result('WAIT_FOR_TRIGGER'));     // baseline after start
+  gate=new Promise(r=>{release=r;});
+  const pending=push.onSuccessfulPoll(result('READY_TO_EXECUTE'));
+  await new Promise(r=>setTimeout(r,20));                       // paused in the subscription lookup
+  limits.set(policy(450));                                      // owner saves a tighter limit
+  release();await pending;
+  assert.ok(!sends.includes('EXECUTION_READY'),'push does not deliver a READY whose limits changed while it was queued');
+  // Control: a READY under current limits is delivered.
+  gate=null;await push.onSuccessfulPoll(result('WAIT_FOR_TRIGGER'));await push.onSuccessfulPoll(result('READY_TO_EXECUTE'));
+  assert.ok(sends.includes('EXECUTION_READY'),'control: delivered under current limits');
+ }
+ // --- 7. An impossible protective stop: the signal refuses, as the executor does. ---
+ {
+  const r=plannedLongRisk({ask:2.05,stop:0.05,lotSize:65,costReserve:100});assert.equal(r.stopLimit,0);
+  const sized=buildPositionPlan({strategy:'LONG_CALL',tradeLegs:{lotSize:65,buyLeg:{ask:2.05,bid:2}},risk:{status:'READY',entryPremium:2.05,stop:{value:0.05},maxLossPoints:2},marketPhase:'OPEN',
+   budget:{...budget({trades:[],confirmedDay:budget({trades:[]},new Date()).day},new Date(),{capital:10000,daily:700,perTrade:660,costReserve:100,source:'SANDBOX_POLICY'}),checkedAt:new Date().toISOString()}});
+  assert.equal(sized.status,'BLOCKED');assert.match(sized.reason,/stop-limit/);
+ }
+ // --- 8. Every read of the current result in server.js goes through the guard (fails if a new outlet forgets). ---
+ {
+  const lines=require('node:fs').readFileSync(require('node:path').join(__dirname,'..','server.js'),'utf8').split('\n');
+  // Judge each occurrence: assignments are removed first, so a line that also clears lastResult is still checked.
+  const strip=l=>l.replace(/\blastResult\s*=\s*(null|result)\b/g,'').replace(/^\s*let lastResult\b.*/,'');
+  const reads=lines.map((l,i)=>({l:strip(l),i})).filter(({l})=>/\blastResult\b/.test(l));
+  const allowed=[/approvedOnly\(lastResult\)/,/servable\(lastResult\)/,/dashboardAvailability\(/,/phase === 'CLOSED' && lastResult !== null/,
+   /orchestration\?\.status === 'READY_TO_EXECUTE' && !ledger\.snapshot\(\)\.confirmed/];
+  for(const {l,i} of reads){
+   if(allowed.some(re=>re.test(l)))continue;
+   // A direct use is allowed only right after a servable() guard on the previous code line.
+   const prev=lines.slice(0,i).reverse().find(x=>x.trim()&&!x.trim().startsWith('//'));
+   assert.ok(/servable\(lastResult\)\) return res\.status\(503\)/.test(prev||''),'unguarded read of lastResult at server.js:'+(i+1)+': '+l.trim());
+  }
+ }
+ console.log('Limits guards PASS: superseded reads discarded, failed reads stop approvals, READY served/published only under current fresh limits, signal and real executor agree on stop rounding, queued Telegram and push READY revalidated, impossible stops refused, every server outlet guarded');
 })().catch(e=>{console.error(e);process.exit(1);});

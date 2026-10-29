@@ -57,7 +57,10 @@ function createOwnerLimits({ read, now = Date.now, maxAgeMs = 60000, onChange = 
     if (result?.decision?.orchestration?.status !== 'READY_TO_EXECUTE') return true;
     return valid(result.decision.limitsToken);
   }
-  return { refresh, set, get, token, valid, servable,
+  // The result as any outlet may use it: unchanged unless it is a READY whose limits stamp is no longer valid,
+  // in which case there is no current approval at all.
+  function approvedOnly(result) { return result && servable(result) ? result : null; }
+  return { refresh, set, get, token, valid, servable, approvedOnly,
     status: () => ({ loaded: !!current, fresh: !!get(), loadedAt: loadedAt ? new Date(loadedAt).toISOString() : null, error, version: current?.version || null, generation }) };
 }
 module.exports = { createOwnerLimits, limitsFromPolicy };
