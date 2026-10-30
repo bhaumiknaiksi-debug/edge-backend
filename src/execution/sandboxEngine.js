@@ -300,6 +300,17 @@ function finish(s,action,result){
     if(o.state==='UNCERTAIN')halt(s,'SUBMIT_RECONCILIATION_REQUIRED');
   }
 }
+// One-time switch to the paper broker. Orders sent to the Upstox sandbox can never fill or be reconciled (that
+// sandbox only simulates order responses), so unfilled working ones are closed out as cancelled, which lets the
+// account flatten. Anything reporting a fill is left alone and keeps the normal halt path. Runs once per state.
+function adoptPaperBroker(s,now){
+  assertState(s);if(s.broker==='PAPER')return 0;let retired=0;
+  for(const o of Object.values(s.orders)){
+    if(terminal(o)||o.filled>0||o.state==='QUEUED')continue;
+    o.state='CANCELLED';o.cancelState=null;o.wantCancel=false;o.retired={at:now,reason:'UPSTOX_SANDBOX_NEVER_FILLS'};retired++;
+  }
+  s.broker='PAPER';return retired;
+}
 function claimEmergencyCancel(s,now){
   assertState(s);if(!s.killed&&!s.haltReason)return null; // STOP or any error halt: unfilled entries must not stay live
   for(const o of Object.values(s.orders))if(o.kind==='ENTRY'&&o.orderId&&working(o)&&(o.cancelAttempts||0)<3&&
@@ -309,4 +320,4 @@ function claimEmergencyCancel(s,now){
   }
   return null;
 }
-module.exports={initialState,assertState,control,configurePolicy,resolveTrade,requestModelExit,archiveClosed,losingStreak,selectCandidate,expiryBucket,recover,planEntry,reconcile,manage,claim,finish,claimEmergencyCancel,quantities,terminal,halt,day};
+module.exports={initialState,assertState,control,configurePolicy,resolveTrade,requestModelExit,archiveClosed,losingStreak,selectCandidate,expiryBucket,recover,planEntry,reconcile,manage,claim,finish,claimEmergencyCancel,adoptPaperBroker,quantities,terminal,halt,day};
