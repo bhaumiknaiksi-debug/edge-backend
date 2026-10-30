@@ -165,5 +165,26 @@ const order=(o={})=>({instrumentKey:KEY,quantity:65,price:100,side:'BUY',tag:'ed
     const st=await store3.read();assert.equal(st.broker,'PAPER');assert.ok(Object.values(st.trades).every(t=>t.closedAt));
     await store3.mutate(s=>control(s,'ARM','roundtrip-arm-req-02',r3.time()));assert.equal((await store3.read()).armed,true,'re-arms after PAPER -> UPSTOX_SANDBOX -> PAPER');
   }
+  // Lost acknowledgement + broker round trip (review of 148dc1a): the paper book has the order but EDGE has no id.
+  // The broker recorded at submission keeps it from being retired; it is then found by tag and its fill is booked.
+  {
+    const r4=rig(),store4=memoryStore();let loseAck=false;
+    const lossy={...r4.broker,async placeOrder(o){const res=await r4.broker.placeOrder(o);if(loseAck){loseAck=false;store4.failNext();}return res;}};
+    const mk=(kind,bootId,broker)=>createSandboxService({ownerToken:'owner-token-for-paper-test',getContext:()=>({analysis:{...result(),timestamp:new Date(r4.time()).toISOString()}}),
+      env:{EDGE_SANDBOX_EXECUTION_ENABLED:'true',...(kind?{EDGE_SANDBOX_BROKER:kind}:{})},dependencies:{store:store4,broker,quotes:r4.quotes,catalog,now:r4.time,bootId,idleTickMs:0}});
+    const first=mk(null,'l1',lossy);await first.tick();
+    await store4.mutate(s=>control(s,'ARM','lost-ack-paper-arm-1',r4.time()));loseAck=true;await first.tick();
+    assert.equal(r4.book.peek().orders.length,1,'the paper book committed the order');
+    let entry=Object.values((await store4.read()).orders)[0];assert.equal(entry.orderId,null,'EDGE lost the acknowledgement');assert.equal(entry.broker,'PAPER');
+    const fake={async getOrders(){return [];},async getPositions(){return [];},async placeOrder(){return {state:'ACKNOWLEDGED',orderId:'250930000777'};},async cancel(id){return {state:'ACKNOWLEDGED',orderId:id};}};
+    r4.advance(31000);await mk('UPSTOX_SANDBOX','l2',fake).tick();
+    r4.advance(31000);const back=mk(null,'l3',r4.broker);await back.tick();
+    entry=Object.values((await store4.read()).orders)[0];
+    assert.notEqual(entry.state,'CANCELLED','a paper order with a lost ACK is not retired by the switch');assert.equal(entry.retired,undefined);
+    r4.set({bid:99.9,ask:99.95});r4.advance();await back.tick();
+    const st=await store4.read();entry=Object.values(st.orders).find(o=>o.kind==='ENTRY');
+    assert.equal(entry.filled,65,'the fill is found by tag and booked');assert.match(entry.orderId,/^paper-/);
+    assert.notEqual(st.haltReason,'BROKER_STATUS_REGRESSION');
+  }
   console.log('Paper broker switch PASS: stuck Upstox-sandbox order retired once, account re-arms');
 })().catch(e=>{console.error(e);process.exit(1);});
