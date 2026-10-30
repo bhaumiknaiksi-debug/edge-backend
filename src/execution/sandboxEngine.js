@@ -300,16 +300,19 @@ function finish(s,action,result){
     if(o.state==='UNCERTAIN')halt(s,'SUBMIT_RECONCILIATION_REQUIRED');
   }
 }
-// One-time switch to the paper broker. Orders sent to the Upstox sandbox can never fill or be reconciled (that
-// sandbox only simulates order responses), so unfilled working ones are closed out as cancelled, which lets the
-// account flatten. Anything reporting a fill is left alone and keeps the normal halt path. Runs once per state.
-function adoptPaperBroker(s,now){
-  assertState(s);if(s.broker==='PAPER')return 0;let retired=0;
-  for(const o of Object.values(s.orders)){
-    if(terminal(o)||o.filled>0||o.state==='QUEUED')continue;
+// Records which broker the state's orders go to. On every switch INTO the paper broker, working orders that were
+// sent to the Upstox sandbox (which only simulates responses, so they can never fill or be reconciled) are closed
+// out as cancelled so the account can flatten. Paper orders (paper- ids) are always preserved, so a round trip
+// PAPER -> UPSTOX_SANDBOX -> PAPER keeps them. Every non-queued order without a paper id existing at the moment of
+// a switch was submitted to the previous broker. Anything reporting a fill keeps the normal halt path.
+function adoptBroker(s,kind,now){
+  assertState(s);if(!['PAPER','UPSTOX_SANDBOX'].includes(kind))throw Error('INVALID_BROKER');
+  if(s.broker===kind)return 0;let retired=0;
+  if(kind==='PAPER')for(const o of Object.values(s.orders)){
+    if(terminal(o)||o.filled>0||o.state==='QUEUED'||(typeof o.orderId==='string'&&o.orderId.startsWith('paper-')))continue;
     o.state='CANCELLED';o.cancelState=null;o.wantCancel=false;o.retired={at:now,reason:'UPSTOX_SANDBOX_NEVER_FILLS'};retired++;
   }
-  s.broker='PAPER';return retired;
+  s.broker=kind;return retired;
 }
 function claimEmergencyCancel(s,now){
   assertState(s);if(!s.killed&&!s.haltReason)return null; // STOP or any error halt: unfilled entries must not stay live
@@ -320,4 +323,4 @@ function claimEmergencyCancel(s,now){
   }
   return null;
 }
-module.exports={initialState,assertState,control,configurePolicy,resolveTrade,requestModelExit,archiveClosed,losingStreak,selectCandidate,expiryBucket,recover,planEntry,reconcile,manage,claim,finish,claimEmergencyCancel,adoptPaperBroker,quantities,terminal,halt,day};
+module.exports={initialState,assertState,control,configurePolicy,resolveTrade,requestModelExit,archiveClosed,losingStreak,selectCandidate,expiryBucket,recover,planEntry,reconcile,manage,claim,finish,claimEmergencyCancel,adoptBroker,quantities,terminal,halt,day};

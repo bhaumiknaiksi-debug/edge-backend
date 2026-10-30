@@ -94,7 +94,7 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
       const time=now();
       const lease=await store.mutate(s=>{
         if(s.lease&&s.lease.owner!==bootId&&s.lease.until>time)return false;
-        engine.recover(s,bootId);if(brokerKind==='PAPER')engine.adoptPaperBroker(s,time);s.lease={owner:bootId,until:time+30000};return true;
+        engine.recover(s,bootId);engine.adoptBroker(s,brokerKind,time);s.lease={owner:bootId,until:time+30000};return true;
       });
       if(!lease.result){lastError='ANOTHER_WORKER_ACTIVE';return publicStatus();}
       const analysis=context().analysis,selected=engine.selectCandidate(lease.state.policy,analysis);

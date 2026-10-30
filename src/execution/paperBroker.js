@@ -45,9 +45,11 @@ function memoryBook(){
 //  BUY LIMIT  fills when ask <= limit, at the ask.
 //  SELL LIMIT fills when bid >= limit, at the bid.
 //  SELL SL    triggers when bid <= trigger, then fills like a SELL LIMIT; a gap below its limit leaves it open.
-// Only during 09:15-15:30 IST and only on a fresh quote (<=10s), so a stale or missing quote never fills anything.
+// Only during 09:15-15:30 IST and only on a quote whose EXCHANGE timestamp is at most 10s old at the moment of the
+// fill (checked here, not only when fetched), so a stale or missing quote never fills anything.
+const inSession=t=>{const m=minutes(t);return m>=555&&m<930;};
 function fill(order,quote,now){
-  if(!quote||!(quote.bid>0)||!(quote.ask>=quote.bid)||!Number.isFinite(quote.receivedAt)||quote.receivedAt>now||now-quote.receivedAt>10000)return;
+  if(!quote||!(quote.bid>0)||!(quote.ask>=quote.bid)||!Number.isFinite(quote.exchangeAt)||quote.exchangeAt>now+1000||now-quote.exchangeAt>10000)return;
   if(order.status==='trigger pending'){if(quote.bid<=order.trigger_price)order.status='open';else return;}
   if(order.status!=='open')return;
   const at=order.transaction_type==='BUY'?(quote.ask<=order.price?quote.ask:null):(quote.bid>=order.price?quote.bid:null);
@@ -66,10 +68,12 @@ function createPaperBroker({pool,quotes,now=Date.now,book}={}){
       !['BUY','SELL'].includes(side)||typeof tag!=='string'||!/^[A-Za-z0-9_-]{1,40}$/.test(tag)||
       !['LIMIT','SL'].includes(orderType)||(orderType==='SL'&&(side!=='SELL'||!Number.isFinite(trigger)||trigger<=price))||
       (orderType==='LIMIT'&&trigger!==0))throw Error('INVALID_SANDBOX_ORDER');
-    const time=now(),mins=minutes(time);
-    if(mins<555||mins>=930)return {state:'REJECTED',reason:'PAPER_MARKET_CLOSED',tag};
+    if(!inSession(now()))return {state:'REJECTED',reason:'PAPER_MARKET_CLOSED',tag};
     try{
       return await storage.mutate(b=>{
+        // Re-checked inside the write: storage can be slow, and the session may have closed meanwhile.
+        const time=now();
+        if(!inSession(time))return {state:'REJECTED',reason:'PAPER_MARKET_CLOSED',tag};
         // A tag is unique per EDGE order; a retried placement returns the existing order instead of a duplicate.
         const existing=b.orders.find(o=>o.tag===tag&&o.day===day(time));
         if(existing)return {state:'ACKNOWLEDGED',orderId:existing.order_id,tag};
@@ -97,17 +101,18 @@ function createPaperBroker({pool,quotes,now=Date.now,book}={}){
   let inflight=Promise.resolve();
   function getOrders(){const run=readBook();inflight=run.catch(()=>{});return run;}
   async function readBook(){
-    const time=now(),today=day(time),mins=minutes(time);
+    const time=now(),today=day(time);
     let snapshot;
     try{snapshot=(await storage.read()).orders.filter(o=>visible(o,today)&&WORKING.includes(o.status)).map(o=>o.instrument_token);}
     catch(_){const e=Error('SANDBOX_READ_UNAVAILABLE');e.httpStatus=null;throw e;}
     let live={};
     const keys=[...new Set(snapshot)].slice(0,10);
-    if(keys.length&&mins>=555&&mins<930)live=await quotes.get(keys).catch(()=>({}));
+    if(keys.length&&inSession(time))live=await quotes.get(keys).catch(()=>({}));
     try{
       if(!Object.keys(live).length)return (await storage.read()).orders.filter(o=>visible(o,today)).map(row);
       return await storage.mutate(b=>{
-        const at=now();
+        // Re-checked inside the write: a slow quote read must not fill after the close or on another day.
+        const at=now();if(day(at)!==today||!inSession(at))return b.orders.filter(o=>visible(o,today)).map(row);
         for(const o of b.orders)if(visible(o,today)&&WORKING.includes(o.status))fill(o,live[o.instrument_token],at);
         return b.orders.filter(o=>visible(o,today)).map(row);
       });

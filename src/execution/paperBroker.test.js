@@ -8,11 +8,14 @@ const KEY='NSE_FO|12345';
 const BASE=Date.parse('2026-10-30T10:00:00+05:30');
 
 function rig(start=BASE){
-  let now=start,quote={bid:99.95,ask:100},quoteUp=true;
-  const quotes={async get(keys){if(!quoteUp)throw Error('down');return keys.includes(KEY)?{[KEY]:{instrumentKey:KEY,...quote,receivedAt:now}}:{};}};
-  const book=memoryBook();
+  let now=start,quote={bid:99.95,ask:100},quoteUp=true,age=0,beforeWrite=null;
+  const quotes={async get(keys){if(!quoteUp)throw Error('down');return keys.includes(KEY)?{[KEY]:{instrumentKey:KEY,...quote,receivedAt:now,exchangeAt:now-age}}:{};}};
+  // Storage that can be slowed down: beforeWrite runs (and may move the clock) before each write is applied.
+  const inner=memoryBook();
+  const book={read:()=>inner.read(),peek:()=>inner.peek(),async mutate(fn){if(beforeWrite){const f=beforeWrite;beforeWrite=null;await f();}return inner.mutate(fn);}};
   const broker=createPaperBroker({quotes,book,now:()=>now});
-  return {broker,book,quotes,advance(n=2000){now+=n;},set(q){quote={...quote,...q};},down(){quoteUp=false;},up(){quoteUp=true;},time:()=>now,setTime(t){now=t;}};
+  return {broker,book,quotes,advance(n=2000){now+=n;},set(q){quote={...quote,...q};},down(){quoteUp=false;},up(){quoteUp=true;},time:()=>now,setTime(t){now=t;},
+    quoteAge(ms){age=ms;},delayNextWrite(ms){beforeWrite=async()=>{now+=ms;};}};
 }
 const order=(o={})=>({instrumentKey:KEY,quantity:65,price:100,side:'BUY',tag:'edgesb_t1',orderType:'LIMIT',trigger:0,...o});
 
@@ -50,7 +53,7 @@ const order=(o={})=>({instrumentKey:KEY,quantity:65,price:100,side:'BUY',tag:'ed
     const r=rig();const ack=await r.broker.placeOrder(order({price:101}));
     r.down();let [row]=await r.broker.getOrders();assert.equal(row.status,'open','no quote, no fill; the read still succeeds');
     r.up();
-    const stale={async get(){return {[KEY]:{instrumentKey:KEY,bid:99,ask:99.5,receivedAt:r.time()-11000}};}};
+    const stale={async get(){return {[KEY]:{instrumentKey:KEY,bid:99,ask:99.5,receivedAt:r.time(),exchangeAt:r.time()-11000}};}};
     const staleBroker=createPaperBroker({quotes:stale,book:r.book,now:r.time});
     [row]=await staleBroker.getOrders();assert.equal(row.status,'open','a stale quote never fills');
     assert.equal((await r.broker.cancel(ack.orderId)).state,'ACKNOWLEDGED');
@@ -67,7 +70,28 @@ const order=(o={})=>({instrumentKey:KEY,quantity:65,price:100,side:'BUY',tag:'ed
     assert.deepEqual(await r.broker.getPositions(),[]);
     await assert.rejects(()=>r.broker.placeOrder(order({price:-1})),/INVALID_SANDBOX_ORDER/);
   }
-  console.log('Paper broker fill rules PASS');
+  // Review regressions (PR #82): session and freshness are re-checked at the moment of the write.
+  {
+    const r=rig(Date.parse('2026-10-30T15:29:59+05:30'));
+    await r.broker.placeOrder(order({price:101}));
+    r.delayNextWrite(2000); // the quote read started 15:29:59; the fill write lands at 15:30:01
+    let [row]=await r.broker.getOrders();
+    assert.equal(row.status,'open','a read that started before the close must not fill after it');assert.equal(row.filled_quantity,0);
+  }
+  {
+    const r=rig(Date.parse('2026-10-30T15:29:59+05:30'));
+    r.delayNextWrite(2000);
+    const ack=await r.broker.placeOrder(order());
+    assert.equal(ack.state,'REJECTED','a placement delayed past the close is rejected, not acknowledged');assert.equal(r.book.peek().orders.length,0);
+  }
+  {
+    const r=rig();await r.broker.placeOrder(order({price:101}));
+    r.quoteAge(9000);r.delayNextWrite(2000); // 9s old when fetched, 11s old when the fill would be written
+    let [row]=await r.broker.getOrders();
+    assert.equal(row.status,'open','the exchange timestamp is re-checked at fill time');
+    r.quoteAge(9000);[row]=await r.broker.getOrders();assert.equal(row.status,'complete','a 9s-old quote still fills');
+  }
+  console.log('Paper broker fill rules PASS (incl. close-time and freshness re-checks)');
 
   // --- End to end through the sandbox service: entry, protective stop, target exit, P&L ---
   const result=()=>({timestamp:new Date(r.time()).toISOString(),expiry:'2026-11-03',market:{phase:'OPEN'},decision:{strategy:'LONG_CALL',
@@ -115,9 +139,31 @@ const order=(o={})=>({instrumentKey:KEY,quantity:65,price:100,side:'BUY',tag:'ed
     assert.ok(st.trades.old.closedAt);assert.equal(st.trades.old.buys,0);assert.equal(st.broker,'PAPER');
     await store2.mutate(s=>control(s,'ARM','switch-arm-request-01',r2.time()));
     st=await store2.read();assert.equal(st.armed,true);assert.equal(st.haltReason,null,'re-arming clears the old halt');
-    // The switch runs once: a later unfilled paper order is never retired by it.
-    st.orders.o2={...st.orders.o1,id:'o2',state:'ACKNOWLEDGED',orderId:'paper-x'};delete st.orders.o2.retired;
-    const engine=require('./sandboxEngine');assert.equal(engine.adoptPaperBroker(st,r2.time()),0);
+    // Round trip PAPER -> UPSTOX_SANDBOX -> PAPER: the Upstox order is retired, the paper order is preserved.
+    const engine=require('./sandboxEngine');
+    const paperOrder={...st.orders.o1,id:'o2',state:'ACKNOWLEDGED',orderId:'paper-x',cancelState:null};delete paperOrder.retired;
+    st.orders.o2=paperOrder;
+    assert.equal(engine.adoptBroker(st,'PAPER',r2.time()),0,'staying on PAPER retires nothing');
+    assert.equal(engine.adoptBroker(st,'UPSTOX_SANDBOX',r2.time()),0);assert.equal(st.broker,'UPSTOX_SANDBOX');
+    st.orders.o3={...paperOrder,id:'o3',orderId:'250930000999'};
+    st.orders.o4={...paperOrder,id:'o4',orderId:null,state:'UNCERTAIN'};
+    assert.equal(engine.adoptBroker(st,'PAPER',r2.time()),2);
+    assert.equal(st.orders.o2.state,'ACKNOWLEDGED','paper orders survive the round trip');
+    assert.equal(st.orders.o3.state,'CANCELLED');assert.equal(st.orders.o4.state,'CANCELLED');assert.equal(st.broker,'PAPER');
+  }
+  // Same round trip through the service: Upstox-sandbox mode leaves a stuck order, PAPER clears it and re-arms.
+  {
+    const r3=rig(),store3=memoryStore(),mk=(kind,bootId,broker)=>createSandboxService({ownerToken:'owner-token-for-paper-test',getContext:()=>({analysis:result()}),
+      env:{EDGE_SANDBOX_EXECUTION_ENABLED:'true',...(kind?{EDGE_SANDBOX_BROKER:kind}:{})},dependencies:{store:store3,broker,quotes:r3.quotes,catalog,now:r3.time,bootId,idleTickMs:0}});
+    await mk(null,'b1',r3.broker).tick();assert.equal((await store3.read()).broker,'PAPER');
+    const fake={async getOrders(){return [];},async getPositions(){return [];},async placeOrder(){return {state:'ACKNOWLEDGED',orderId:'250930000555'};},async cancel(id){return {state:'ACKNOWLEDGED',orderId:id};}};
+    r3.advance(31000);const up=mk('UPSTOX_SANDBOX','b2',fake);await up.tick();assert.equal((await store3.read()).broker,'UPSTOX_SANDBOX');
+    await store3.mutate(s=>control(s,'ARM','roundtrip-arm-req-01',r3.time()));await up.tick();
+    assert.ok(Object.values((await store3.read()).orders).some(o=>o.orderId==='250930000555'),'an order went to the Upstox sandbox');
+    r3.advance();await up.tick(); // the order is missing from its book: halt, as on 30 Oct
+    r3.advance(31000);const back=mk(null,'b3',r3.broker);await back.tick();
+    const st=await store3.read();assert.equal(st.broker,'PAPER');assert.ok(Object.values(st.trades).every(t=>t.closedAt));
+    await store3.mutate(s=>control(s,'ARM','roundtrip-arm-req-02',r3.time()));assert.equal((await store3.read()).armed,true,'re-arms after PAPER -> UPSTOX_SANDBOX -> PAPER');
   }
   console.log('Paper broker switch PASS: stuck Upstox-sandbox order retired once, account re-arms');
 })().catch(e=>{console.error(e);process.exit(1);});
