@@ -5,6 +5,7 @@ const path=require('node:path');
 const engine=require('./sandboxEngine');
 const {createSandboxStore}=require('./sandboxStore');
 const {createSandbox}=require('./upstoxSandbox');
+const {createPaperBroker,FILL_MODEL}=require('./paperBroker');
 const {createCatalog}=require('./instrumentCatalog');
 const {createMarketQuotes}=require('./marketQuotes');
 const {timingSafeOwnerToken}=require('../notifications/edgeWebPush');
@@ -13,14 +14,17 @@ const {rejectOwner}=require('../health/authThrottle');
 function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.env,dependencies={},notify=()=>{}}){
   const enabled=env.EDGE_SANDBOX_EXECUTION_ENABLED==='true';
   const tokenValid=t=>typeof t==='string'&&!!t.trim()&&!/[\r\n]/.test(t);
+  // PAPER (default): EDGE fills its own orders against live quotes. UPSTOX_SANDBOX only simulates order responses
+  // and never fills, so it is kept only as an explicit opt-in for testing the order API itself.
+  const brokerKind=env.EDGE_SANDBOX_BROKER==='UPSTOX_SANDBOX'?'UPSTOX_SANDBOX':'PAPER';
   const reason=!enabled?'DISABLED':!ownerToken?'OWNER_AUTH_REQUIRED':!pool&&!dependencies.store?'DATABASE_REQUIRED':
-    !tokenValid(env.EDGE_UPSTOX_SANDBOX_TOKEN)&&!dependencies.broker?'SANDBOX_TOKEN_REQUIRED':
+    brokerKind==='UPSTOX_SANDBOX'&&!tokenValid(env.EDGE_UPSTOX_SANDBOX_TOKEN)&&!dependencies.broker?'SANDBOX_TOKEN_REQUIRED':
     !tokenValid(env.UPSTOX_ACCESS_TOKEN)&&!dependencies.quotes?'MARKET_DATA_TOKEN_REQUIRED':null;
   const now=dependencies.now||Date.now,bootId=dependencies.bootId||randomUUID();
   const store=reason?null:dependencies.store||createSandboxStore({pool});
-  const broker=reason?null:dependencies.broker||createSandbox({token:env.EDGE_UPSTOX_SANDBOX_TOKEN});
   const catalog=reason?null:dependencies.catalog||createCatalog({now});
   const quoteSource=reason?null:dependencies.quotes||createMarketQuotes({token:env.UPSTOX_ACCESS_TOKEN,now});
+  const broker=reason?null:dependencies.broker||(brokerKind==='PAPER'?createPaperBroker({pool,quotes:quoteSource,now}):createSandbox({token:env.EDGE_UPSTOX_SANDBOX_TOKEN}));
   // Optional Claude decision step. Without a key the CLAUDE_DECIDES_V1 mode simply never finds a decision.
   let advisor=null,advisorConfigError=null;
   if(!reason)try{advisor=dependencies.advisor||(tokenValid(env.ANTHROPIC_API_KEY)?createClaudeAdvisor({apiKey:env.ANTHROPIC_API_KEY,model:env.EDGE_CLAUDE_MODEL||undefined,now}):null);}
@@ -43,7 +47,7 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
   let readFailingSince=null,lastReadFailure=null,lastCompletedAt=null,positionsMissingUntil=0;
   const iso=t=>t===null?null:new Date(t).toISOString();
   const flat=s=>!Object.values(s.orders||{}).some(o=>!engine.terminal(o))&&!Object.values(s.trades||{}).some(t=>!t.closedAt);
-  const publicStatus=()=>({version:'EDGE_SANDBOX_EXECUTION_V1',enabled,mode:'SANDBOX',liveOrdersSupported:false,
+  const publicStatus=()=>({version:'EDGE_SANDBOX_EXECUTION_V1',enabled,mode:'SANDBOX',broker:brokerKind,fillModel:brokerKind==='PAPER'?FILL_MODEL:'UPSTOX_SANDBOX_SIMULATED_RESPONSES',liveOrdersSupported:false,
     liveDecisionImpact:false,configured:!reason,reason:lastError,lastTickAt,lastEntryResult,brokerReads,positionBasis,tickCount,lastTickStartedAt,lastErrorAt,
     readFailingSince:iso(readFailingSince),lastReadFailure,readGraceSeconds:readGraceMs/1000,advisorConfigured:!!advisor});
   const clean=e=>/^[A-Z_]{3,80}$/.test(e?.message||'')?e.message:'SANDBOX_SERVICE_UNAVAILABLE';
@@ -90,7 +94,7 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
       const time=now();
       const lease=await store.mutate(s=>{
         if(s.lease&&s.lease.owner!==bootId&&s.lease.until>time)return false;
-        engine.recover(s,bootId);s.lease={owner:bootId,until:time+30000};return true;
+        engine.recover(s,bootId);engine.adoptBroker(s,brokerKind,time);s.lease={owner:bootId,until:time+30000};return true;
       });
       if(!lease.result){lastError='ANOTHER_WORKER_ACTIVE';return publicStatus();}
       const analysis=context().analysis,selected=engine.selectCandidate(lease.state.policy,analysis);

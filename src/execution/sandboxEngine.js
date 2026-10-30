@@ -283,7 +283,8 @@ function claim(s,now,currentAllowed=true){
   for(const o of Object.values(s.orders).filter(o=>o.state==='QUEUED').sort((a,b)=>priority[a.kind]-priority[b.kind])){
     if(o.kind==='ENTRY'&&(!currentAllowed||!s.armed||s.killed||s.haltReason||minutes(now)<570||minutes(now)>=900||now>=s.trades[o.tradeId].entryExpiresAt)){o.state='EXPIRED';continue;}
     if(s.haltReason&&o.kind==='ENTRY')continue;
-    o.state='SUBMITTING';o.submittedAt=now;return {action:'PLACE',order:clone(o)};
+    o.state='SUBMITTING';o.submittedAt=now;if(s.broker)o.broker=s.broker; // recorded before submission: survives a lost ACK
+    return {action:'PLACE',order:clone(o)};
   }
   return null;
 }
@@ -300,6 +301,21 @@ function finish(s,action,result){
     if(o.state==='UNCERTAIN')halt(s,'SUBMIT_RECONCILIATION_REQUIRED');
   }
 }
+// Records which broker the state's orders go to. On every switch INTO the paper broker, working orders that were
+// sent to the Upstox sandbox (which only simulates responses, so they can never fill or be reconciled) are closed
+// out as cancelled so the account can flatten. Paper orders (paper- ids) are always preserved, so a round trip
+// PAPER -> UPSTOX_SANDBOX -> PAPER keeps them. Anything reporting a fill keeps the normal halt path.
+function adoptBroker(s,kind,now){
+  assertState(s);if(!['PAPER','UPSTOX_SANDBOX'].includes(kind))throw Error('INVALID_BROKER');
+  if(s.broker===kind)return 0;let retired=0;
+  if(kind==='PAPER')for(const o of Object.values(s.orders)){
+    // A paper order is kept whether known by its paper- id or, after a lost acknowledgement (no id), by the broker
+    // recorded at submission; it is then found by its tag on the next read. Unstamped orders predate paper mode.
+    if(terminal(o)||o.filled>0||o.state==='QUEUED'||o.broker==='PAPER'||(typeof o.orderId==='string'&&o.orderId.startsWith('paper-')))continue;
+    o.state='CANCELLED';o.cancelState=null;o.wantCancel=false;o.retired={at:now,reason:'UPSTOX_SANDBOX_NEVER_FILLS'};retired++;
+  }
+  s.broker=kind;return retired;
+}
 function claimEmergencyCancel(s,now){
   assertState(s);if(!s.killed&&!s.haltReason)return null; // STOP or any error halt: unfilled entries must not stay live
   for(const o of Object.values(s.orders))if(o.kind==='ENTRY'&&o.orderId&&working(o)&&(o.cancelAttempts||0)<3&&
@@ -309,4 +325,4 @@ function claimEmergencyCancel(s,now){
   }
   return null;
 }
-module.exports={initialState,assertState,control,configurePolicy,resolveTrade,requestModelExit,archiveClosed,losingStreak,selectCandidate,expiryBucket,recover,planEntry,reconcile,manage,claim,finish,claimEmergencyCancel,quantities,terminal,halt,day};
+module.exports={initialState,assertState,control,configurePolicy,resolveTrade,requestModelExit,archiveClosed,losingStreak,selectCandidate,expiryBucket,recover,planEntry,reconcile,manage,claim,finish,claimEmergencyCancel,adoptBroker,quantities,terminal,halt,day};

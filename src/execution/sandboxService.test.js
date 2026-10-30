@@ -27,9 +27,12 @@ function setup(shared){
 (async()=>{
  const disabled=createSandboxService({env:{UPSTOX_ACCESS_TOKEN:'not-a-sandbox-token'},getContext:()=>{throw Error('must not run');}});
  await disabled.tick();assert.equal(disabled.status().reason,'DISABLED');
- const missing=createSandboxService({pool:{},ownerToken:OWNER,env:{EDGE_SANDBOX_EXECUTION_ENABLED:'true',UPSTOX_ACCESS_TOKEN:'data-token'}});
+ const missing=createSandboxService({pool:{},ownerToken:OWNER,env:{EDGE_SANDBOX_EXECUTION_ENABLED:'true',EDGE_SANDBOX_BROKER:'UPSTOX_SANDBOX',UPSTOX_ACCESS_TOKEN:'data-token'}});
  assert.equal(missing.status().reason,'SANDBOX_TOKEN_REQUIRED','market data credentials never authorize sandbox orders');
- const malformed=createSandboxService({pool:{},ownerToken:OWNER,env:{EDGE_SANDBOX_EXECUTION_ENABLED:'true',EDGE_UPSTOX_SANDBOX_TOKEN:'bad\ntoken',UPSTOX_ACCESS_TOKEN:'data-token'}});
+ const paper=createSandboxService({pool:{},ownerToken:OWNER,env:{EDGE_SANDBOX_EXECUTION_ENABLED:'true',UPSTOX_ACCESS_TOKEN:'data-token'}});
+ assert.equal(paper.status().reason,null,'the default paper broker needs no Upstox sandbox token');
+ assert.equal(paper.status().broker,'PAPER');assert.equal(paper.status().fillModel,'PAPER_LIVE_QUOTES_V1');
+ const malformed=createSandboxService({pool:{},ownerToken:OWNER,env:{EDGE_SANDBOX_EXECUTION_ENABLED:'true',EDGE_SANDBOX_BROKER:'UPSTOX_SANDBOX',EDGE_UPSTOX_SANDBOX_TOKEN:'bad\ntoken',UPSTOX_ACCESS_TOKEN:'data-token'}});
  assert.equal(malformed.status().reason,'SANDBOX_TOKEN_REQUIRED','bad optional config must not crash the main backend');
  const f=setup(),app=express();app.use(express.json());f.service.routes(app);const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));
  const url='http://127.0.0.1:'+server.address().port+'/api/v1/execution/sandbox';
