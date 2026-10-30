@@ -5,6 +5,8 @@ CREATE TABLE IF NOT EXISTS edge_evidence_v1 (
   payload_gzip bytea NOT NULL
 );
 CREATE INDEX IF NOT EXISTS edge_evidence_v1_time ON edge_evidence_v1(recorded_at DESC);
+ALTER TABLE edge_evidence_v1 ADD COLUMN IF NOT EXISTS seq bigserial;
+CREATE INDEX IF NOT EXISTS edge_evidence_v1_seq ON edge_evidence_v1(seq);
 CREATE TABLE IF NOT EXISTS edge_trade_ledger_v1 (
   owner_id text PRIMARY KEY CHECK (owner_id = 'owner'),
   payload jsonb NOT NULL,
