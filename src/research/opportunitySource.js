@@ -34,7 +34,7 @@ function ensureSequence(pool){
  return sequenced.get(pool);
 }
 const byTime=(a,b)=>a.at<b.at?-1:a.at>b.at?1:a.key<b.key?-1:a.key>b.key?1:0;
-async function loadOpportunitySource(pool,previous=null){
+async function loadOpportunitySource(pool,previous=null,{onFetch=()=>{}}={}){
  if(!pool)throw Error('REPORT_DATABASE_REQUIRED');
  await ensureSequence(pool);
  const client=await pool.connect();
@@ -43,14 +43,16 @@ async function loadOpportunitySource(pool,previous=null){
   const count=await client.query('SELECT count(*)::int AS n FROM edge_evidence_v1 WHERE record_type = ANY($1::text[])',[TYPES]);
   const total=count.rows[0].n;if(total>50000)throw Error('REPORT_SOURCE_LIMIT');
   const cols='SELECT record_key,recorded_at,seq,payload_gzip FROM edge_evidence_v1 WHERE record_type = ANY($1::text[])';
-  const full=()=>client.query(cols+' ORDER BY seq LIMIT 50001',[TYPES]);
+  // Every completed payload download is reported at once, so transfer stays visible even if the load later fails.
+  const fetch=async(kind,sql,args)=>{const r=await client.query(sql,args);try{onFetch({kind,rows:r.rows.length,bytes:r.rows.reduce((a,x)=>a+(x.payload_gzip?.length||0),0)});}catch(_){}return r;};
+  const full=()=>fetch('FULL',cols+' ORDER BY seq LIMIT 50001',[TYPES]);
   const keysSql='SELECT record_key FROM edge_evidence_v1 WHERE record_type = ANY($1::text[])';
   let dropped=null;
   const prior=previous?.source?.cursor?.seq!==undefined&&Array.isArray(previous.entries)?previous.entries:null;
   let incremental=!!prior,mode=incremental?'INCREMENTAL':'FULL',evidence;
   if(incremental){
    const after=previous.source.cursor.seq;
-   evidence=await client.query(cols+' AND seq>$2 ORDER BY seq LIMIT 50001',[TYPES,after]);
+   evidence=await fetch('INCREMENTAL',cols+' AND seq>$2 ORDER BY seq LIMIT 50001',[TYPES,after]);
    if(prior.length+evidence.rows.length!==total){
     // A row that took a lower sequence number but committed after the last read (sequence numbers also skip on
     // failed or conflicting inserts, so the gap can be anywhere). Compare KEYS only (no payloads) and fetch just the
@@ -60,7 +62,7 @@ async function loadOpportunitySource(pool,previous=null){
     const reconcile=async(rows,complete)=>{
      if(complete){const listed=new Set(rows.map(r=>r.record_key));removed=prior.filter(e=>!listed.has(e.key)).map(e=>e.key);}
      const missing=rows.map(r=>r.record_key).filter(k=>!known.has(k)&&!fetched.has(k));
-     if(missing.length){const extra=await client.query(cols+' AND record_key = ANY($2::text[])',[TYPES,missing]);evidence={rows:[...evidence.rows,...extra.rows]};for(const r of extra.rows)fetched.add(r.record_key);}
+     if(missing.length){const extra=await fetch('GAP_RECOVERY',cols+' AND record_key = ANY($2::text[])',[TYPES,missing]);evidence={rows:[...evidence.rows,...extra.rows]};for(const r of extra.rows)fetched.add(r.record_key);}
     };
     let removed=[];mode='GAP_RECOVERY';
     await reconcile((await client.query(keysSql+' AND seq>$2 AND seq<=$3',[TYPES,Math.max(0,after-5000),after])).rows,false);
@@ -70,15 +72,17 @@ async function loadOpportunitySource(pool,previous=null){
    }
   }else evidence=await full();
   if(evidence.rows.length>50000)throw Error('REPORT_SOURCE_LIMIT');
-  let bytes=incremental?previous.source.retainedBytes:0,rawBytes=incremental?previous.source.rawBytesScanned:0;
+  // Deleted rows leave the cache BEFORE new rows are counted against the size limit.
+  const kept=!incremental?[]:dropped?prior.filter(e=>!dropped.has(e.key)):prior;
+  const size=e=>Buffer.byteLength(JSON.stringify(e.record));
+  let bytes=!incremental?0:dropped?kept.reduce((a,e)=>a+size(e),0):previous.source.retainedBytes;
+  let rawBytes=incremental?previous.source.rawBytesScanned:0;
   const added=evidence.rows.map(r=>{const buffer=gunzipSync(r.payload_gzip,{maxOutputLength:2*1024*1024});rawBytes+=buffer.length;
    const projected=projectRecord(JSON.parse(buffer.toString('utf8')));bytes+=Buffer.byteLength(JSON.stringify(projected));if(bytes>32*1024*1024)throw Error('REPORT_SOURCE_LIMIT');
    return {key:r.record_key,at:new Date(r.recorded_at).toISOString(),seq:Number(r.seq),record:projected};});
   // Records stay in recorded_at order, exactly as a full read returns them.
-  let entries;
-  if(!incremental)entries=added.sort(byTime);
-  else{const kept=dropped?prior.filter(e=>!dropped.has(e.key)):prior;if(dropped)bytes=kept.reduce((a,e)=>a+Buffer.byteLength(JSON.stringify(e.record)),0)+added.reduce((a,e)=>a+Buffer.byteLength(JSON.stringify(e.record)),0);
-   const sorted=added.sort(byTime);entries=kept.length&&sorted.length&&byTime(sorted[0],kept.at(-1))<0?[...kept,...sorted].sort(byTime):[...kept,...sorted];}
+  const sorted=added.sort(byTime);
+  const entries=!incremental?sorted:kept.length&&sorted.length&&byTime(sorted[0],kept.at(-1))<0?[...kept,...sorted].sort(byTime):[...kept,...sorted];
   const records=entries.map(e=>e.record);
   if(records.length!==total)throw Error('REPORT_ARCHIVE_COUNT_MISMATCH');
   const ledger=await client.query("SELECT jsonb_build_object('brokerFills',coalesce(payload->'brokerFills','[]'::jsonb)) AS payload FROM edge_trade_ledger_v1 WHERE owner_id='owner'");
@@ -94,4 +98,4 @@ async function loadOpportunitySource(pool,previous=null){
   return result;
  }catch(e){await client.query('ROLLBACK').catch(()=>{});throw e;}finally{client.release();}
 }
-module.exports={loadOpportunitySource,projectRecord};
+module.exports={loadOpportunitySource,projectRecord,REPORT_BYTES_LIMIT:32*1024*1024};

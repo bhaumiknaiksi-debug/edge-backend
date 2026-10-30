@@ -50,6 +50,19 @@ const {loadOpportunitySource,projectRecord}=require('./opportunitySource');
  dataset.splice(0,1);payloadBytes=0;const shrunk=await loadOpportunitySource(pool,farGap);
  assert.equal(shrunk.source.readMode,'GAP_RECOVERY');assert.equal(shrunk.records.length,25);assert.equal(payloadBytes,0);
  assert.deepEqual(shrunk.records,(await loadOpportunitySource(pool)).records);
+ // Size limit with deletions (review): deleted rows leave the cache before new rows are counted.
+ {
+  let n=0;const big=(id,mb)=>({record_key:id,recorded_at:'2026-10-29T04:'+String(10+(n%40)).padStart(2,'0')+':00Z',seq:String(++n),committed:true,
+   payload_gzip:gzipSync(JSON.stringify({id,recordType:'POLL_SNAPSHOT',timestamp:'2026-10-29T04:00:00Z',orchestration:{blockers:'x'.repeat(Math.round(mb*1024*1024))}}))});
+  dataset.length=0;for(let i=0;i<31;i++)dataset.push(big('b'+i,1));
+  const fetches=[];const loaded=await loadOpportunitySource(pool,null,{onFetch:f=>fetches.push(f)});
+  assert.ok(loaded.source.retainedBytes>31*1024*1024&&loaded.source.retainedBytes<32*1024*1024,'starts just under the 32 MiB limit');
+  assert.equal(fetches.length,1);assert.equal(fetches[0].kind,'FULL');assert.equal(fetches[0].rows,31);
+  dataset.splice(0,2);dataset.push(big('c1',0.75),big('c2',0.75)); // net archive about 30.5 MiB
+  const after=await loadOpportunitySource(pool,loaded);
+  assert.equal(after.records.length,31);assert.ok(after.source.retainedBytes<32*1024*1024);
+  assert.equal(after.source.retainedBytes,(await loadOpportunitySource(pool)).source.retainedBytes,'same size accounting as a full read');
+ }
  client.query=async sql=>{if(sql.startsWith('SELECT count'))return {rows:[{n:1}]};if(sql.includes('FROM edge_evidence'))return {rows:[{record_key:'x',recorded_at:'2026-10-28T04:30:00Z',seq:'1',payload_gzip:Buffer.from('invalid')}]};if(sql==='ROLLBACK')rollback=true;return {rows:[]};};
  await assert.rejects(()=>loadOpportunitySource(pool));assert.equal(rollback,true);
  console.log('Opportunity source PASS: complete read-only archive, insertion-order cursor, earlier-stamped rows read incrementally, commit-gap recovery and corrupt data failure');
