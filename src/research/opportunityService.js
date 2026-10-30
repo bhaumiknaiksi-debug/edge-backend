@@ -11,13 +11,22 @@ const {measureCard}=require('./quickExit');
 // Quick-exit backfill budget per pass: distinct contract-day candle fetches and records written.
 const QUICK_FETCHES=10,QUICK_WRITES=60,QUICK_WAIT_MS=32*60000;
 function createOpportunityResearch({pool,store,ownerToken,token,enabled=true,dependencies={}}){
- const now=dependencies.now||Date.now,load=dependencies.load||(previous=>loadOpportunitySource(pool,previous)),harvest=dependencies.harvest||harvestOutcome;
+ const now=dependencies.now||Date.now,load=dependencies.load||((previous,options)=>loadOpportunitySource(pool,previous,options)),harvest=dependencies.harvest||harvestOutcome;
  const fetchCandles=dependencies.fetchCandles||((leg,snapshot)=>fetchLegCandles(snapshot,leg,token));
  let timer=null,running=false,quickRunning=false,recording=false,stopped=false,cache=null,cacheAt=0,pending=null;
  const status={enabled:!!enabled,lastRecordedAt:null,recordingError:null,lastHarvestAt:null,harvestError:null,lastProcessed:0,
-  quickExit:{lastRunAt:null,error:null,lastWritten:0,lastFetches:0}};
+  quickExit:{lastRunAt:null,error:null,lastWritten:0,lastFetches:0},
+  // Archive reads as they happen (background or report), so full re-downloads are visible without forcing a load.
+  // full / payloadRowsFetched / payloadBytesFetched count completed downloads, including loads that later failed.
+  sourceReads:{total:0,failed:0,full:0,gapRecoveries:0,payloadRowsFetched:0,payloadBytesFetched:0,lastReadAt:null,lastReadMode:null,lastRecordsFetched:0,lastFullReadAt:null,lastError:null}};
+ function counted({kind,rows,bytes}){const r=status.sourceReads;r.payloadRowsFetched+=rows;r.payloadBytesFetched+=bytes;
+  if(kind==='FULL'){r.full++;r.lastFullReadAt=new Date(now()).toISOString();}}
  function invalidate(){cacheAt=0;}
- async function source(fresh=false){if(!fresh&&cache&&now()-cacheAt<30000)return cache;if(!pending)pending=load(cache).then(x=>{cache=x;cacheAt=now();return x;}).finally(()=>{pending=null;});return pending;}
+ async function source(fresh=false){if(!fresh&&cache&&now()-cacheAt<30000)return cache;if(!pending)pending=load(cache,{onFetch:counted}).then(x=>{cache=x;cacheAt=now();
+  const r=status.sourceReads,mode=x?.source?.readMode||(x?.source?.incrementalRead?'INCREMENTAL':'FULL');
+  r.total++;r.lastReadAt=new Date(now()).toISOString();r.lastReadMode=mode;r.lastRecordsFetched=x?.source?.recordsFetched??0;r.lastError=null;
+  if(mode==='GAP_RECOVERY')r.gapRecoveries++;
+  return x;},e=>{status.sourceReads.failed++;status.sourceReads.lastError=/^[A-Z_]{3,80}$/.test(e?.message||'')?e.message:'SOURCE_READ_FAILED';throw e;}).finally(()=>{pending=null;});return pending;}
  async function observe(analysis,options){
   if(!enabled||!pool||recording||stopped)return;recording=true;
   try{const row=buildObservation(analysis,options);if(!row)return;if(await store.append(row)===false)throw Error();status.lastRecordedAt=row.observedAt;status.recordingError=null;invalidate();}

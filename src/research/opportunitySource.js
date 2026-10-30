@@ -21,36 +21,81 @@ function projectRecord(r){
   :{...pick(r.outcome,['status','reason','entryLegMarks']),horizonLegMarks:r.outcome.horizonLegMarks?.[60]?{60:r.outcome.horizonLegMarks[60]}:{}};
  return out;
 }
-async function loadOpportunitySource(pool,previous=null){
+// Insertion order. recorded_at is each record's OWN timestamp, so records routinely arrive "behind" a time cursor
+// (an analysis stamped a few seconds earlier is written after a newer record). With a time cursor every such row
+// forced a full re-read of the whole archive, about once a minute, which used up the database's monthly transfer.
+// A per-row sequence number makes incremental reads exact. Added once, idempotently.
+const sequenced=new WeakMap();
+function ensureSequence(pool){
+ if(!sequenced.has(pool))sequenced.set(pool,(async()=>{
+  await pool.query('ALTER TABLE edge_evidence_v1 ADD COLUMN IF NOT EXISTS seq bigserial');
+  await pool.query('CREATE INDEX IF NOT EXISTS edge_evidence_v1_seq ON edge_evidence_v1(seq)');
+ })().catch(e=>{sequenced.delete(pool);throw e;}));
+ return sequenced.get(pool);
+}
+const byTime=(a,b)=>a.at<b.at?-1:a.at>b.at?1:a.key<b.key?-1:a.key>b.key?1:0;
+async function loadOpportunitySource(pool,previous=null,{onFetch=()=>{}}={}){
  if(!pool)throw Error('REPORT_DATABASE_REQUIRED');
+ await ensureSequence(pool);
  const client=await pool.connect();
  try{
   await client.query('BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY');
   const count=await client.query('SELECT count(*)::int AS n FROM edge_evidence_v1 WHERE record_type = ANY($1::text[])',[TYPES]);
   const total=count.rows[0].n;if(total>50000)throw Error('REPORT_SOURCE_LIMIT');
-  const full=()=>client.query('SELECT record_key,recorded_at,payload_gzip FROM edge_evidence_v1 WHERE record_type = ANY($1::text[]) ORDER BY recorded_at,record_key LIMIT 50001',[TYPES]);
-  let incremental=!!previous?.source?.cursor,evidence;
+  const cols='SELECT record_key,recorded_at,seq,payload_gzip FROM edge_evidence_v1 WHERE record_type = ANY($1::text[])';
+  // Every completed payload download is reported at once, so transfer stays visible even if the load later fails.
+  const fetch=async(kind,sql,args)=>{const r=await client.query(sql,args);try{onFetch({kind,rows:r.rows.length,bytes:r.rows.reduce((a,x)=>a+(x.payload_gzip?.length||0),0)});}catch(_){}return r;};
+  const full=()=>fetch('FULL',cols+' ORDER BY seq LIMIT 50001',[TYPES]);
+  const keysSql='SELECT record_key FROM edge_evidence_v1 WHERE record_type = ANY($1::text[])';
+  let dropped=null;
+  const prior=previous?.source?.cursor?.seq!==undefined&&Array.isArray(previous.entries)?previous.entries:null;
+  let incremental=!!prior,mode=incremental?'INCREMENTAL':'FULL',evidence;
   if(incremental){
-   const c=previous.source.cursor;
-   evidence=await client.query('SELECT record_key,recorded_at,payload_gzip FROM edge_evidence_v1 WHERE record_type = ANY($1::text[]) AND (recorded_at,record_key)>($2::timestamptz,$3::text) ORDER BY recorded_at,record_key LIMIT 50001',[TYPES,c.at,c.key]);
-   // A late historical insert is behind the cursor: the count mismatch forces a full read.
-   if(previous.records.length+evidence.rows.length!==total){incremental=false;evidence=await full();}
+   const after=previous.source.cursor.seq;
+   evidence=await fetch('INCREMENTAL',cols+' AND seq>$2 ORDER BY seq LIMIT 50001',[TYPES,after]);
+   if(prior.length+evidence.rows.length!==total){
+    // A row that took a lower sequence number but committed after the last read (sequence numbers also skip on
+    // failed or conflicting inserts, so the gap can be anywhere). Compare KEYS only (no payloads) and fetch just the
+    // missing rows: first in a recent window, then across the whole bounded archive. Rows deleted since the last
+    // read are dropped from the cache. Payloads are only re-downloaded in full if keys still don't reconcile.
+    const fetched=new Set(evidence.rows.map(r=>r.record_key));const known=new Set(prior.map(e=>e.key));
+    const reconcile=async(rows,complete)=>{
+     if(complete){const listed=new Set(rows.map(r=>r.record_key));removed=prior.filter(e=>!listed.has(e.key)).map(e=>e.key);}
+     const missing=rows.map(r=>r.record_key).filter(k=>!known.has(k)&&!fetched.has(k));
+     if(missing.length){const extra=await fetch('GAP_RECOVERY',cols+' AND record_key = ANY($2::text[])',[TYPES,missing]);evidence={rows:[...evidence.rows,...extra.rows]};for(const r of extra.rows)fetched.add(r.record_key);}
+    };
+    let removed=[];mode='GAP_RECOVERY';
+    await reconcile((await client.query(keysSql+' AND seq>$2 AND seq<=$3',[TYPES,Math.max(0,after-5000),after])).rows,false);
+    if(prior.length+evidence.rows.length!==total)await reconcile((await client.query(keysSql+' LIMIT 50001',[TYPES])).rows,true);
+    if(removed.length)dropped=new Set(removed);
+    if(prior.length-removed.length+evidence.rows.length!==total){incremental=false;mode='FULL';evidence=await full();}
+   }
   }else evidence=await full();
   if(evidence.rows.length>50000)throw Error('REPORT_SOURCE_LIMIT');
-  let bytes=incremental?previous.source.retainedBytes:0,rawBytes=incremental?previous.source.rawBytesScanned:0;
+  // Deleted rows leave the cache BEFORE new rows are counted against the size limit.
+  const kept=!incremental?[]:dropped?prior.filter(e=>!dropped.has(e.key)):prior;
+  const size=e=>Buffer.byteLength(JSON.stringify(e.record));
+  let bytes=!incremental?0:dropped?kept.reduce((a,e)=>a+size(e),0):previous.source.retainedBytes;
+  let rawBytes=incremental?previous.source.rawBytesScanned:0;
   const added=evidence.rows.map(r=>{const buffer=gunzipSync(r.payload_gzip,{maxOutputLength:2*1024*1024});rawBytes+=buffer.length;
-   const projected=projectRecord(JSON.parse(buffer.toString('utf8')));bytes+=Buffer.byteLength(JSON.stringify(projected));if(bytes>32*1024*1024)throw Error('REPORT_SOURCE_LIMIT');return projected;});
-  const records=incremental?[...previous.records,...added]:added;
+   const projected=projectRecord(JSON.parse(buffer.toString('utf8')));bytes+=Buffer.byteLength(JSON.stringify(projected));if(bytes>32*1024*1024)throw Error('REPORT_SOURCE_LIMIT');
+   return {key:r.record_key,at:new Date(r.recorded_at).toISOString(),seq:Number(r.seq),record:projected};});
+  // Records stay in recorded_at order, exactly as a full read returns them.
+  const sorted=added.sort(byTime);
+  const entries=!incremental?sorted:kept.length&&sorted.length&&byTime(sorted[0],kept.at(-1))<0?[...kept,...sorted].sort(byTime):[...kept,...sorted];
+  const records=entries.map(e=>e.record);
   if(records.length!==total)throw Error('REPORT_ARCHIVE_COUNT_MISMATCH');
   const ledger=await client.query("SELECT jsonb_build_object('brokerFills',coalesce(payload->'brokerFills','[]'::jsonb)) AS payload FROM edge_trade_ledger_v1 WHERE owner_id='owner'");
   if(!ledger.rows[0]?.payload)throw Error('REPORT_LEDGER_UNAVAILABLE');
   const snapshots=await client.query("SELECT id,jsonb_build_object('analysisAt',payload->'analysisAt','capturedAt',payload->'capturedAt','tier',payload->'tier','actualSignalTier',payload->'actualSignalTier','expiry',payload->'expiry','strategy',payload->'strategy','ruleSpec',jsonb_build_object('implementationHash',payload->'ruleSpec'->'implementationHash'),'selectedCandidate',payload->'selectedCandidate','selectedLegs',payload->'selectedLegs','authorization',payload->'authorization') AS payload FROM edge_trade_snapshots_v1 WHERE owner_id='owner' ORDER BY captured_at,id LIMIT 10001");
   if(snapshots.rows.length>10000)throw Error('REPORT_SOURCE_LIMIT');
   await client.query('COMMIT');
-  const last=evidence.rows.at(-1),cursor=last?{at:new Date(last.recorded_at).toISOString(),key:last.record_key}:previous?.source?.cursor||null;
-  return {records,ledger:ledger.rows[0].payload,snapshots:snapshots.rows,
+  const maxSeq=entries.reduce((m,e)=>Math.max(m,e.seq),incremental?previous.source.cursor.seq:0);
+  const result={records,ledger:ledger.rows[0].payload,snapshots:snapshots.rows,
    source:{scope:'PERSISTED_ARCHIVE',completeRead:true,evidenceRecords:records.length,savedSnapshots:snapshots.rows.length,retainedBytes:bytes,rawBytesScanned:rawBytes,
-    cursor,incrementalRead:incremental,recordsFetched:evidence.rows.length,readAt:new Date().toISOString()}};
+    cursor:{seq:maxSeq},incrementalRead:incremental,readMode:mode,recordsFetched:evidence.rows.length,readAt:new Date().toISOString()}};
+  Object.defineProperty(result,'entries',{value:entries,enumerable:false}); // carried to the next read, never reported
+  return result;
  }catch(e){await client.query('ROLLBACK').catch(()=>{});throw e;}finally{client.release();}
 }
-module.exports={loadOpportunitySource,projectRecord};
+module.exports={loadOpportunitySource,projectRecord,REPORT_BYTES_LIMIT:32*1024*1024};

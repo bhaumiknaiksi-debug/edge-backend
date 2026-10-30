@@ -7,7 +7,7 @@ const records=Array.from({length:5},(_,i)=>({id:'poll-'+i,recordType:'OPPORTUNIT
  candidates:[{tier:'C',strategy:'LONG_CALL',expiry:'2026-11-03',lotSize:65,legs:{lotSize:65,buyLeg:{contractId:'contract-'+i,instrumentKey:'NSE_FO|'+i,strike:23000+i*50,type:'CE',bid:99.95,ask:100}}}]}));
 (async()=>{
  const writes=[],service=createOpportunityResearch({pool:{},store:{async append(r){writes.push(r);records.push(r);return true;}},ownerToken:OWNER,token:'server-only-secret',
-  dependencies:{now:()=>BASE+3*3600000,load:async()=>({records:structuredClone(records),ledger:{brokerFills:[]},snapshots:[],source:{scope:'TEST',completeRead:true}}),
+  dependencies:{now:()=>BASE+3*3600000,load:async(_prev,options)=>{options?.onFetch?.({kind:'FULL',rows:records.length,bytes:100});return {records:structuredClone(records),ledger:{brokerFills:[]},snapshots:[],source:{scope:'TEST',completeRead:true}};},
    harvest:async snapshot=>({status:'MEASURED',entryLegMarks:{buyLeg:{contractId:snapshot.tradeLegs.buyLeg.contractId,side:'BUY',price:100}},
     horizonLegMarks:{60:{timestamp:iso(Date.parse(snapshot.timestamp)+3600000),marks:{buyLeg:snapshot.tradeLegs.buyLeg.strike===23000?102:99}}}})}});
  await service.run();assert.equal(writes.length,4,'bounded collection selects candidates regardless of outcome');
@@ -18,6 +18,10 @@ const records=Array.from({length:5},(_,i)=>({id:'poll-'+i,recordType:'OPPORTUNIT
   const c=report.byCandidateTier.find(x=>x.tier==='C');assert.equal(c.flagged,5);assert.equal(c.wins,1);assert.equal(c.losses,3);assert.equal(c.unmeasured,1);
   const panel=await fetch(base+'/control');assert.equal(panel.status,200);assert.ok(panel.headers.get('content-security-policy').includes("connect-src 'self'"));
   const publicStatus=await (await fetch(base+'/status')).text();assert.ok(!publicStatus.includes(OWNER)&&!publicStatus.includes('server-only-secret'));
+  const reads=JSON.parse(publicStatus).sourceReads,again=JSON.parse(await (await fetch(base+'/status')).text()).sourceReads;
+  assert.ok(reads.total>=1&&reads.full>=1&&reads.lastFullReadAt,'full archive reads are counted on status');assert.equal(reads.lastReadMode,'FULL');
+  assert.equal(again.total,reads.total,'reading status never triggers another archive load');
+  assert.ok(reads.payloadRowsFetched>0&&reads.payloadBytesFetched>0);
  }finally{service.stop();server.closeAllConnections();await new Promise(r=>server.close(r));}
  const badRows=[structuredClone(records[4])],badWrites=[];let clock=BASE+3*3600000;
  const bad=createOpportunityResearch({pool:{},store:{async append(r){badRows.push(r);badWrites.push(r);return true;}},token:'test',ownerToken:OWNER,
@@ -32,5 +36,12 @@ const records=Array.from({length:5},(_,i)=>({id:'poll-'+i,recordType:'OPPORTUNIT
  const affordable=structuredClone(analysis);affordable.support.strike=22990;affordable.decision.researchCandidatePlans.plans.C.legs.buyLeg.delta=0.45;
  const positive=buildObservation(affordable,{lotSize:65,budget:{confirmed:true,locked:false,availableRisk:1000,availableCapital:10000,checkedAt:new Date().toISOString()},observedAt:BASE});
  assert.equal(positive.candidates[0].legs.legDelta,0.45);assert.equal(positive.candidates[0].gates.risk,true);assert.equal(positive.candidates[0].gates.position,true,'recorded delta must allow affordable candidate sizing');assert.equal(positive.candidates[0].executionAllowed,false);
+ {
+  const failing=createOpportunityResearch({pool:{},store:{async append(){return true;}},ownerToken:OWNER,token:'t',
+   dependencies:{now:()=>BASE,load:async(_p,o)=>{o.onFetch({kind:'FULL',rows:500,bytes:4096});throw Error('REPORT_LEDGER_UNAVAILABLE');}}});
+  await failing.run();await failing.run();
+  const r=failing.status().sourceReads;
+  {assert.equal(r.full,2,'downloads before a failure are still counted');assert.equal(r.failed,2);assert.equal(r.total,0);assert.equal(r.payloadBytesFetched,8192);assert.equal(r.lastError,'REPORT_LEDGER_UNAVAILABLE');}
+ }
  console.log('Opportunity service/census PASS: private HTTP report, all-candidate outcome collection, loss inclusion, static CSP, sanitized status and unchanged decisions');
 })().catch(e=>{console.error(e);process.exitCode=1;});
