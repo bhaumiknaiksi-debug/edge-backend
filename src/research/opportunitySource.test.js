@@ -10,7 +10,7 @@ const {loadOpportunitySource,projectRecord}=require('./opportunitySource');
  let payloadBytes=0;
  const client={async query(sql,args){calls.push(sql);
   if(sql.startsWith('SELECT count'))return {rows:[{n:visible().length}]};
-  if(sql.startsWith('SELECT record_key FROM'))return {rows:visible().filter(r=>+r.seq>args[1]&&+r.seq<=args[2]).map(r=>({record_key:r.record_key}))};
+  if(sql.startsWith('SELECT record_key FROM'))return {rows:visible().filter(r=>args.length<2||+r.seq>args[1]&&+r.seq<=args[2]).map(r=>({record_key:r.record_key}))};
   if(sql.includes('FROM edge_evidence')){let rows=visible().slice();
    if(sql.includes('seq>$2'))rows=rows.filter(r=>+r.seq>args[1]);if(sql.includes('record_key = ANY'))rows=rows.filter(r=>args[1].includes(r.record_key));
    rows.sort((a,b)=>a.seq-b.seq);payloadBytes+=bytes(rows);return {rows};}
@@ -37,8 +37,19 @@ const {loadOpportunitySource,projectRecord}=require('./opportunitySource');
  assert.equal(payloadBytes,bytes([slow]),'gap recovery fetches only the missing row');
  assert.deepEqual(gap.records.map(r=>r.id),['r0','r1','r2','r3','r4']);
  const fresh=await loadOpportunitySource(pool);assert.deepEqual(fresh.records,gap.records,'incremental result equals a full read');
- // A deletion (count lower than expected) still falls back to a full read.
- dataset.splice(0,1);const shrunk=await loadOpportunitySource(pool,gap);assert.equal(shrunk.source.readMode,'FULL');assert.equal(shrunk.records.length,4);
+ // A late commit far outside the recent window (sequence numbers can be burned by conflicting inserts):
+ // keys are compared across the whole archive and only the missing payload is downloaded.
+ const far=row('r5','2026-10-28T04:34:00Z',false);dataset.push(far);seq+=6000;
+ for(let i=0;i<20;i++)dataset.push(row('n'+i,'2026-10-28T05:'+String(10+i)+':00Z'));
+ const beforeFar=await loadOpportunitySource(pool,gap);assert.equal(beforeFar.records.length,25);
+ far.committed=true;payloadBytes=0;
+ const farGap=await loadOpportunitySource(pool,beforeFar);
+ assert.equal(farGap.source.readMode,'GAP_RECOVERY');assert.equal(farGap.records.length,26);assert.equal(payloadBytes,bytes([far]),'a distant gap still fetches only the missing row');
+ assert.deepEqual(farGap.records,(await loadOpportunitySource(pool)).records,'still identical to a full read');
+ // A deletion: the deleted row is dropped from the cache, with no payload download.
+ dataset.splice(0,1);payloadBytes=0;const shrunk=await loadOpportunitySource(pool,farGap);
+ assert.equal(shrunk.source.readMode,'GAP_RECOVERY');assert.equal(shrunk.records.length,25);assert.equal(payloadBytes,0);
+ assert.deepEqual(shrunk.records,(await loadOpportunitySource(pool)).records);
  client.query=async sql=>{if(sql.startsWith('SELECT count'))return {rows:[{n:1}]};if(sql.includes('FROM edge_evidence'))return {rows:[{record_key:'x',recorded_at:'2026-10-28T04:30:00Z',seq:'1',payload_gzip:Buffer.from('invalid')}]};if(sql==='ROLLBACK')rollback=true;return {rows:[]};};
  await assert.rejects(()=>loadOpportunitySource(pool));assert.equal(rollback,true);
  console.log('Opportunity source PASS: complete read-only archive, insertion-order cursor, earlier-stamped rows read incrementally, commit-gap recovery and corrupt data failure');

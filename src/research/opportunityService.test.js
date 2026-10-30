@@ -18,6 +18,9 @@ const records=Array.from({length:5},(_,i)=>({id:'poll-'+i,recordType:'OPPORTUNIT
   const c=report.byCandidateTier.find(x=>x.tier==='C');assert.equal(c.flagged,5);assert.equal(c.wins,1);assert.equal(c.losses,3);assert.equal(c.unmeasured,1);
   const panel=await fetch(base+'/control');assert.equal(panel.status,200);assert.ok(panel.headers.get('content-security-policy').includes("connect-src 'self'"));
   const publicStatus=await (await fetch(base+'/status')).text();assert.ok(!publicStatus.includes(OWNER)&&!publicStatus.includes('server-only-secret'));
+  const reads=JSON.parse(publicStatus).sourceReads,again=JSON.parse(await (await fetch(base+'/status')).text()).sourceReads;
+  assert.ok(reads.total>=1&&reads.full>=1&&reads.lastFullReadAt,'full archive reads are counted on status');assert.equal(reads.lastReadMode,'FULL');
+  assert.equal(again.total,reads.total,'reading status never triggers another archive load');
  }finally{service.stop();server.closeAllConnections();await new Promise(r=>server.close(r));}
  const badRows=[structuredClone(records[4])],badWrites=[];let clock=BASE+3*3600000;
  const bad=createOpportunityResearch({pool:{},store:{async append(r){badRows.push(r);badWrites.push(r);return true;}},token:'test',ownerToken:OWNER,

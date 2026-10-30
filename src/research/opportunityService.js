@@ -15,9 +15,15 @@ function createOpportunityResearch({pool,store,ownerToken,token,enabled=true,dep
  const fetchCandles=dependencies.fetchCandles||((leg,snapshot)=>fetchLegCandles(snapshot,leg,token));
  let timer=null,running=false,quickRunning=false,recording=false,stopped=false,cache=null,cacheAt=0,pending=null;
  const status={enabled:!!enabled,lastRecordedAt:null,recordingError:null,lastHarvestAt:null,harvestError:null,lastProcessed:0,
-  quickExit:{lastRunAt:null,error:null,lastWritten:0,lastFetches:0}};
+  quickExit:{lastRunAt:null,error:null,lastWritten:0,lastFetches:0},
+  // Archive reads as they happen (background or report), so full re-downloads are visible without forcing a load.
+  sourceReads:{total:0,full:0,gapRecoveries:0,lastReadAt:null,lastReadMode:null,lastRecordsFetched:0,lastFullReadAt:null}};
  function invalidate(){cacheAt=0;}
- async function source(fresh=false){if(!fresh&&cache&&now()-cacheAt<30000)return cache;if(!pending)pending=load(cache).then(x=>{cache=x;cacheAt=now();return x;}).finally(()=>{pending=null;});return pending;}
+ async function source(fresh=false){if(!fresh&&cache&&now()-cacheAt<30000)return cache;if(!pending)pending=load(cache).then(x=>{cache=x;cacheAt=now();
+  const r=status.sourceReads,mode=x?.source?.readMode||(x?.source?.incrementalRead?'INCREMENTAL':'FULL'),at=new Date(now()).toISOString();
+  r.total++;r.lastReadAt=at;r.lastReadMode=mode;r.lastRecordsFetched=x?.source?.recordsFetched??0;
+  if(mode==='FULL'){r.full++;r.lastFullReadAt=at;}else if(mode==='GAP_RECOVERY')r.gapRecoveries++;
+  return x;}).finally(()=>{pending=null;});return pending;}
  async function observe(analysis,options){
   if(!enabled||!pool||recording||stopped)return;recording=true;
   try{const row=buildObservation(analysis,options);if(!row)return;if(await store.append(row)===false)throw Error();status.lastRecordedAt=row.observedAt;status.recordingError=null;invalidate();}

@@ -44,20 +44,29 @@ async function loadOpportunitySource(pool,previous=null){
   const total=count.rows[0].n;if(total>50000)throw Error('REPORT_SOURCE_LIMIT');
   const cols='SELECT record_key,recorded_at,seq,payload_gzip FROM edge_evidence_v1 WHERE record_type = ANY($1::text[])';
   const full=()=>client.query(cols+' ORDER BY seq LIMIT 50001',[TYPES]);
+  const keysSql='SELECT record_key FROM edge_evidence_v1 WHERE record_type = ANY($1::text[])';
+  let dropped=null;
   const prior=previous?.source?.cursor?.seq!==undefined&&Array.isArray(previous.entries)?previous.entries:null;
   let incremental=!!prior,mode=incremental?'INCREMENTAL':'FULL',evidence;
   if(incremental){
    const after=previous.source.cursor.seq;
    evidence=await client.query(cols+' AND seq>$2 ORDER BY seq LIMIT 50001',[TYPES,after]);
    if(prior.length+evidence.rows.length!==total){
-    // A row that took a lower sequence number but committed after the last read. List recent keys only (no payloads),
-    // then fetch just the missing rows. A full read happens only if that still doesn't account for everything.
-    const known=new Set(prior.map(e=>e.key)),fetched=new Set(evidence.rows.map(r=>r.record_key));
-    const recent=await client.query('SELECT record_key FROM edge_evidence_v1 WHERE record_type = ANY($1::text[]) AND seq>$2 AND seq<=$3',[TYPES,Math.max(0,after-5000),after]);
-    const missing=recent.rows.map(r=>r.record_key).filter(k=>!known.has(k)&&!fetched.has(k));
-    if(missing.length){const extra=await client.query(cols+' AND record_key = ANY($2::text[])',[TYPES,missing]);evidence={rows:[...evidence.rows,...extra.rows]};}
-    mode='GAP_RECOVERY';
-    if(prior.length+evidence.rows.length!==total){incremental=false;mode='FULL';evidence=await full();}
+    // A row that took a lower sequence number but committed after the last read (sequence numbers also skip on
+    // failed or conflicting inserts, so the gap can be anywhere). Compare KEYS only (no payloads) and fetch just the
+    // missing rows: first in a recent window, then across the whole bounded archive. Rows deleted since the last
+    // read are dropped from the cache. Payloads are only re-downloaded in full if keys still don't reconcile.
+    const fetched=new Set(evidence.rows.map(r=>r.record_key));const known=new Set(prior.map(e=>e.key));
+    const reconcile=async(rows,complete)=>{
+     if(complete){const listed=new Set(rows.map(r=>r.record_key));removed=prior.filter(e=>!listed.has(e.key)).map(e=>e.key);}
+     const missing=rows.map(r=>r.record_key).filter(k=>!known.has(k)&&!fetched.has(k));
+     if(missing.length){const extra=await client.query(cols+' AND record_key = ANY($2::text[])',[TYPES,missing]);evidence={rows:[...evidence.rows,...extra.rows]};for(const r of extra.rows)fetched.add(r.record_key);}
+    };
+    let removed=[];mode='GAP_RECOVERY';
+    await reconcile((await client.query(keysSql+' AND seq>$2 AND seq<=$3',[TYPES,Math.max(0,after-5000),after])).rows,false);
+    if(prior.length+evidence.rows.length!==total)await reconcile((await client.query(keysSql+' LIMIT 50001',[TYPES])).rows,true);
+    if(removed.length)dropped=new Set(removed);
+    if(prior.length-removed.length+evidence.rows.length!==total){incremental=false;mode='FULL';evidence=await full();}
    }
   }else evidence=await full();
   if(evidence.rows.length>50000)throw Error('REPORT_SOURCE_LIMIT');
@@ -68,7 +77,8 @@ async function loadOpportunitySource(pool,previous=null){
   // Records stay in recorded_at order, exactly as a full read returns them.
   let entries;
   if(!incremental)entries=added.sort(byTime);
-  else{const sorted=added.sort(byTime);entries=prior.length&&sorted.length&&byTime(sorted[0],prior.at(-1))<0?[...prior,...sorted].sort(byTime):[...prior,...sorted];}
+  else{const kept=dropped?prior.filter(e=>!dropped.has(e.key)):prior;if(dropped)bytes=kept.reduce((a,e)=>a+Buffer.byteLength(JSON.stringify(e.record)),0)+added.reduce((a,e)=>a+Buffer.byteLength(JSON.stringify(e.record)),0);
+   const sorted=added.sort(byTime);entries=kept.length&&sorted.length&&byTime(sorted[0],kept.at(-1))<0?[...kept,...sorted].sort(byTime):[...kept,...sorted];}
   const records=entries.map(e=>e.record);
   if(records.length!==total)throw Error('REPORT_ARCHIVE_COUNT_MISMATCH');
   const ledger=await client.query("SELECT jsonb_build_object('brokerFills',coalesce(payload->'brokerFills','[]'::jsonb)) AS payload FROM edge_trade_ledger_v1 WHERE owner_id='owner'");
