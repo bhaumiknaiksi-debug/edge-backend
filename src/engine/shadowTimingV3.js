@@ -10,7 +10,9 @@ const { buildEntryPlan } = require('./entryEngine');
 //  3. A candle is judged only after SETTLE_MS past its close. Every later read is revalidated against the first
 //     settled value; a conflict is recorded, never silently accepted, and blocks new entries until a later candle
 //     has settled and been read consistently. A breakout built on a revised candle can never be traded.
-//  4. Fetch failures and stale data keep the history but block new entries (fail closed).
+//  4. Fetch failures and incomplete responses keep the history but block new entries (fail closed): every
+//     expected 5-minute candle from 09:15 up to the latest one that should have settled must be present in the
+//     CURRENT provider response. Earlier reads never stand in for a candle the provider stopped returning.
 // Late regime alignment is allowed only inside the freshness window, with price still beyond the level,
 // not chased (CHASE_FRACTION of the range width), and every existing trigger/price/liquidity gate passing.
 const VERSION = 'OPENING_RANGE_SHADOW_V3';
@@ -18,9 +20,8 @@ const FIVE = 300000;
 const SETTLE_MS = 60000;
 const ENTRY_FRESHNESS_MS = 10 * 60000;
 const CHASE_FRACTION = 0.5;
-const STALE_MS = 2 * FIVE + SETTLE_MS;
 const EPS = 0.005;
-const RULE = { settleMs:SETTLE_MS, entryFreshnessMs:ENTRY_FRESHNESS_MS, chaseFraction:CHASE_FRACTION, staleMs:STALE_MS };
+const RULE = { settleMs:SETTLE_MS, entryFreshnessMs:ENTRY_FRESHNESS_MS, chaseFraction:CHASE_FRACTION, coverage:'CONTINUOUS_TO_LATEST_SETTLED' };
 const session = t => new Date(t + 19800000).toISOString().slice(0, 10);
 const iso = t => new Date(t).toISOString();
 const family = d => String(d || '').includes('BULL') ? 'UP' : String(d || '').includes('BEAR') ? 'DOWN' : 'NEUTRAL';
@@ -28,7 +29,20 @@ const beyond = (dir, close, level) => dir === 'UP' ? close > level : close < lev
 
 function freshState(day) {
   return { session:day, anchor:null, anchorConflict:false, settled:new Map(), reads:new Map(), revised:new Set(),
-    conflicts:[], trustAfter:null, breakouts:new Map(), lastSettledTime:null };
+    conflicts:[], trustAfter:null, breakouts:new Map() };
+}
+// Start time of the newest candle that must have settled by `now`, or null before the first one.
+function expectedLatest(day, now) {
+  const open = Date.parse(day + 'T09:15:00+05:30'), k = Math.floor((now - SETTLE_MS - FIVE - open) / FIVE);
+  return k < 0 ? null : open + k * FIVE;
+}
+// True only when the current response holds every candle from 09:15 through the expected latest settled one.
+function covered(source, day, now) {
+  const last = expectedLatest(day, now);
+  if (last === null) return false;
+  const have = new Set((source?.candles || []).map(c => c.time));
+  for (let t = Date.parse(day + 'T09:15:00+05:30'); t <= last; t += FIVE) if (!have.has(t)) return false;
+  return true;
 }
 
 // Rebuild the breakout list from the settled candle sequence. Deterministic: same candles -> same breakouts.
@@ -93,7 +107,6 @@ function ingest(st, source, now) {
         st.revised.add(c.time); st.settled.set(c.time, c.close); st.reads.set(c.time, 1);
       } else st.reads.set(c.time, (st.reads.get(c.time) || 0) + 1);
     } else { st.settled.set(c.time, c.close); st.reads.set(c.time, 1); }
-    if (st.lastSettledTime === null || c.time > st.lastSettledTime) st.lastSettledTime = c.time;
   }
   if (st.conflicts.length > 50) st.conflicts.splice(0, st.conflicts.length - 50);
   // Trust returns only after a candle that STARTED after the conflict has settled and been read twice, unchanged.
@@ -104,7 +117,7 @@ function dataStatus(st, source, input, now) {
   if (input?.marketPhase !== 'OPEN') return 'MARKET_CLOSED';
   if (!source?.available || source.session !== session(now) || !Array.isArray(source.candles)) return 'DATA_UNAVAILABLE';
   if (st.anchorConflict) return 'ANCHOR_REVISED';
-  if (st.lastSettledTime === null || now - (st.lastSettledTime + FIVE) > STALE_MS) return 'STALE_CANDLES';
+  if (!covered(source, st.session, now)) return 'INCOMPLETE_CANDLES';
   if (st.trustAfter !== null) {
     const ok = [...st.settled.keys()].some(t => t >= st.trustAfter && (st.reads.get(t) || 0) >= 2 && !st.revised.has(t));
     if (!ok) return 'DATA_CONFLICT_UNRESOLVED';
@@ -125,7 +138,9 @@ function createShadowTimingV3() {
     }
     const status = dataStatus(st, source, input, now);
     const trusted = status === 'OK';
-    const latestClose = st.lastSettledTime === null ? null : st.settled.get(st.lastSettledTime);
+    // The close entries are judged on is the expected latest settled candle, and only when this response covered it.
+    const latestTime = trusted ? expectedLatest(day, now) : null;
+    const latestClose = latestTime === null ? null : st.settled.get(latestTime);
     const breakouts = [...st.breakouts.values()].sort((a,b) => a.crossedAt - b.crossedAt);
     const output = { version:VERSION, researchOnly:true, liveDecisionImpact:false, executionAllowed:false, rule:RULE,
       market:{ dataStatus:status, anchor:st.anchor ? { source:'NIFTY_INDEX_5M_OPENING_RANGE', ...st.anchor } : null,
@@ -156,7 +171,7 @@ function createShadowTimingV3() {
       const aligned = family(input.regime?.direction) === dir;
       const tradeLegs = { ...legs, netDebit:legs.netDebit ?? plan.indicativeNetDebit };
       const baseline = buildEntryPlan({ ...input, strategy:plan.strategy, tradeLegs });
-      const anchored = latestClose === null ? { triggerReady:false } :
+      const anchored = latestClose === null || latestClose === undefined ? { triggerReady:false } :
         buildEntryPlan({ ...input, strategy:plan.strategy, tradeLegs, spot:latestClose, support:st.anchor.low, resistance:st.anchor.high });
       const confirmed = b.status === 'CONFIRMED';
       const blocker = !confirmed ? 'BREAKOUT_NOT_CONFIRMED' : !trusted ? status : !fresh ? 'ENTRY_WINDOW_ELAPSED' :
@@ -166,7 +181,7 @@ function createShadowTimingV3() {
       Object.assign(result, { status:b.status, reason:b.reason, episodeId:b.id, breakoutId:b.id,
         crossedAt:iso(b.crossedAt), entryWindowEndsAt:iso(b.crossedAt + ENTRY_FRESHNESS_MS), entryFresh:fresh,
         regimeAligned:aligned, chaseLimitPoints:Math.round(CHASE_FRACTION * width * 100) / 100,
-        candleClosedAt:st.lastSettledTime === null ? null : iso(st.lastSettledTime + FIVE),
+        candleClosedAt:latestTime === null ? null : iso(latestTime + FIVE),
         baselineTriggerReady:baseline.triggerReady, shadowTriggerReady:confirmed && anchored.triggerReady === true,
         priceReady:baseline.priceReady, liquidityReady:baseline.liquidityReady,
         entryBlocker:blocker, shadowEntryReady:blocker === null });
@@ -174,4 +189,6 @@ function createShadowTimingV3() {
     return output;
   };
 }
-module.exports = { createShadowTimingV3, VERSION, SETTLE_MS, ENTRY_FRESHNESS_MS, CHASE_FRACTION };
+// Feature flag: V3 replaces V2 only when BOTH variables are exactly 'true'. Anything else keeps V2.
+const v3Enabled = env => env?.EDGE_SHADOW_TIMING_ENABLED === 'true' && env?.EDGE_SHADOW_TIMING_V3_ENABLED === 'true';
+module.exports = { createShadowTimingV3, v3Enabled, VERSION, SETTLE_MS, ENTRY_FRESHNESS_MS, CHASE_FRACTION };

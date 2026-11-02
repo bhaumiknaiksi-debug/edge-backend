@@ -140,7 +140,7 @@ function planEntry(s,result,quote,meta,now){
   if(minutes(now)<570||minutes(now)>=900||result?.market?.phase!=='OPEN')return 'ENTRY_WINDOW_CLOSED';
   const at=Date.parse(result.timestamp);
   if(!Number.isFinite(at)||at>now||now-at>60000)return 'STALE_DECISION';
-  const pick=selectCandidate(s.policy,result);
+  const pick=selectCandidate(s.policy,result,now);
   if(pick.reason)return pick.reason;
   const leg=pick.leg;
   if(!meta||meta.instrumentKey!==leg.instrumentKey||meta.underlying!=='NIFTY'||meta.expiry!==result.expiry||meta.expiry<day(now)||
@@ -171,7 +171,8 @@ function planEntry(s,result,quote,meta,now){
   if(s.trades[id])return 'SIGNAL_ALREADY_CONSUMED';
   // V3: one entry per market breakout, whatever strike the ATM roll or tier now points at.
   if(pick.breakoutId&&Object.values(s.trades).some(t=>t.breakoutId===pick.breakoutId))return 'BREAKOUT_ALREADY_CONSUMED';
-  const t={id,day:day(now),createdAt:now,entryExpiresAt:now+15000,analysisAt:result.timestamp,
+  // A V3 entry order also expires at the breakout's entry deadline: claim() and manage() enforce it before submission.
+  const t={id,day:day(now),createdAt:now,entryExpiresAt:Math.min(now+15000,pick.entryDeadline??Infinity),analysisAt:result.timestamp,
     instrumentKey:leg.instrumentKey,contractId:leg.contractId,strategy:pick.strategy,expiry:result.expiry,
     tier:pick.tier,entrySource:pick.source,expiryBucket:expiryBucket(result.expiry,day(now)),ruleVersion:pick.ruleVersion,riskModel:pick.riskModel,anchor:pick.anchor,...(pick.breakoutId?{breakoutId:pick.breakoutId}:{}),
     tickSize:tick,quantity:meta.lotSize,stop,stopLimit,target,plannedRisk:risk,costReserve:policy.costReserve,

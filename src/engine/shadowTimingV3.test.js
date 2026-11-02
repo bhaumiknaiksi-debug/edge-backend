@@ -135,7 +135,7 @@ for (const [strategy, close] of [['LONG_CALL', 112], ['LONG_PUT', 88]]) {
   x = run(ev, rows, '09:41:05');
   assert.equal(x.plans.C.shadowEntryReady, true);
   x = run(ev, rows, '09:53:00');
-  assert.equal(x.plans.C.dataStatus, 'STALE_CANDLES', 'no new candle for too long');
+  assert.equal(x.plans.C.dataStatus, 'INCOMPLETE_CANDLES', 'expected candles missing from the response');
 }
 
 // --- a gap at the crossing: the crossing is not assumed ---

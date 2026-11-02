@@ -79,7 +79,7 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
   function currentAllowed(order,context,time,policy){
     const r=context.analysis,t=Date.parse(r?.timestamp),q=context.quotes?.[order.instrumentKey];
     if(!(Number.isFinite(t)&&t<=time&&time-t<=60000&&r?.market?.phase==='OPEN'))return false;
-    const pick=engine.selectCandidate(policy,r);
+    const pick=engine.selectCandidate(policy,r,time);
     return !pick.reason&&pick.strategy===order.strategy&&r.expiry===order.expiry&&
       pick.leg.instrumentKey===order.instrumentKey&&pick.leg.contractId===order.contractId&&
       !!q&&q.bid>0&&q.ask>=q.bid&&(q.ask-q.bid)/q.ask<=0.025&&q.receivedAt<=time&&time-q.receivedAt<=10000;
@@ -97,7 +97,7 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
         engine.recover(s,bootId);engine.adoptBroker(s,brokerKind,time);s.lease={owner:bootId,until:time+30000};return true;
       });
       if(!lease.result){lastError='ANOTHER_WORKER_ACTIVE';return publicStatus();}
-      const analysis=context().analysis,selected=engine.selectCandidate(lease.state.policy,analysis);
+      const analysis=context().analysis,selected=engine.selectCandidate(lease.state.policy,analysis,time);
       const instrumentKey=selected.leg?.instrumentKey||analysis?.decision?.tradeLegs?.buyLeg?.instrumentKey;
       const keys=Object.values(lease.state.trades).filter(t=>!t.closedAt).map(t=>t.instrumentKey);
       if(instrumentKey)keys.push(instrumentKey);
@@ -132,7 +132,7 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
         engine.archiveClosed(s,now());
         if(advice?.action==='EXIT'&&advice.tradeId&&adviceFresh(now()))engine.requestModelExit(s,advice.tradeId,now());
         engine.manage(s,view.quotes||{},now());
-        const planKey=engine.selectCandidate(s.policy,view.analysis).leg?.instrumentKey||view.analysis?.decision?.tradeLegs?.buyLeg?.instrumentKey;
+        const planKey=engine.selectCandidate(s.policy,view.analysis,now()).leg?.instrumentKey||view.analysis?.decision?.tradeLegs?.buyLeg?.instrumentKey;
         const previousEntryResult=lastEntryResult;
         lastEntryResult=engine.planEntry(s,view.analysis,view.quotes?.[planKey],meta,now());
         if(lastEntryResult==='LOSING_STREAK_LOCK'&&previousEntryResult!=='LOSING_STREAK_LOCK')send('STREAK:'+engine.day(now()),'EDGE sandbox paused for today: '+(s.policy.maxConsecutiveLosses||2)+' losing trades in a row.');

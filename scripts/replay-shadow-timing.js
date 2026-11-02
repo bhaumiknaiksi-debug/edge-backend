@@ -6,7 +6,9 @@
 //   node scripts/replay-shadow-timing.js --json     # machine-readable
 //
 // Session shapes are constructed, not recorded market data: they exercise the state handling under known
-// conditions. Ground truth comes from the final, clean candles: a "genuine opportunity" is a completed close
+// conditions. Scope: ENTRY ELIGIBILITY only (the executor's planEntry returning QUEUED). There is no paper-broker
+// fill, protective stop, target or exit in this replay; a queued trade is simply closed after 15 minutes so later
+// entries are possible. P&L and the full order lifecycle are not measured here. Ground truth comes from the final, clean candles: a "genuine opportunity" is a completed close
 // crossing the opening range with the regime aligned within 10 minutes of the crossing.
 const { buildTimingSource, createShadowTiming } = require('../src/engine/shadowTiming');
 const { createShadowTimingV3 } = require('../src/engine/shadowTimingV3');
@@ -47,6 +49,7 @@ const CONDITIONS = {
   'ATM strike rolls': { rolls:true },
   'quote too wide for 3 min after break': { wideQuote:3 * 60000 },
   'server restart 1 min after break': { restartAfter:60000 },
+  'newest candle missing every 3rd poll': { dropNewest:true },
 };
 
 function crossings(closes, dir) { // ground truth from final clean data
@@ -85,6 +88,7 @@ function simulate(version, shape, cond) {
       if (c.settledRevision && breaks.length && start + FIVE === breaks[0] && age >= 60000 && age < 100000) close = dir === 'UP' ? HIGH - 2 : LOW + 2;
       rows.push([start, close, Math.max(close, 24000) + 3, Math.min(close, 24200) - 3, close]);
     }
+    if (c.dropNewest && poll % 3 === 1 && rows.length > 3) rows.pop(); // otherwise-valid but partial response
     const raw = rows.map(r => [new Date(r[0]).toISOString(), r[1], Math.max(r[1], r[2], r[4]), Math.min(r[1], r[3], r[4]), r[4], 1000]);
     const failed = c.fetchFail && poll % 7 === 3;
     const source = failed ? buildTimingSource([], now) : buildTimingSource(raw, now);
@@ -132,6 +136,7 @@ for (const shape of Object.keys(SHAPES)) for (const cond of Object.keys(CONDITIO
 }
 if (process.argv.includes('--json')) { console.log(JSON.stringify(rows, null, 2)); return; }
 const f = r => `${r.entries}e ${r.missed}m ${r.duplicate}d ${r.unsafe}u ${r.late}l @${r.firstEntry}`;
+console.log('ENTRY ELIGIBILITY replay (constructed sessions; no broker fills, stops or exits).');
 console.log('Per cell: entries(e) missed(m) duplicate(d) unsafe(u) late>10min(l) @first entry. genuine = real opportunities.\n');
 console.log('shape'.padEnd(27) + 'condition'.padEnd(37) + 'genuine  ' + 'V2'.padEnd(26) + 'V3');
 for (const r of rows) console.log(r.shape.padEnd(27) + r.cond.padEnd(37) + String(r.v2.genuine).padEnd(9) + f(r.v2).padEnd(26) + f(r.v3));

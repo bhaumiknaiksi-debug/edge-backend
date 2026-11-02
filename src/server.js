@@ -1,10 +1,10 @@
 'use strict';
 const { createShadowTiming, buildReadinessView } = require('./engine/shadowTiming');
 const evaluateShadowTiming = createShadowTiming();
-const { createShadowTimingV3 } = require('./engine/shadowTimingV3');
+const { createShadowTimingV3, v3Enabled } = require('./engine/shadowTimingV3');
 const evaluateShadowTimingV3 = createShadowTimingV3();
 // V3 replaces V2 only when both flags are on. Default (unset) keeps V2 exactly as before.
-const SHADOW_TIMING_V3 = process.env.EDGE_SHADOW_TIMING_ENABLED === 'true' && process.env.EDGE_SHADOW_TIMING_V3_ENABLED === 'true';
+const SHADOW_TIMING_V3 = v3Enabled(process.env);
 
 const { buildMarketFeatures } = require('./engine/marketFeatureEngine');
 const { classifyRegime } = require('./engine/regimeEngine');

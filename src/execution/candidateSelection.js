@@ -28,7 +28,7 @@ function authoritative(result){
 // Opt-in: a candidate of ANY tier (A preferred, then B, then C) whose own frozen opening-range level has been
 // crossed by a completed candle (OPENING_RANGE_SHADOW_V1 status CONFIRMED and shadowEntryReady). The stop is the
 // same frozen level: if price closes back through it, the setup that justified the entry is gone.
-function shadow(result){
+function shadow(result,now){
   const d=result?.decision,plans=d?.researchCandidatePlans?.plans,timing=d?.shadowTiming,spot=Number(result?.spot);
   const v3=timing?.version===SHADOW_VERSION_V3;
   if(!plans||(timing?.version!==SHADOW_VERSION&&!v3))return {reason:'SHADOW_TIMING_UNAVAILABLE'};
@@ -41,6 +41,10 @@ function shadow(result){
     // V3: the timing rule already required regime alignment, freshness, no chase and trusted data; the breakout id
     // is carried so the executor can refuse a second entry from the same breakout (any strike, any tier).
     if(v3&&(typeof st.breakoutId!=='string'||!st.breakoutId||st.regimeAligned!==true||st.entryFresh!==true)){reason='BREAKOUT_NOT_ENTRY_READY';continue;}
+    // V3: the entry deadline is re-checked against the caller's clock; the timing flag may be up to 60 s old.
+    const deadline=v3?Date.parse(st.entryWindowEndsAt):null;
+    if(v3&&(!Number.isFinite(deadline)||!Number.isFinite(now))){reason='ENTRY_DEADLINE_UNVERIFIED';continue;}
+    if(v3&&now>=deadline){reason='ENTRY_WINDOW_ELAPSED';continue;}
     const bullish=plan.strategy==='LONG_CALL',direction=String(d.regime?.direction||'');
     if(bullish?direction.includes('BEAR'):direction.includes('BULL')){reason='REGIME_OPPOSES_CANDIDATE';continue;}
     const level=bullish?st.anchor?.high:st.anchor?.low,delta=Math.abs(Number(plan.legs.legDelta??leg.delta));
@@ -49,7 +53,7 @@ function shadow(result){
     if(!(distance>0)){reason='ANCHOR_LOST';continue;}
     if(v3&&distance>Number(st.chaseLimitPoints)){reason='CHASE_LIMIT';continue;}
     return {tier,source:'SHADOW_OPENING_RANGE',strategy:plan.strategy,leg,ruleVersion:v3?SHADOW_VERSION_V3:SHADOW_VERSION,riskModel:RISK_MODEL,
-      ...(v3?{breakoutId:st.breakoutId,identity:st.breakoutId}:{}), // V3 entry identity = the breakout, not the session
+      ...(v3?{breakoutId:st.breakoutId,identity:st.breakoutId,entryDeadline:deadline}:{}), // V3 entry identity = the breakout, not the session
       anchor:{level,high:st.anchor.high,low:st.anchor.low,spot,distance,delta,episodeId:st.episodeId||null,...(v3?{crossedAt:st.crossedAt}:{})},
       exitPlan:({price,bid,ask,tick,down})=>{
         // Premium stop = entry minus the delta-estimated move back to the level, never tighter than twice the spread.
@@ -85,9 +89,9 @@ function claude(result){
     }};
 }
 
-function selectCandidate(policy,result){
+function selectCandidate(policy,result,now){
   const mode=policy?.entryMode||DEFAULT_MODE;
-  return mode==='OPENING_RANGE_SHADOW_V1'?shadow(result):mode==='CLAUDE_DECIDES_V1'?claude(result):authoritative(result);
+  return mode==='OPENING_RANGE_SHADOW_V1'?shadow(result,now):mode==='CLAUDE_DECIDES_V1'?claude(result):authoritative(result);
 }
 
 // Days-to-expiry bucket for results, counted in weekdays (NSE holidays are not modelled).
