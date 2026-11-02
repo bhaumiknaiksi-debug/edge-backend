@@ -28,9 +28,11 @@ function buildTimingSource(raw, now = Date.now()) {
   if (now < end || opening.length !== 3) return { available:false, reason:'COMPLETE_OPENING_RANGE_REQUIRED' };
   const high = Math.max(...opening.map(r => r.high)), low = Math.min(...opening.map(r => r.low));
   if (high <= low) return { available:false, reason:'INVALID_OPENING_RANGE' };
+  // `candles` (completed bars, start time + close) is read only by the V3 timing rule; V2 ignores it.
   return { available:true, session:day, source:'NIFTY_INDEX_5M_OPENING_RANGE',
     high, low, completedAt:new Date(end).toISOString(),
-    latest: rows.at(-1), previous: rows.at(-2) || null };
+    latest: rows.at(-1), previous: rows.at(-2) || null,
+    candles: rows.map(r => ({ time:r.time, close:r.close })) };
 }
 
 function buildReadinessView({ setup, entry, regime, strategy, marketPhase, chartAgreement, risk, position }) {

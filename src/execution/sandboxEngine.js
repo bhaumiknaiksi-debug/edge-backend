@@ -169,9 +169,11 @@ function planEntry(s,result,quote,meta,now){
   const base=[day(now),pick.strategy,result.expiry,leg.instrumentKey,leg.contractId];
   const id=hash(pick.identity?[...base,pick.identity]:base); // a model decision is its own identity; other modes are unchanged
   if(s.trades[id])return 'SIGNAL_ALREADY_CONSUMED';
+  // V3: one entry per market breakout, whatever strike the ATM roll or tier now points at.
+  if(pick.breakoutId&&Object.values(s.trades).some(t=>t.breakoutId===pick.breakoutId))return 'BREAKOUT_ALREADY_CONSUMED';
   const t={id,day:day(now),createdAt:now,entryExpiresAt:now+15000,analysisAt:result.timestamp,
     instrumentKey:leg.instrumentKey,contractId:leg.contractId,strategy:pick.strategy,expiry:result.expiry,
-    tier:pick.tier,entrySource:pick.source,expiryBucket:expiryBucket(result.expiry,day(now)),ruleVersion:pick.ruleVersion,riskModel:pick.riskModel,anchor:pick.anchor,
+    tier:pick.tier,entrySource:pick.source,expiryBucket:expiryBucket(result.expiry,day(now)),ruleVersion:pick.ruleVersion,riskModel:pick.riskModel,anchor:pick.anchor,...(pick.breakoutId?{breakoutId:pick.breakoutId}:{}),
     tickSize:tick,quantity:meta.lotSize,stop,stopLimit,target,plannedRisk:risk,costReserve:policy.costReserve,
     exitReason:null,closedAt:null,netPnl:null,pnlBasis:'BROKER_FILLS_MINUS_ESTIMATED_FRICTION',buys:0};
   s.trades[id]=t;addOrder(s,t,'ENTRY',t.quantity,price);return 'QUEUED';

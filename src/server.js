@@ -1,6 +1,10 @@
 'use strict';
 const { createShadowTiming, buildReadinessView } = require('./engine/shadowTiming');
 const evaluateShadowTiming = createShadowTiming();
+const { createShadowTimingV3 } = require('./engine/shadowTimingV3');
+const evaluateShadowTimingV3 = createShadowTimingV3();
+// V3 replaces V2 only when both flags are on. Default (unset) keeps V2 exactly as before.
+const SHADOW_TIMING_V3 = process.env.EDGE_SHADOW_TIMING_ENABLED === 'true' && process.env.EDGE_SHADOW_TIMING_V3_ENABLED === 'true';
 
 const { buildMarketFeatures } = require('./engine/marketFeatureEngine');
 const { classifyRegime } = require('./engine/regimeEngine');
@@ -836,7 +840,8 @@ function analyse(chain, expiryDate, marketContext = null) {
 
   const readinessView = buildReadinessView({ setup, entry:entryPlan, regime, strategy,
     marketPhase:getMarketPhase(), chartAgreement:signalTier.chartAgreement, risk:riskPlan, position:positionPlan });
-  const shadowTiming = evaluateShadowTiming({ enabled:process.env.EDGE_SHADOW_TIMING_ENABLED === 'true',
+  const shadowTiming = (SHADOW_TIMING_V3 ? evaluateShadowTimingV3 : evaluateShadowTiming)({
+    enabled:process.env.EDGE_SHADOW_TIMING_ENABLED === 'true',
     source:marketContext?.timingSource, candidates:researchCandidatePlans,
     input:{ spot, support:support.strike, resistance:resistance.strike, ceWall, peWall,
       regime, features:marketFeatures, marketPhase:getMarketPhase(), dte, minutesRemaining:getMinutesRemainingIST() } });

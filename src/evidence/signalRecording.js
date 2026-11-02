@@ -11,7 +11,7 @@ const groups={
   chart:['engine/chartIntelligence.js','engine/cprEngine.js','engine/setupObservability.js','data/marketContext.js'],
   entry:['engine/entryEngine.js'],
   eligibility:['engine/riskEngine.js','engine/positionSizingEngine.js','trading/ledger.js'],
-  shadowTiming:['engine/shadowTiming.js'],
+  shadowTiming:['engine/shadowTiming.js','engine/shadowTimingV3.js'],
   shadowEvents:['evidence/shadowEvents.js'],
   exitHypotheses:['trading/readOnlyTradePlanner.js','engine/managementEngine.js','engine/riskEngine.js']
 };
