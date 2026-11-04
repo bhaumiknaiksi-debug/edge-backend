@@ -93,21 +93,24 @@ assert.equal(selectCandidate({entryMode:'OPENING_RANGE_SHADOW_V1'},analysis()).r
       decision:{strategy:'WAIT',regime:{direction:'BULLISH'},researchCandidatePlans:{plans},shadowTiming:timing}}};
   };
   const m={...meta(),session:DAY};
-  evaluate({enabled:true,now:T('09:31:05'),source:buildTimingSource(opening,T('09:31:05')),candidates:{plans},input:{marketPhase:'OPEN',regime:{direction:'BULLISH'}}});
-  let now=T('09:46:05'),x=at(now,rows(3));
+  // production polls every 30 s; a candle is judged only after two matching reads a minute apart
+  const poll=(from,to,raw)=>{let r;for(let n=from;n<=to;n+=30000)r=at(n,raw);return r;};
+  let now=T('09:47:05'),x=poll(T('09:30:05'),now,rows(3));
   assert.equal(x.timing.plans.C.status,'CONFIRMED');assert.equal(x.timing.plans.C.shadowEntryReady,true,'confirmed with full coverage');
-  // 09:51:05: the 09:45 candle should have settled but the (otherwise valid) response stops at 09:40
-  now=T('09:51:05');x=at(now,rows(3));
+  // 09:52:05: the 09:45 candle should have been confirmed but the (otherwise valid) response stops at 09:40
+  now=T('09:52:05');x=poll(T('09:47:35'),now,rows(3));
   assert.equal(x.timing.plans.C.status,'CONFIRMED','the breakout itself is kept');
   assert.equal(x.timing.plans.C.dataStatus,'INCOMPLETE_CANDLES');assert.equal(x.timing.plans.C.shadowEntryReady,false);
   let s=armed();s.reconciledAt=now;
   assert.equal(E.planEntry(s,x.result,quote(K1,now),m,now),'NO_CONFIRMED_SHADOW_CANDIDATE','new entries fail closed');
   // a hole in the middle of the response also fails closed, even when the newest candle is present
   const holed=rows(4).filter((r,i)=>i!==4);
-  now=T('09:51:20');x=at(now,holed);
+  now=T('09:52:20');x=at(now,holed);
   assert.equal(x.timing.plans.C.dataStatus,'INCOMPLETE_CANDLES');
-  // coverage restored -> eligible again inside the window
-  now=T('09:51:40');x=at(now,rows(4),23008);
+  // coverage restored: the late candle still needs its own confirmation before entries resume
+  now=T('09:52:40');x=at(now,rows(4),23008);
+  assert.equal(x.timing.plans.C.dataStatus,'CANDLE_UNCONFIRMED');assert.equal(x.timing.plans.C.shadowEntryReady,false);
+  now=T('09:53:40');x=at(now,rows(4),23008);
   assert.equal(x.timing.plans.C.dataStatus,'OK');assert.equal(x.timing.plans.C.shadowEntryReady,true);
   s=armed();s.reconciledAt=now;
   assert.equal(E.planEntry(s,x.result,quote(K1,now),m,now),'QUEUED','entry once continuous coverage is back');
