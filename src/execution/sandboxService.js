@@ -46,6 +46,13 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
   const positionsRetryMs=Number.isFinite(dependencies.positionsRetryMs)?dependencies.positionsRetryMs:300000;
   let readFailingSince=null,lastReadFailure=null,lastCompletedAt=null,positionsMissingUntil=0;
   const iso=t=>t===null?null:new Date(t).toISOString();
+  // Last policy seen in sandbox state, shared with the signal engine's ledger sizing (one set of limits).
+  // Refreshed by every tick (every 2 s) and every policy change; older than LIMITS_MAX_AGE_MS -> unavailable.
+  const LIMITS_MAX_AGE_MS=5*60000;
+  let knownPolicy=null,knownPolicyAt=null;
+  const remember=s=>{if(s?.policy){knownPolicy=s.policy;knownPolicyAt=now();}};
+  const limits=()=>knownPolicy&&knownPolicyAt!==null&&now()-knownPolicyAt<=LIMITS_MAX_AGE_MS?
+    {capital:knownPolicy.capital,dailyLoss:knownPolicy.dailyLoss,perTradeRisk:knownPolicy.perTradeRisk,source:'CONTROL_PAGE',observedAt:iso(knownPolicyAt)}:null;
   const flat=s=>!Object.values(s.orders||{}).some(o=>!engine.terminal(o))&&!Object.values(s.trades||{}).some(t=>!t.closedAt);
   const publicStatus=()=>({version:'EDGE_SANDBOX_EXECUTION_V1',enabled,mode:'SANDBOX',broker:brokerKind,fillModel:brokerKind==='PAPER'?FILL_MODEL:'UPSTOX_SANDBOX_SIMULATED_RESPONSES',liveOrdersSupported:false,
     liveDecisionImpact:false,configured:!reason,reason:lastError,lastTickAt,lastEntryResult,brokerReads,positionBasis,tickCount,lastTickStartedAt,lastErrorAt,
@@ -88,7 +95,7 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
     if(reason||running||stopped)return publicStatus();running=true;tickCount++;lastTickStartedAt=new Date(now()).toISOString();
     try{
       if(idleTickMs>0&&lastCompletedAt!==null&&now()-lastCompletedAt<idleTickMs){
-        const idle=await store.read().catch(()=>null);
+        const idle=await store.read().catch(()=>null);remember(idle);
         if(idle&&!idle.armed&&flat(idle))return publicStatus();
       }
       const time=now();
@@ -96,6 +103,7 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
         if(s.lease&&s.lease.owner!==bootId&&s.lease.until>time)return false;
         engine.recover(s,bootId);engine.adoptBroker(s,brokerKind,time);s.lease={owner:bootId,until:time+30000};return true;
       });
+      remember(lease.state);
       if(!lease.result){lastError='ANOTHER_WORKER_ACTIVE';return publicStatus();}
       const analysis=context().analysis,selected=engine.selectCandidate(lease.state.policy,analysis,time);
       const instrumentKey=selected.leg?.instrumentKey||analysis?.decision?.tradeLegs?.buyLeg?.instrumentKey;
@@ -251,7 +259,7 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
     app.post(base+'/policy',guard(async(req,res)=>{
       if(req.body?.confirmSandbox!==true)return res.status(400).json({error:'SANDBOX_CONFIRMATION_REQUIRED'});
       const updated=await store.mutate(s=>engine.configurePolicy(s,req.body||{},now()));
-      const p=updated.state.policy;res.json({mode:'SANDBOX',policy:p,dailyLossGoalRatio:p.dailyLoss/(p.dailyGoal||1000),liveOrdersSupported:false});
+      remember(updated.state);const p=updated.state.policy;res.json({mode:'SANDBOX',policy:p,dailyLossGoalRatio:p.dailyLoss/(p.dailyGoal||1000),liveOrdersSupported:false});
     }));
     for(const [path,operation] of [['arm','ARM'],['stop','STOP']])app.post(base+'/'+path,guard(async(req,res)=>{
       if(req.body?.confirmSandbox!==true)return res.status(400).json({error:'SANDBOX_CONFIRMATION_REQUIRED'});
@@ -259,6 +267,6 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
       res.json({mode:'SANDBOX',armed:updated.state.armed,killed:updated.state.killed,liveOrdersSupported:false});
     }));
   }
-  return {start,stop,tick,advise,routes,status:publicStatus};
+  return {start,stop,tick,advise,routes,status:publicStatus,limits};
 }
 module.exports={createSandboxService};
