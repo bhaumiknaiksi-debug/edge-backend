@@ -242,7 +242,7 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
       res.json({decisions:store.readArchive?await store.readArchive('DECISION',limit):[]});
     }));
     app.get(base,guard(async(_req,res)=>{const state=await store.read(),archived=store.readArchive?await store.readArchive('TRADE'):[];
-      res.json({status:publicStatus(),state,history:{archivedTrades:state.archivedTrades||0,archivedPnl:state.archivedPnl||0},tierSummary:tierSummary(state,archived),advisor:{configured:!!advisor,model:advisor?.model||null,...advisorStatus},catalog:catalog.status()});}));
+      res.json({status:publicStatus(),state,monthly:engine.monthlySummary(state,now()),history:{archivedTrades:state.archivedTrades||0,archivedPnl:state.archivedPnl||0},tierSummary:tierSummary(state,archived),advisor:{configured:!!advisor,model:advisor?.model||null,...advisorStatus},catalog:catalog.status()});}));
     app.post(base+'/resolve',guard(async(req,res)=>{
       if(req.body?.confirmSandbox!==true)return res.status(400).json({error:'SANDBOX_CONFIRMATION_REQUIRED'});
       const updated=await store.mutate(s=>engine.resolveTrade(s,req.body||{},now()));
@@ -252,6 +252,16 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
       if(req.body?.confirmSandbox!==true)return res.status(400).json({error:'SANDBOX_CONFIRMATION_REQUIRED'});
       const updated=await store.mutate(s=>engine.configurePolicy(s,req.body||{},now()));
       const p=updated.state.policy;res.json({mode:'SANDBOX',policy:p,dailyLossGoalRatio:p.dailyLoss/(p.dailyGoal||1000),liveOrdersSupported:false});
+    }));
+    // PAPER-only monthly loss limit. This month's archived P&L is rebuilt from the durable archive and must match the
+    // archive counters in state; any read failure, truncation or mismatch refuses activation (no silent zero start).
+    app.post(base+'/policy/monthly',guard(async(req,res)=>{
+      if(req.body?.confirmSandbox!==true)return res.status(400).json({error:'SANDBOX_CONFIRMATION_REQUIRED'});
+      const LIMIT=20000;let reconstruction;
+      try{reconstruction=engine.reconstructMonth(store.readArchive?await store.readArchive('TRADE',LIMIT):null,now(),LIMIT);}
+      catch(_){return res.status(409).json({error:'MONTHLY_RECONSTRUCTION_FAILED'});}
+      const updated=await store.mutate(s=>engine.configureMonthlyPolicy(s,{requestId:req.body.requestId,monthlyLoss:req.body.monthlyLoss,reconstruction},now()));
+            res.json({mode:'SANDBOX',monthly:engine.monthlySummary(updated.state,now()),reconstruction,liveOrdersSupported:false});
     }));
     for(const [path,operation] of [['arm','ARM'],['stop','STOP']])app.post(base+'/'+path,guard(async(req,res)=>{
       if(req.body?.confirmSandbox!==true)return res.status(400).json({error:'SANDBOX_CONFIRMATION_REQUIRED'});
