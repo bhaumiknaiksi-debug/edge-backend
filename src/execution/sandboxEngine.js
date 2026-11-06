@@ -8,6 +8,25 @@ const money=x=>Math.round(x*100)/100;
 const positive=x=>typeof x==='number'&&Number.isFinite(x)&&x>0;
 const day=t=>new Date(t+19800000).toISOString().slice(0,10);
 const minutes=t=>{const d=new Date(t+19800000);return d.getUTCHours()*60+d.getUTCMinutes();};
+const month=t=>day(t).slice(0,7);
+const MONTH=/^\d{4}-\d{2}$/;
+// PAPER-only calendar-month (IST) net loss limit. Active when policy.monthlyLoss is set; it then replaces the daily
+// loss and per-trade ceilings for entries and exits. Month P&L = trades closed in the month that are still in hot state
+// + the per-month archived total (seeded from the archive at activation, then updated by archiveClosed).
+const monthlyOn=s=>s.policy.monthlyLoss!==undefined;
+function monthPnl(s,now){
+  const m=month(now);
+  const hot=Object.values(s.trades).filter(t=>t.closedAt&&t.buys>0&&month(t.closedAt)===m).reduce((a,t)=>a+t.netPnl,0);
+  return money(hot+(s.monthly.archivedPnl[m]||0));
+}
+const monthlyRemaining=(s,now)=>money(s.policy.monthlyLoss+monthPnl(s,now));
+function lockMonth(s,now){const m=month(now);if(!s.monthly.lockedMonths.includes(m))s.monthly.lockedMonths.push(m);}
+function monthlySummary(s,now){
+  if(!monthlyOn(s))return {active:false};
+  const m=month(now),pnl=monthPnl(s,now),remaining=monthlyRemaining(s,now);
+  return {active:true,month:m,limit:s.policy.monthlyLoss,monthPnl:pnl,remaining,
+    locked:s.monthly.lockedMonths.includes(m)||remaining<=0,trackedFrom:s.monthly.trackedFrom};
+}
 const terminal=o=>['COMPLETE','CANCELLED','REJECTED','EXPIRED'].includes(o.state);
 const working=o=>!terminal(o);
 function initialState(){return {version:1,mode:'SANDBOX',armed:false,armedDay:null,killed:true,haltReason:null,bootId:null,reconciledAt:null,
@@ -20,7 +39,45 @@ function assertState(s){
     (p.dailyGoal!==undefined&&(!positive(p.dailyGoal)||p.dailyGoal>100000))||(p.entryMode!==undefined&&!MODES.includes(p.entryMode))||
     (p.maxConsecutiveLosses!==undefined&&!(Number.isSafeInteger(p.maxConsecutiveLosses)&&p.maxConsecutiveLosses>=1&&p.maxConsecutiveLosses<=5))||
     (s.archivedPnl!==undefined&&!Number.isFinite(s.archivedPnl))||
+    (p.monthlyLoss!==undefined&&(!positive(p.monthlyLoss)||p.monthlyLoss>p.capital||!validMonthly(s.monthly)))||
     !s.orders||Array.isArray(s.orders)||!s.trades||Array.isArray(s.trades)||!s.commands||!Array.isArray(s.lockedDays))throw Error('INVALID_SANDBOX_STATE');
+}
+function validMonthly(m){
+  return !!m&&typeof m==='object'&&MONTH.test(m.trackedFrom)&&!!m.archivedPnl&&typeof m.archivedPnl==='object'&&!Array.isArray(m.archivedPnl)&&
+    Object.entries(m.archivedPnl).every(([k,v])=>MONTH.test(k)&&Number.isFinite(v))&&Array.isArray(m.lockedMonths)&&m.lockedMonths.every(x=>MONTH.test(x));
+}
+// Activates (or re-seeds) the monthly limit. `reconstruction` is computed by the service from the durable trade archive;
+// it must agree exactly with the archive counters kept in state, otherwise activation is refused (never a silent zero).
+function configureMonthlyPolicy(s,input,now=Date.now()){
+  assertState(s);
+  const {requestId,monthlyLoss,reconstruction:r}=input||{};
+  if(!/^[a-zA-Z0-9_-]{16,100}$/.test(requestId||'')||!positive(monthlyLoss)||money(monthlyLoss)!==monthlyLoss||monthlyLoss>s.policy.capital)
+    throw Error('INVALID_SANDBOX_POLICY');
+  const command='MONTHLY:'+hash([monthlyLoss,r?.month??null,r?.monthArchivedPnl??null,r?.archivedTrades??null,r?.archivedTotalPnl??null]);
+  if(s.commands[requestId]){if(s.commands[requestId]!==command)throw Error('REQUEST_ID_REUSED');return;}
+  if(!s.killed||s.armed||Object.values(s.trades).some(t=>!t.closedAt)||Object.values(s.orders).some(working))throw Error('STOP_AND_FLATTEN_BEFORE_POLICY_CHANGE');
+  if(Object.keys(s.commands).length>=1000)throw Error('COMMAND_LIMIT');
+  if(!r||r.month!==month(now)||!Number.isFinite(r.monthArchivedPnl)||!Number.isSafeInteger(r.archivedTrades)||!Number.isFinite(r.archivedTotalPnl)||
+    r.archivedTrades!==(s.archivedTrades||0)||money(r.archivedTotalPnl)!==money(s.archivedPnl||0))throw Error('MONTHLY_RECONSTRUCTION_FAILED');
+  const locks=s.monthly?.lockedMonths||[];
+  s.policy={...s.policy,monthlyLoss};
+  s.monthly={trackedFrom:r.month,archivedPnl:{[r.month]:money(r.monthArchivedPnl)},lockedMonths:[...locks]};
+  if(monthlyRemaining(s,now)<=0)lockMonth(s,now);
+  s.commands[requestId]=command;assertState(s);
+}
+// Pure: rebuilds the archive figures from durable TRADE archive rows. Any malformed or possibly truncated input throws,
+// so activation fails closed instead of starting the month at zero.
+function reconstructMonth(rows,now,limit){
+  if(!Array.isArray(rows)||(Number.isSafeInteger(limit)&&rows.length>=limit))throw Error('MONTHLY_RECONSTRUCTION_FAILED');
+  const m=month(now),ids=new Set();let total=0,inMonth=0;
+  for(const row of rows){
+    const t=row?.trade;
+    if(!t||typeof t.id!=='string'||ids.has(t.id)||!Number.isFinite(t.closedAt)||!Number.isSafeInteger(t.buys)||t.buys<0||
+      (t.buys>0&&!Number.isFinite(t.netPnl)))throw Error('MONTHLY_RECONSTRUCTION_FAILED');
+    ids.add(t.id);
+    if(t.buys>0){total+=t.netPnl;if(month(t.closedAt)===m)inMonth+=t.netPnl;}
+  }
+  return {month:m,monthArchivedPnl:money(inMonth),archivedTrades:rows.length,archivedTotalPnl:money(total)};
 }
 function configurePolicy(s,input,now=Date.now()){
   assertState(s);
@@ -40,7 +97,7 @@ function configurePolicy(s,input,now=Date.now()){
   s.policy={...s.policy,dailyGoal,dailyLoss,perTradeRisk:perTradeRisk??Math.min(s.policy.perTradeRisk,dailyLoss),
     entryMode:entryMode??s.policy.entryMode??DEFAULT_MODE,maxConsecutiveLosses:maxConsecutiveLosses??s.policy.maxConsecutiveLosses??2};
   const realized=Object.values(s.trades).filter(t=>t.closedAt&&day(t.closedAt)===day(now)).reduce((a,t)=>a+t.netPnl,0);
-  if(realized<=-dailyLoss&&!s.lockedDays.includes(day(now)))s.lockedDays.push(day(now));
+  if(!monthlyOn(s)&&realized<=-dailyLoss&&!s.lockedDays.includes(day(now)))s.lockedDays.push(day(now));
   s.commands[requestId]=command;assertState(s);
 }
 // Owner command for a trade left open on a PRIOR day (broker books roll and intraday positions are squared off).
@@ -65,6 +122,7 @@ function resolveTrade(s,input,now=Date.now()){
   if(q.net>0)t.pnlBasis='OWNER_RESOLVED_UNSOLD_QUANTITY_AT_ZERO';
   t.exitReason||='OWNER_RESOLVED';
   t.resolution={at:now,reason:reason.trim(),netQuantity:q.net};
+  if(monthlyOn(s)&&month(t.closedAt)===month(now)&&monthlyRemaining(s,now)<=0)lockMonth(s,now);
   s.commands[requestId]=command;assertState(s);
 }
 // A fresh model EXIT for the open trade is just another exit reason; the normal stop-cancel-then-sell path does the work.
@@ -89,9 +147,11 @@ function archiveClosed(s,now,max=20){
     if(orders.some(working))continue;
     (s.archiveQueue||=[]).push({id:'trade:'+t.id,kind:'TRADE',payload:{trade:t,orders}});
     s.archivedPnl=money((s.archivedPnl||0)+(t.buys>0?t.netPnl:0));s.archivedTrades=(s.archivedTrades||0)+1;
+    if(s.monthly&&t.buys>0&&month(t.closedAt)>=s.monthly.trackedFrom){const m=month(t.closedAt);s.monthly.archivedPnl[m]=money((s.monthly.archivedPnl[m]||0)+t.netPnl);}
     for(const o of orders)delete s.orders[o.id];
     delete s.trades[t.id];moved++;
   }
+  if(s.monthly){const keep=new Set([month(now),month(Date.parse(month(now)+'-01T00:00:00+05:30')-1)]);for(const k of Object.keys(s.monthly.archivedPnl))if(!keep.has(k)&&k<month(now))delete s.monthly.archivedPnl[k];}
   return moved;
 }
 function halt(s,reason){s.haltReason=reason;s.armed=false;}
@@ -157,14 +217,18 @@ function planEntry(s,result,quote,meta,now){
   const closed=Object.values(s.trades).filter(t=>t.closedAt&&t.buys>0);
   const pnlToday=closed.filter(t=>day(t.closedAt)===day(now)).reduce((a,t)=>a+t.netPnl,0);
   const totalPnl=closed.reduce((a,t)=>a+t.netPnl,0)+(s.archivedPnl||0); // archived losses still lower the capital ceiling
-  if(s.lockedDays.includes(day(now))||pnlToday<=-policy.dailyLoss)return 'DAILY_LOSS_LOCK';
+  const monthly=monthlyOn(s),remaining=monthly?monthlyRemaining(s,now):null;
+  if(monthly&&(s.monthly.lockedMonths.includes(month(now))||remaining<=0))return 'MONTHLY_LOSS_LOCK';
+  if(s.lockedDays.includes(day(now))||(!monthly&&pnlToday<=-policy.dailyLoss))return 'DAILY_LOSS_LOCK';
   if(losingStreak(s,now)>=(policy.maxConsecutiveLosses||2))return 'LOSING_STREAK_LOCK';
   if(Object.values(s.trades).some(t=>!t.closedAt)||Object.values(s.orders).some(o=>working(o)))return 'EXPOSURE_ALREADY_EXISTS';
   if(Object.keys(s.orders).length>=500||Object.keys(s.trades).length>=100)return 'STATE_CAPACITY_LIMIT';
   if(Object.values(s.trades).filter(t=>t.day===day(now)).length>=policy.maxTradesPerDay)return 'DAILY_TRADE_LIMIT';
   const risk=money((price-stopLimit)*meta.lotSize+policy.costReserve);
-  if(risk>policy.perTradeRisk||risk>policy.dailyLoss-Math.max(0,-pnlToday))return 'RISK_LIMIT';
-  if(price*meta.lotSize+policy.costReserve>Math.max(0,policy.capital+Math.min(0,totalPnl)))return 'CAPITAL_LIMIT';
+  if(monthly?risk>remaining:(risk>policy.perTradeRisk||risk>policy.dailyLoss-Math.max(0,-pnlToday)))return 'RISK_LIMIT';
+  // Monthly mode: capital resets each calendar month (IST); only this month's net loss reduces it. Gains never raise it.
+  const capitalPnl=monthly?monthPnl(s,now):totalPnl;
+  if(price*meta.lotSize+policy.costReserve>Math.max(0,policy.capital+Math.min(0,capitalPnl)))return 'CAPITAL_LIMIT';
   // One entry per original contract/session. Poll timestamps never manufacture new entry identities.
   const base=[day(now),pick.strategy,result.expiry,leg.instrumentKey,leg.contractId];
   const id=hash(pick.identity?[...base,pick.identity]:base); // a model decision is its own identity; other modes are unchanged
@@ -227,7 +291,8 @@ function reconcile(s,book,positions,now,{positionBasis='BROKER_POSITIONS'}={}){
       t.closedAt=now;t.buys=q.buys;t.netPnl=q.buys?money(q.proceeds-q.cost-t.costReserve):0;
       const closedDay=day(now);
       const daily=Object.values(s.trades).filter(x=>x.closedAt&&day(x.closedAt)===closedDay).reduce((a,x)=>a+x.netPnl,0);
-      if(daily<=-s.policy.dailyLoss&&!s.lockedDays.includes(closedDay))s.lockedDays.push(closedDay);
+      if(monthlyOn(s)){if(monthlyRemaining(s,now)<=0)lockMonth(s,now);}
+      else if(daily<=-s.policy.dailyLoss&&!s.lockedDays.includes(closedDay))s.lockedDays.push(closedDay);
     }
   }
   const actual={};
@@ -253,7 +318,8 @@ function manage(s,quotes,now){
     if(fresh&&q.net>0){
       const pnlToday=Object.values(s.trades).filter(x=>x.day===day(now)&&x.closedAt).reduce((a,x)=>a+x.netPnl,0);
       const marked=quote.bid*q.net+q.proceeds-q.cost-t.costReserve;
-      if(pnlToday+marked<=-s.policy.dailyLoss){t.exitReason ||= 'DAILY_LOSS';if(!s.lockedDays.includes(day(now)))s.lockedDays.push(day(now));}
+      if(monthlyOn(s)){if(monthPnl(s,now)+marked<=-s.policy.monthlyLoss){t.exitReason ||= 'MONTHLY_LOSS';lockMonth(s,now);}}
+      else if(pnlToday+marked<=-s.policy.dailyLoss){t.exitReason ||= 'DAILY_LOSS';if(!s.lockedDays.includes(day(now)))s.lockedDays.push(day(now));}
       if(quote.bid<=t.stop)t.exitReason ||= 'STOP_BREACHED';
       if(quote.bid>=t.target)t.exitReason ||= 'TARGET';
     }
@@ -328,4 +394,4 @@ function claimEmergencyCancel(s,now){
   }
   return null;
 }
-module.exports={initialState,assertState,control,configurePolicy,resolveTrade,requestModelExit,archiveClosed,losingStreak,selectCandidate,expiryBucket,recover,planEntry,reconcile,manage,claim,finish,claimEmergencyCancel,adoptBroker,quantities,terminal,halt,day};
+module.exports={initialState,assertState,control,configurePolicy,configureMonthlyPolicy,reconstructMonth,monthPnl,monthlySummary,resolveTrade,requestModelExit,archiveClosed,losingStreak,selectCandidate,expiryBucket,recover,planEntry,reconcile,manage,claim,finish,claimEmergencyCancel,adoptBroker,quantities,terminal,halt,day};
