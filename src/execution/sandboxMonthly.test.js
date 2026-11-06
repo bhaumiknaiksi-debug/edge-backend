@@ -88,10 +88,27 @@ const CHEAP=30.05;
   activate(s,rows);const at=T('2026-11-20T10:00:00');arm(s,at);
   assert.equal(plan(s,at),'QUEUED','an 800 loss today no longer trips the 500 daily threshold');
 }
+// --- capital resets each month: only this month's net loss lowers the ₹10,000 ceiling; gains never raise it ---
 {
-  const {s,rows}=stateWith([],[closed('h1',T('2026-11-19T11:00:00'),-3500)]); // capital ceiling 10,000-3,500 = 6,500 < 6,600
+  const {s,rows}=stateWith([closed('oct',T('2026-10-20T11:00:00'),-5000)],[closed('h1',T('2026-11-19T11:00:00'),-3500)]);
   activate(s,rows);const at=T('2026-11-20T10:00:00');arm(s,at);
-  assert.equal(plan(s,at),'CAPITAL_LIMIT','the capital check is unchanged');
+  assert.equal(plan(s,at),'CAPITAL_LIMIT','November ceiling 10,000-3,500 = 6,500 < 6,600 needed');
+}
+{
+  const {s,rows}=stateWith([closed('oct',T('2026-10-20T11:00:00'),-5000)],[closed('h1',T('2026-11-19T11:00:00'),-3000)]);
+  activate(s,rows);const at=T('2026-11-20T10:00:00');arm(s,at);
+  assert.equal(plan(s,at),'QUEUED','October\'s 5,000 loss no longer counts: 10,000-3,000 = 7,000 >= 6,600');
+}
+{
+  const {s,rows}=stateWith([],[closed('w1',T('2026-11-19T11:00:00'),4000)]);
+  activate(s,rows);const at=T('2026-11-20T10:00:00');arm(s,at);
+  assert.equal(E.planEntry(s,analysis(at),quote(at,154.95,155),meta(at),at),'CAPITAL_LIMIT','a ₹4,000 gain does not lift the ceiling above 10,000 (155*65+100 = 10,175)');
+}
+{
+  const {s}=stateWith([closed('oct',T('2026-10-20T11:00:00'),-3500)]); // daily mode: lifetime losses still count
+  s.policy.dailyLoss=1000;s.policy.perTradeRisk=1000;
+  const at=T('2026-11-20T10:00:00');arm(s,at);
+  assert.equal(plan(s,at),'CAPITAL_LIMIT','daily mode capital rule unchanged');
 }
 // --- the two-losses-in-a-row pause still applies inside the monthly policy ---
 {
@@ -205,5 +222,5 @@ const CHEAP=30.05;
       }
     }finally{server.close();}
   }
-  console.log('Sandbox monthly limit PASS: archive reconstruction (fail closed), -6,000/+2,000 leaves 3,000, replaces daily and per-trade ceilings, capital and streak kept, open-loss exit, latch, archive/restart, IST month boundary, daily mode unchanged, HTTP activation');
+  console.log('Sandbox monthly limit PASS: archive reconstruction (fail closed), -6,000/+2,000 leaves 3,000, replaces daily and per-trade ceilings, monthly capital reset, streak kept, open-loss exit, latch, archive/restart, IST month boundary, daily mode unchanged, HTTP activation');
 })().catch(e=>{console.error(e);process.exit(1);});

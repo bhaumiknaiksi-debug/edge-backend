@@ -226,7 +226,9 @@ function planEntry(s,result,quote,meta,now){
   if(Object.values(s.trades).filter(t=>t.day===day(now)).length>=policy.maxTradesPerDay)return 'DAILY_TRADE_LIMIT';
   const risk=money((price-stopLimit)*meta.lotSize+policy.costReserve);
   if(monthly?risk>remaining:(risk>policy.perTradeRisk||risk>policy.dailyLoss-Math.max(0,-pnlToday)))return 'RISK_LIMIT';
-  if(price*meta.lotSize+policy.costReserve>Math.max(0,policy.capital+Math.min(0,totalPnl)))return 'CAPITAL_LIMIT';
+  // Monthly mode: capital resets each calendar month (IST); only this month's net loss reduces it. Gains never raise it.
+  const capitalPnl=monthly?monthPnl(s,now):totalPnl;
+  if(price*meta.lotSize+policy.costReserve>Math.max(0,policy.capital+Math.min(0,capitalPnl)))return 'CAPITAL_LIMIT';
   // One entry per original contract/session. Poll timestamps never manufacture new entry identities.
   const base=[day(now),pick.strategy,result.expiry,leg.instrumentKey,leg.contractId];
   const id=hash(pick.identity?[...base,pick.identity]:base); // a model decision is its own identity; other modes are unchanged
