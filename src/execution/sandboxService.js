@@ -11,7 +11,7 @@ const {createMarketQuotes}=require('./marketQuotes');
 const {timingSafeOwnerToken}=require('../notifications/edgeWebPush');
 const {createClaudeAdvisor,buildSnapshot}=require('./claudeAdvisor');
 const {rejectOwner}=require('../health/authThrottle');
-function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.env,dependencies={},notify=()=>{}}){
+function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.env,dependencies={},notify=()=>{},onPolicyChange=()=>{}}){
   const enabled=env.EDGE_SANDBOX_EXECUTION_ENABLED==='true';
   const tokenValid=t=>typeof t==='string'&&!!t.trim()&&!/[\r\n]/.test(t);
   // PAPER (default): EDGE fills its own orders against live quotes. UPSTOX_SANDBOX only simulates order responses
@@ -251,7 +251,10 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
     app.post(base+'/policy',guard(async(req,res)=>{
       if(req.body?.confirmSandbox!==true)return res.status(400).json({error:'SANDBOX_CONFIRMATION_REQUIRED'});
       const updated=await store.mutate(s=>engine.configurePolicy(s,req.body||{},now()));
-      const p=updated.state.policy;res.json({mode:'SANDBOX',policy:p,dailyLossGoalRatio:p.dailyLoss/(p.dailyGoal||1000),liveOrdersSupported:false});
+      const p=updated.state.policy;
+      // The signal engine sizes with these limits: tell it now, before the response, so no approval outlives the change.
+      try{onPolicyChange(p);}catch(_){}
+      res.json({mode:'SANDBOX',policy:p,dailyLossGoalRatio:p.dailyLoss/(p.dailyGoal||1000),liveOrdersSupported:false});
     }));
     for(const [path,operation] of [['arm','ARM'],['stop','STOP']])app.post(base+'/'+path,guard(async(req,res)=>{
       if(req.body?.confirmSandbox!==true)return res.status(400).json({error:'SANDBOX_CONFIRMATION_REQUIRED'});

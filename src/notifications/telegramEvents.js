@@ -25,8 +25,12 @@ function observationOf(result, now = Date.now()) {
   const ready = result.market.phase === 'OPEN' && status === 'READY_TO_EXECUTE' && allowed &&
     tier === 'A' && decision.signalTier?.researchOnly === false && decision.signalTier?.executionAllowed === true &&
     strategy !== 'WAIT' && legs.length > 0 && legs.length <= 4 && legs.every(leg=>leg.instrumentKey);
-  return {observedAt:iso(time),phase:result.market.phase,strategy,tier,status,executionAllowed:allowed,ready,legs,
-    identity:hash([strategy,clean(result.expiry || decision.expiry),legs]),
+  // The limits this approval was sized under. Part of the identity: the same strike approved under other limits is a
+  // different alert, so an old queued alert can never borrow a newer approval.
+  const t = decision.limitsToken;
+  const approval = t && /^[a-f0-9]{16}$/.test(t.version || '') && Number.isSafeInteger(t.generation) && t.generation >= 0 ? {version:t.version,generation:t.generation} : null;
+  return {observedAt:iso(time),phase:result.market.phase,strategy,tier,status,executionAllowed:allowed,ready,legs,approval,
+    identity:hash([strategy,clean(result.expiry || decision.expiry),legs,approval]),
     ruleVersion:clean(decision.ruleSpec?.version,40),
     ruleHash:/^[a-f0-9]{64}$/.test(decision.ruleSpec?.implementationHash || '') ? decision.ruleSpec.implementationHash : null};
 }

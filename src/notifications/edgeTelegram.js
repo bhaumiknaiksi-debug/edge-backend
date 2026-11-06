@@ -104,6 +104,7 @@ function buildTelegram({pool,env = process.env,getMarketPhase,getCurrentResult =
       const live = event.type === 'EXECUTION_READY' ? observationOf(getCurrentResult(),now()) : null;
       const newerVeto = event.type === 'EXECUTION_READY' && latestSeen &&
         (!latestSeen.ready || latestSeen.identity !== event.observation.identity);
+      // The approval stamp is part of the identity, so a newer approval for the same strike never matches an old alert.
       const liveVeto = event.type === 'EXECUTION_READY' && (!live?.ready || live.identity !== event.observation.identity);
       if ((event.type === 'EXECUTION_READY' && recordingGap) || liveVeto || newerVeto || !deliverable(event,state,current)) {
         await store.finish(event.id,'EXPIRED',{error:'NO_LONGER_CURRENT'});
