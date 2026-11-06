@@ -146,6 +146,7 @@ function buildPositionPlan({
 
 function ledgerPosition({strategy,tradeLegs,risk,budget}) {
   const blocked = reason => ({status:'BLOCKED',reason,recommendedLots:0,actualRiskRupees:0});
+  if (budget?.error === 'LIMITS_UNAVAILABLE') return blocked('Risk limits from the control page are unavailable.');
   if (!budget || budget.error || !budget.confirmed) return blocked('Confirm today’s trade log matches your broker before entry.');
   if (budget.locked || !(budget.availableRisk > 0)) return blocked('Daily loss allowance is exhausted or reserved by open trades.');
   if (!Number.isFinite(Date.parse(budget.checkedAt)) || Date.now()-Date.parse(budget.checkedAt)>60000) return blocked('Trade log is stale. Refresh before entry.');
@@ -161,7 +162,8 @@ function ledgerPosition({strategy,tradeLegs,risk,budget}) {
   const quoteRisk = strategy.startsWith('LONG_') ? (buy-n(risk.stop?.value))*lotSize : debit*lotSize;
   const riskPerLot=round(Math.max(perLot.rupees,quoteRisk)+costsPerLot);
   const capitalPerLot=round(debit*lotSize+costsPerLot);
-  const riskBudget=Math.min(1000,budget.availableRisk),capitalBudget=Math.min(10000,budget.availableCapital);
+  // The ledger already applies the control-page limits (per-trade risk, daily loss, capital); no second cap here.
+  const riskBudget=budget.availableRisk,capitalBudget=budget.availableCapital;
   const lots=Math.floor(Math.min(riskBudget/riskPerLot,capitalBudget/capitalPerLot));
   if(lots<1)return {...blocked('One lot exceeds remaining capital or planned loss allowance.'),riskPerLotRupees:riskPerLot,capitalPerLotRupees:capitalPerLot};
   return {status:'READY',model:'MANUAL_LEDGER_RISK',recommendedLots:lots,lotSize,actualRiskRupees:round(lots*riskPerLot),riskPerLotRupees:riskPerLot,availableRiskRupees:riskBudget,capitalRequiredRupees:round(lots*capitalPerLot),availableCapitalRupees:capitalBudget,estimatedCostsRupees:costsPerLot*lots,rule:'Planned stop risk plus ₹100 per lot cost/slippage reserve. Actual fills can exceed planned loss. Manual records must include all open positions.'};
