@@ -10,6 +10,13 @@ const day=t=>new Date(t+19800000).toISOString().slice(0,10);
 const minutes=t=>{const d=new Date(t+19800000);return d.getUTCHours()*60+d.getUTCMinutes();};
 const terminal=o=>['COMPLETE','CANCELLED','REJECTED','EXPIRED'].includes(o.state);
 const working=o=>!terminal(o);
+const LIMIT_MODES=['ENFORCE','RECORD_ONLY'];
+// RECORD_ONLY: the loss limits (daily loss, losing streak, capital lowered by losses) keep evaluating but only record
+// what they would have done. It applies to paper fills only; any other broker always enforces.
+const recordOnly=s=>s.policy.limitMode==='RECORD_ONLY'&&s.broker==='PAPER';
+// A trade's P&L as it would have been with the limits enforced: a trade they would have refused was never taken
+// (null), and one they would have closed early counts at its marked value at that moment.
+const limitPnl=t=>t.limitsWouldBlock?.length?null:t.wouldHaveExited?t.wouldHaveExited.netPnl:t.netPnl;
 function initialState(){return {version:1,mode:'SANDBOX',armed:false,armedDay:null,killed:true,haltReason:null,bootId:null,reconciledAt:null,
   orders:{},trades:{},commands:{},lockedDays:[],policy:{capital:10000,dailyGoal:1000,perTradeRisk:250,dailyLoss:500,costReserve:100,maxTradesPerDay:3,entryMode:DEFAULT_MODE,maxConsecutiveLosses:2}};}
 function assertState(s){
@@ -19,28 +26,37 @@ function assertState(s){
     !Number.isSafeInteger(p.maxTradesPerDay)||p.maxTradesPerDay<1||p.maxTradesPerDay>10||
     (p.dailyGoal!==undefined&&(!positive(p.dailyGoal)||p.dailyGoal>100000))||(p.entryMode!==undefined&&!MODES.includes(p.entryMode))||
     (p.maxConsecutiveLosses!==undefined&&!(Number.isSafeInteger(p.maxConsecutiveLosses)&&p.maxConsecutiveLosses>=1&&p.maxConsecutiveLosses<=5))||
-    (s.archivedPnl!==undefined&&!Number.isFinite(s.archivedPnl))||
+    (s.archivedPnl!==undefined&&!Number.isFinite(s.archivedPnl))||(s.archivedLimitPnl!==undefined&&!Number.isFinite(s.archivedLimitPnl))||
+    (p.limitMode!==undefined&&!LIMIT_MODES.includes(p.limitMode))||(s.wouldLockDays!==undefined&&!Array.isArray(s.wouldLockDays))||
     !s.orders||Array.isArray(s.orders)||!s.trades||Array.isArray(s.trades)||!s.commands||!Array.isArray(s.lockedDays))throw Error('INVALID_SANDBOX_STATE');
 }
 function configurePolicy(s,input,now=Date.now()){
   assertState(s);
-  const {dailyGoal,dailyLoss,requestId,perTradeRisk,entryMode,maxConsecutiveLosses}=input;
-  const extended=perTradeRisk!==undefined||entryMode!==undefined||maxConsecutiveLosses!==undefined;
+  const {dailyGoal,dailyLoss,requestId,perTradeRisk,entryMode,maxConsecutiveLosses,limitMode,maxTradesPerDay}=input;
+  const limits=limitMode!==undefined||maxTradesPerDay!==undefined;
+  const extended=perTradeRisk!==undefined||entryMode!==undefined||maxConsecutiveLosses!==undefined||limits;
   if(!/^[a-zA-Z0-9_-]{16,100}$/.test(requestId||'')||!positive(dailyGoal)||dailyGoal>100000||!positive(dailyLoss)||dailyLoss>1000||
     money(dailyGoal)!==dailyGoal||money(dailyLoss)!==dailyLoss||
     (perTradeRisk!==undefined&&(!positive(perTradeRisk)||money(perTradeRisk)!==perTradeRisk||perTradeRisk>dailyLoss||perTradeRisk<=s.policy.costReserve))||
     (entryMode!==undefined&&!MODES.includes(entryMode))||
-    (maxConsecutiveLosses!==undefined&&!(Number.isSafeInteger(maxConsecutiveLosses)&&maxConsecutiveLosses>=1&&maxConsecutiveLosses<=5)))throw Error('INVALID_SANDBOX_POLICY');
+    (maxConsecutiveLosses!==undefined&&!(Number.isSafeInteger(maxConsecutiveLosses)&&maxConsecutiveLosses>=1&&maxConsecutiveLosses<=5))||
+    (limitMode!==undefined&&!LIMIT_MODES.includes(limitMode))||
+    (maxTradesPerDay!==undefined&&!(Number.isSafeInteger(maxTradesPerDay)&&maxTradesPerDay>=1&&maxTradesPerDay<=10)))throw Error('INVALID_SANDBOX_POLICY');
   // Requests that set only goal and loss keep their original idempotency fingerprint.
-  const command='POLICY:'+hash(extended?[dailyGoal,dailyLoss,perTradeRisk??null,entryMode??null,...(maxConsecutiveLosses!==undefined?[maxConsecutiveLosses]:[])]:[dailyGoal,dailyLoss]);
+  const command='POLICY:'+hash(extended?[dailyGoal,dailyLoss,perTradeRisk??null,entryMode??null,...(maxConsecutiveLosses!==undefined?[maxConsecutiveLosses]:[]),
+    ...(limits?[{limitMode:limitMode??null,maxTradesPerDay:maxTradesPerDay??null}]:[])]:[dailyGoal,dailyLoss]);
   if(s.commands[requestId]){if(s.commands[requestId]!==command)throw Error('REQUEST_ID_REUSED');return;}
+  if(limitMode==='RECORD_ONLY'&&s.broker!=='PAPER')throw Error('RECORD_ONLY_REQUIRES_PAPER_BROKER');
   if(!s.killed||s.armed||Object.values(s.trades).some(t=>!t.closedAt)||Object.values(s.orders).some(working))throw Error('STOP_AND_FLATTEN_BEFORE_POLICY_CHANGE');
   if(Object.keys(s.commands).length>=1000)throw Error('COMMAND_LIMIT');
   // Per-trade risk is its own setting. It is never raised implicitly; tightening the daily loss can only lower it.
   s.policy={...s.policy,dailyGoal,dailyLoss,perTradeRisk:perTradeRisk??Math.min(s.policy.perTradeRisk,dailyLoss),
-    entryMode:entryMode??s.policy.entryMode??DEFAULT_MODE,maxConsecutiveLosses:maxConsecutiveLosses??s.policy.maxConsecutiveLosses??2};
-  const realized=Object.values(s.trades).filter(t=>t.closedAt&&day(t.closedAt)===day(now)).reduce((a,t)=>a+t.netPnl,0);
-  if(realized<=-dailyLoss&&!s.lockedDays.includes(day(now)))s.lockedDays.push(day(now));
+    entryMode:entryMode??s.policy.entryMode??DEFAULT_MODE,maxConsecutiveLosses:maxConsecutiveLosses??s.policy.maxConsecutiveLosses??2,
+    limitMode:limitMode??s.policy.limitMode??'ENFORCE',maxTradesPerDay:maxTradesPerDay??s.policy.maxTradesPerDay};
+  // Saving into RECORD_ONLY only ever adds to the simulated locks; a real lock is never created from simulated P&L.
+  const simulated=recordOnly(s),todays=Object.values(s.trades).filter(t=>t.closedAt&&day(t.closedAt)===day(now));
+  const realized=todays.reduce((a,t)=>a+(simulated?limitPnl(t)??0:t.netPnl),0),locks=simulated?(s.wouldLockDays||=[]):s.lockedDays;
+  if(realized<=-dailyLoss&&!locks.includes(day(now)))locks.push(day(now));
   s.commands[requestId]=command;assertState(s);
 }
 // Owner command for a trade left open on a PRIOR day (broker books roll and intraday positions are squared off).
@@ -74,9 +90,11 @@ function requestModelExit(s,tradeId,now){
   t.exitReason||='MODEL_EXIT';return true;
 }
 // Consecutive losing trades closed today (the streak resets with the IST session, like the daily loss limit).
+// In RECORD_ONLY mode the streak is counted on the limits-enforced view (refused trades never happened).
 function losingStreak(s,now){
-  const today=Object.values(s.trades).filter(t=>t.closedAt&&t.buys>0&&day(t.closedAt)===day(now)).sort((a,b)=>a.closedAt-b.closedAt);
-  let streak=0;for(let i=today.length-1;i>=0&&today[i].netPnl<0;i--)streak++;return streak;
+  const value=recordOnly(s)?limitPnl:t=>t.netPnl;
+  const today=Object.values(s.trades).filter(t=>t.closedAt&&t.buys>0&&day(t.closedAt)===day(now)&&value(t)!==null).sort((a,b)=>a.closedAt-b.closedAt);
+  let streak=0;for(let i=today.length-1;i>=0&&value(today[i])<0;i--)streak++;return streak;
 }
 // Moves closed prior-day trades (and their terminal orders) to the durable archive so the hot state never fills up.
 // Realized P&L is carried in archivedPnl so the capital ceiling still reflects every past loss.
@@ -88,11 +106,29 @@ function archiveClosed(s,now,max=20){
     const orders=Object.values(s.orders).filter(o=>o.tradeId===t.id);
     if(orders.some(working))continue;
     (s.archiveQueue||=[]).push({id:'trade:'+t.id,kind:'TRADE',payload:{trade:t,orders}});
+    s.archivedLimitPnl=money((s.archivedLimitPnl??s.archivedPnl??0)+(t.buys>0?limitPnl(t)??0:0)); // before archivedPnl: it seeds from it
     s.archivedPnl=money((s.archivedPnl||0)+(t.buys>0?t.netPnl:0));s.archivedTrades=(s.archivedTrades||0)+1;
     for(const o of orders)delete s.orders[o.id];
     delete s.trades[t.id];moved++;
   }
   return moved;
+}
+// Realized results with and without the loss limits, over every closed trade (archived and hot).
+// "Estimated with limits" is an estimate on the observed trades only: a cut-short trade is valued at the bid when the
+// limit was crossed (not a real exit fill), and trades that might have happened after that earlier exit, while the
+// actual trade was still open, are not known.
+function limitSummary(trades){
+  const row=()=>({trades:0,netPnl:0}),add=(r,p)=>{r.trades++;r.netPnl=money(r.netPnl+p);};
+  const out={basis:'ESTIMATE_ON_OBSERVED_TRADES',taken:row(),estimatedWithLimits:row(),wouldHaveBlocked:row(),wouldHaveCutShort:{trades:0,actualNetPnl:0,atLimitNetPnl:0}};
+  for(const t of trades){
+    if(!t?.closedAt||!(t.buys>0))continue;
+    add(out.taken,t.netPnl);
+    const p=limitPnl(t);
+    if(p===null){add(out.wouldHaveBlocked,t.netPnl);continue;}
+    add(out.estimatedWithLimits,p);
+    if(t.wouldHaveExited){const c=out.wouldHaveCutShort;c.trades++;c.actualNetPnl=money(c.actualNetPnl+t.netPnl);c.atLimitNetPnl=money(c.atLimitNetPnl+p);}
+  }
+  return out;
 }
 function halt(s,reason){s.haltReason=reason;s.armed=false;}
 function quantities(s,t){
@@ -153,18 +189,28 @@ function planEntry(s,result,quote,meta,now){
   const price=up(quote.ask),{stop,target}=pick.exitPlan({price,bid:quote.bid,ask:quote.ask,tick,down});
   const stopLimit=down(stop-Math.max(tick,stop*0.005));
   if(!positive(stop)||!positive(target)||stop>=price||target<=price||!positive(stopLimit))return 'EXECUTABLE_EXIT_PLAN_REQUIRED';
-  const policy=s.policy;
-  const closed=Object.values(s.trades).filter(t=>t.closedAt&&t.buys>0);
-  const pnlToday=closed.filter(t=>day(t.closedAt)===day(now)).reduce((a,t)=>a+t.netPnl,0);
-  const totalPnl=closed.reduce((a,t)=>a+t.netPnl,0)+(s.archivedPnl||0); // archived losses still lower the capital ceiling
-  if(s.lockedDays.includes(day(now))||pnlToday<=-policy.dailyLoss)return 'DAILY_LOSS_LOCK';
-  if(losingStreak(s,now)>=(policy.maxConsecutiveLosses||2))return 'LOSING_STREAK_LOCK';
+  const policy=s.policy,record=recordOnly(s),value=record?limitPnl:t=>t.netPnl;
+  const closed=Object.values(s.trades).filter(t=>t.closedAt&&t.buys>0&&value(t)!==null);
+  const pnlToday=closed.filter(t=>day(t.closedAt)===day(now)).reduce((a,t)=>a+value(t),0);
+  // archived losses still lower the capital ceiling
+  const totalPnl=closed.reduce((a,t)=>a+value(t),0)+(record?s.archivedLimitPnl??s.archivedPnl??0:s.archivedPnl||0);
+  // A loss limit refuses the entry; in RECORD_ONLY mode it only notes, on the trade, that it would have.
+  const wouldBlock=[];
+  const limited=(label)=>{if(!record)return true;if(!wouldBlock.includes(label))wouldBlock.push(label);return false;};
+  // A real lock set while enforcing (e.g. an open loss that later recovered) still binds the simulation after a switch.
+  const locked=s.lockedDays.includes(day(now))||(record&&(s.wouldLockDays||[]).includes(day(now)));
+  if((locked||pnlToday<=-policy.dailyLoss)&&limited('DAILY_LOSS_LOCK'))return 'DAILY_LOSS_LOCK';
+  if(losingStreak(s,now)>=(policy.maxConsecutiveLosses||2)&&limited('LOSING_STREAK_LOCK'))return 'LOSING_STREAK_LOCK';
+  // Always enforced, in every mode: one position at a time, state capacity, entries per day (the runaway guard).
   if(Object.values(s.trades).some(t=>!t.closedAt)||Object.values(s.orders).some(o=>working(o)))return 'EXPOSURE_ALREADY_EXISTS';
   if(Object.keys(s.orders).length>=500||Object.keys(s.trades).length>=100)return 'STATE_CAPACITY_LIMIT';
   if(Object.values(s.trades).filter(t=>t.day===day(now)).length>=policy.maxTradesPerDay)return 'DAILY_TRADE_LIMIT';
   const risk=money((price-stopLimit)*meta.lotSize+policy.costReserve);
-  if(risk>policy.perTradeRisk||risk>policy.dailyLoss-Math.max(0,-pnlToday))return 'RISK_LIMIT';
-  if(price*meta.lotSize+policy.costReserve>Math.max(0,policy.capital+Math.min(0,totalPnl)))return 'CAPITAL_LIMIT';
+  if(risk>policy.perTradeRisk)return 'RISK_LIMIT'; // trade size: always enforced
+  if(risk>policy.dailyLoss-Math.max(0,-pnlToday)&&limited('DAILY_LOSS_BUDGET'))return 'RISK_LIMIT';
+  const outlay=price*meta.lotSize+policy.costReserve;
+  if(outlay>policy.capital)return 'CAPITAL_LIMIT'; // the account cannot pay for it: always enforced
+  if(outlay>Math.max(0,policy.capital+Math.min(0,totalPnl))&&limited('CAPITAL_AFTER_LOSSES'))return 'CAPITAL_LIMIT';
   // One entry per original contract/session. Poll timestamps never manufacture new entry identities.
   const base=[day(now),pick.strategy,result.expiry,leg.instrumentKey,leg.contractId];
   const id=hash(pick.identity?[...base,pick.identity]:base); // a model decision is its own identity; other modes are unchanged
@@ -176,6 +222,7 @@ function planEntry(s,result,quote,meta,now){
     instrumentKey:leg.instrumentKey,contractId:leg.contractId,strategy:pick.strategy,expiry:result.expiry,
     tier:pick.tier,entrySource:pick.source,expiryBucket:expiryBucket(result.expiry,day(now)),ruleVersion:pick.ruleVersion,riskModel:pick.riskModel,anchor:pick.anchor,...(pick.breakoutId?{breakoutId:pick.breakoutId}:{}),
     tickSize:tick,quantity:meta.lotSize,stop,stopLimit,target,plannedRisk:risk,costReserve:policy.costReserve,
+    ...(record?{limitMode:'RECORD_ONLY',limitsWouldBlock:wouldBlock}:{}),
     exitReason:null,closedAt:null,netPnl:null,pnlBasis:'BROKER_FILLS_MINUS_ESTIMATED_FRICTION',buys:0};
   s.trades[id]=t;addOrder(s,t,'ENTRY',t.quantity,price);return 'QUEUED';
 }
@@ -226,8 +273,13 @@ function reconcile(s,book,positions,now,{positionBasis='BROKER_POSITIONS'}={}){
     if(!t.closedAt&&orders.every(terminal)&&q.net===0){
       t.closedAt=now;t.buys=q.buys;t.netPnl=q.buys?money(q.proceeds-q.cost-t.costReserve):0;
       const closedDay=day(now);
-      const daily=Object.values(s.trades).filter(x=>x.closedAt&&day(x.closedAt)===closedDay).reduce((a,x)=>a+x.netPnl,0);
-      if(daily<=-s.policy.dailyLoss&&!s.lockedDays.includes(closedDay))s.lockedDays.push(closedDay);
+      if(recordOnly(s)){
+        const daily=Object.values(s.trades).filter(x=>x.closedAt&&day(x.closedAt)===closedDay).reduce((a,x)=>a+(limitPnl(x)??0),0);
+        if(daily<=-s.policy.dailyLoss&&!(s.wouldLockDays||=[]).includes(closedDay))s.wouldLockDays.push(closedDay);
+      } else {
+        const daily=Object.values(s.trades).filter(x=>x.closedAt&&day(x.closedAt)===closedDay).reduce((a,x)=>a+x.netPnl,0);
+        if(daily<=-s.policy.dailyLoss&&!s.lockedDays.includes(closedDay))s.lockedDays.push(closedDay);
+      }
     }
   }
   const actual={};
@@ -251,9 +303,18 @@ function manage(s,quotes,now){
     if(now>=t.entryExpiresAt&&working(entry))entry.wantCancel=true;
     if(!fresh&&q.net>0)halt(s,'POSITION_QUOTE_STALE');
     if(fresh&&q.net>0){
-      const pnlToday=Object.values(s.trades).filter(x=>x.day===day(now)&&x.closedAt).reduce((a,x)=>a+x.netPnl,0);
       const marked=quote.bid*q.net+q.proceeds-q.cost-t.costReserve;
-      if(pnlToday+marked<=-s.policy.dailyLoss){t.exitReason ||= 'DAILY_LOSS';if(!s.lockedDays.includes(day(now)))s.lockedDays.push(day(now));}
+      if(recordOnly(s)){
+        // The trade keeps running to its own stop/target; record where the daily loss limit would have closed it.
+        const pnlToday=Object.values(s.trades).filter(x=>x.day===day(now)&&x.closedAt).reduce((a,x)=>a+(limitPnl(x)??0),0);
+        if(!t.limitsWouldBlock?.length&&!t.wouldHaveExited&&pnlToday+marked<=-s.policy.dailyLoss){
+          t.wouldHaveExited={reason:'DAILY_LOSS',at:now,netPnl:money(marked)};
+          if(!(s.wouldLockDays||=[]).includes(day(now)))s.wouldLockDays.push(day(now));
+        }
+      } else {
+        const pnlToday=Object.values(s.trades).filter(x=>x.day===day(now)&&x.closedAt).reduce((a,x)=>a+x.netPnl,0);
+        if(pnlToday+marked<=-s.policy.dailyLoss){t.exitReason ||= 'DAILY_LOSS';if(!s.lockedDays.includes(day(now)))s.lockedDays.push(day(now));}
+      }
       if(quote.bid<=t.stop)t.exitReason ||= 'STOP_BREACHED';
       if(quote.bid>=t.target)t.exitReason ||= 'TARGET';
     }
@@ -328,4 +389,4 @@ function claimEmergencyCancel(s,now){
   }
   return null;
 }
-module.exports={initialState,assertState,control,configurePolicy,resolveTrade,requestModelExit,archiveClosed,losingStreak,selectCandidate,expiryBucket,recover,planEntry,reconcile,manage,claim,finish,claimEmergencyCancel,adoptBroker,quantities,terminal,halt,day};
+module.exports={recordOnly,limitPnl,limitSummary,initialState,assertState,control,configurePolicy,resolveTrade,requestModelExit,archiveClosed,losingStreak,selectCandidate,expiryBucket,recover,planEntry,reconcile,manage,claim,finish,claimEmergencyCancel,adoptBroker,quantities,terminal,halt,day};
