@@ -3,26 +3,34 @@ const { istParts } = require('../evidence/evidenceHealth');
 const { timingSafeOwnerToken } = require('../notifications/edgeWebPush');
 const { importBrokerFills, summarizeBroker } = require('./kiteTradebook');
 const { importStatement, summarizedReports } = require('./kitePnl');
-const CAPITAL = 10000, DAILY = 1000, PER_TRADE = 1000;
+// Limits come from the owner's sandbox control page (one set of limits for the paper trader and the signal
+// engine). There are no built-in defaults: without valid limits the budget is unavailable and sizing fails closed.
+function validLimits(l) {
+  const ok = v => typeof v === 'number' && Number.isFinite(v) && v > 0;
+  return !!l && ok(l.capital) && ok(l.dailyLoss) && ok(l.perTradeRisk) && l.perTradeRisk <= l.dailyLoss;
+}
 const money = n => Math.round(n * 100) / 100;
 function number(v, name, min = 0) {
   if (typeof v !== 'number' || !Number.isFinite(v) || v < min || v > 10000000) throw new Error('INVALID_' + name);
   return money(v);
 }
 function day(now) { const p=istParts(now); return p.minutes<555 ? istParts(new Date(new Date(now).getTime()-86400000)).date : p.date; }
-function budget(state, now = new Date()) {
+function budget(state, now = new Date(), limits) {
   const today = day(now), trades = state.trades || [];
+  const valid = validLimits(limits);
+  const CAPITAL = valid ? limits.capital : 0, DAILY = valid ? limits.dailyLoss : 0, PER_TRADE = valid ? limits.perTradeRisk : 0;
   const closed = trades.filter(t => t.closedAt && day(new Date(t.closedAt)) === today).sort((a,b)=>a.closedAt.localeCompare(b.closedAt));
   let net = 0, hit = (state.lockedDays || []).includes(today);
-  for (const t of closed) { net = money(net + t.netPnl); if (net <= -DAILY) hit = true; }
+  for (const t of closed) { net = money(net + t.netPnl); if (valid && net <= -DAILY) hit = true; }
   const totalNet = money(trades.filter(t=>t.closedAt).reduce((a,t)=>a+t.netPnl,0));
   const open = trades.filter(t => !t.closedAt);
   const openRisk = money(open.reduce((a,t)=>a+t.reservedRisk,0));
   const openCapital = money(open.reduce((a,t)=>a+t.capitalUsed,0));
   const remaining = hit ? 0 : money(Math.max(0, DAILY - Math.max(0,-net) - openRisk));
-  return { day:today, confirmed:state.confirmedDay === today, locked:hit, capitalLimit:CAPITAL, perTradeLimit:PER_TRADE, dailyLossLimit:DAILY, netRealizedPnl:net, openRisk, openCapital, availableRisk:Math.min(PER_TRADE,remaining), availableCapital:money(Math.max(0,CAPITAL - Math.max(0,-totalNet) - openCapital)), openTrades:open.length, source:'MANUAL_LEDGER', checkedAt:new Date(now).toISOString() };
+  return { ...(valid ? {} : { error:'LIMITS_UNAVAILABLE' }), limitsSource:valid ? 'CONTROL_PAGE' : 'UNAVAILABLE',
+    day:today, confirmed:state.confirmedDay === today, locked:hit, capitalLimit:CAPITAL, perTradeLimit:PER_TRADE, dailyLossLimit:DAILY, netRealizedPnl:net, openRisk, openCapital, availableRisk:Math.min(PER_TRADE,remaining), availableCapital:money(Math.max(0,CAPITAL - Math.max(0,-totalNet) - openCapital)), openTrades:open.length, source:'MANUAL_LEDGER', checkedAt:new Date(now).toISOString() };
 }
-function apply(state, operation, input, now = new Date()) {
+function apply(state, operation, input, now = new Date(), limits) {
   const s = JSON.parse(JSON.stringify(state));
   if (!/^[a-zA-Z0-9_-]{16,100}$/.test(input.requestId || '')) throw new Error('INVALID_REQUEST_ID');
   if (s.operations.includes(input.requestId)) return s;
@@ -63,33 +71,33 @@ function apply(state, operation, input, now = new Date()) {
     Object.assign(t,{ exit, charges, grossPnl:gross, netPnl:money(gross-charges), closedAt:time });
   } else throw new Error('INVALID_OPERATION');
   s.operations.push(input.requestId);
-  if (budget(s,now).locked && !s.lockedDays.includes(day(now))) s.lockedDays.push(day(now));
+  if (budget(s,now,limits).locked && !s.lockedDays.includes(day(now))) s.lockedDays.push(day(now));
   return s;
 }
 function numberSigned(v) { if(typeof v!=='number'||!Number.isFinite(v)||Math.abs(v)>10000000)throw new Error('INVALID_GROSS_PNL');return money(v); }
-function createLedger({ pool, ownerToken, onChange = ()=>{}, onBrokerImport = ()=>{}, getPlan = ()=>null }) {
+function createLedger({ pool, ownerToken, onChange = ()=>{}, onBrokerImport = ()=>{}, getPlan = ()=>null, getLimits = ()=>null }) {
   let current = null, error = 'LEDGER_NOT_LOADED', loadedAt = 0, generation = 0;
   async function refresh() {
     const started = generation;
-    try { if(!pool)throw new Error(); const r=await pool.query("SELECT payload FROM edge_trade_ledger_v1 WHERE owner_id='owner'"); if(!r.rows[0])throw new Error(); if(started !== generation)return refresh(); current=r.rows[0].payload;error=null;loadedAt=Date.now();return budget(current); }
+    try { if(!pool)throw new Error(); const r=await pool.query("SELECT payload FROM edge_trade_ledger_v1 WHERE owner_id='owner'"); if(!r.rows[0])throw new Error(); if(started !== generation)return refresh(); current=r.rows[0].payload;error=null;loadedAt=Date.now();return budget(current, new Date(), getLimits()); }
     catch (_) { error='LEDGER_UNAVAILABLE';return null; }
   }
   function snapshot() {
-    return current && !error && Date.now()-loadedAt<60000 ? {...budget(current),checkedAt:new Date(loadedAt).toISOString()} : {confirmed:false,error:error||'LEDGER_UNAVAILABLE',availableRisk:0,availableCapital:0};
+    return current && !error && Date.now()-loadedAt<60000 ? {...budget(current, new Date(), getLimits()),checkedAt:new Date(loadedAt).toISOString()} : {confirmed:false,error:error||'LEDGER_UNAVAILABLE',availableRisk:0,availableCapital:0};
   }
   async function mutate(op,input) {
     const c=await pool.connect();
     try {
       await c.query('BEGIN');
       const r=await c.query("SELECT payload FROM edge_trade_ledger_v1 WHERE owner_id='owner' FOR UPDATE");
-      const next=apply(r.rows[0].payload,op,input);
+      const next=apply(r.rows[0].payload,op,input,new Date(),getLimits());
       await c.query("UPDATE edge_trade_ledger_v1 SET payload=$1,updated_at=now() WHERE owner_id='owner'",[JSON.stringify(next)]);
       await c.query('COMMIT');generation++;current=next;error=null;loadedAt=Date.now();
       // Importing historical records must not blank the live dashboard or alter trade approval.
       if(op!=='import'&&op!=='pnl')onChange();
       // Reporting-only matching; cannot make broker imports fail or modify live readiness.
       if(op==='import'||op==='pnl')Promise.resolve().then(onBrokerImport).catch(()=>console.error('[trade snapshots] background reconciliation unavailable'));
-      const result={budget:budget(next),trades:next.trades,broker:summarizeBroker(next),pnl:summarizedReports(next)};
+      const result={budget:budget(next, new Date(), getLimits()),trades:next.trades,broker:summarizeBroker(next),pnl:summarizedReports(next)};
       if(op==='import'){
         result.importResult={added:(next.brokerFills||[]).length-(r.rows[0].payload.brokerFills||[]).length,
           duplicates:(input.fills||[]).length-((next.brokerFills||[]).length-(r.rows[0].payload.brokerFills||[]).length)};

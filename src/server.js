@@ -61,7 +61,7 @@ const sandboxExecution = createSandboxService({pool:dataPool,ownerToken:process.
   notify:(key,text)=>edgeTelegram.alert(key,text)}); // edgeTelegram is defined below; only called after startup
 const shadowEvents = createShadowEvents({pool:dataPool,enabled:process.env.EDGE_SHADOW_EVENTS_ENABLED === 'true'});
 let ledgerEpoch = 0;
-const ledger = createLedger({getPlan:()=>lastResult?{timestamp:lastResult.timestamp,strategy:lastResult.decision?.strategy,entry:lastResult.decision?.entry,risk:lastResult.decision?.risk,position:lastResult.decision?.position,orchestration:lastResult.decision?.orchestration}:null,pool:dataPool,ownerToken:process.env.EDGE_PUSH_OWNER_TOKEN,onChange:()=>{ledgerEpoch++;lastResult=null;lastFetchTime=0;},onBrokerImport:()=>tradeSnapshots.reconcile()});
+const ledger = createLedger({getPlan:()=>lastResult?{timestamp:lastResult.timestamp,strategy:lastResult.decision?.strategy,entry:lastResult.decision?.entry,risk:lastResult.decision?.risk,position:lastResult.decision?.position,orchestration:lastResult.decision?.orchestration}:null,getLimits:()=>sandboxExecution.limits(),pool:dataPool,ownerToken:process.env.EDGE_PUSH_OWNER_TOKEN,onChange:()=>{ledgerEpoch++;lastResult=null;lastFetchTime=0;},onBrokerImport:()=>tradeSnapshots.reconcile()});
 
 const ALLOWED_ORIGINS = (process.env.EDGE_ALLOWED_ORIGINS || 'https://edge-backend-mbcs.vercel.app,http://localhost:3000,capacitor://localhost,http://localhost')
   .split(',').map(s => s.trim()).filter(Boolean);
@@ -784,17 +784,11 @@ function analyse(chain, expiryDate, marketContext = null) {
   });
 
   // --- Phase 7 position sizing ---
-  // Initial owner-agreed ceilings; the private ledger supplies remaining capacity.
-  const account = {
-    capital: 10000,
-    maxRiskPct: 10,
-    dailyLossLimitRupees: 1000
-  };
+  // Limits come from the sandbox control page through the ledger (one set of limits); no hard-coded ceilings.
   const positionPlan = buildPositionPlan({
     strategy,
     tradeLegs,
     risk: riskPlan,
-    account,
     marketPhase: getMarketPhase(),
     budget: ledger.snapshot()
   });
