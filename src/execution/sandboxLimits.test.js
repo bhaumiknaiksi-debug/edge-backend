@@ -18,6 +18,10 @@ const BASE=Date.parse('2026-10-28T10:00:00+05:30');
   await store.mutate(s=>configurePolicy(s,{requestId:'policy-change-0000001',dailyGoal:1000,dailyLoss:600,perTradeRisk:450},now));
   now+=2000;await service.tick();
   assert.equal(service.limits().perTradeRisk,450);assert.equal(service.limits().dailyLoss,600);
+  // record-only paper limits never loosen manual sizing: it gets the same three numbers and enforces them itself
+  await store.mutate(s=>configurePolicy(s,{requestId:'policy-change-record01',dailyGoal:1000,dailyLoss:600,perTradeRisk:450,limitMode:'RECORD_ONLY'},now));
+  await service.tick();
+  assert.deepEqual(service.limits(),{capital:10000,dailyLoss:600,perTradeRisk:450,source:'CONTROL_PAGE',observedAt:new Date(now).toISOString()});
   // ticks stop (store unreadable, service stopped...): limits expire after 5 minutes instead of being trusted forever
   now+=5*60000;assert.equal(service.limits().perTradeRisk,450,'still fresh at exactly 5 minutes');
   now+=1;assert.equal(service.limits(),null,'stale limits are unavailable');
@@ -31,5 +35,5 @@ const BASE=Date.parse('2026-10-28T10:00:00+05:30');
     t+=2000;await idle.tick();
     assert.equal(idle.limits().perTradeRisk,400);assert.equal(idle.limits().observedAt,new Date(t).toISOString(),'refreshed by the idle read');
   }
-  console.log('Sandbox limits PASS: control-page policy shared after each tick, policy changes carried over, unknown or stale limits unavailable');
+  console.log('Sandbox limits PASS: control-page policy shared after each tick, policy changes carried over, unknown or stale limits unavailable, record-only paper mode does not change manual sizing');
 })().catch(e=>{console.error(e);process.exit(1);});
