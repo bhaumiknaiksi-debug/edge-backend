@@ -58,20 +58,25 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
   function watch(state){
     if(!state)return;
     const today=engine.day(now()),trades=Object.values(state.trades),orders=Object.values(state.orders);
-    const snap={halt:state.haltReason||null,locked:state.lockedDays.includes(today),
+    const snap={halt:state.haltReason||null,locked:state.lockedDays.includes(today),wouldLock:(state.wouldLockDays||[]).includes(today),
+      wouldStreak:engine.recordOnly(state)&&engine.losingStreak(state,now())>=(state.policy.maxConsecutiveLosses||2),
       closed:new Set(trades.filter(t=>t.closedAt).map(t=>t.id)),filled:new Set(orders.filter(o=>o.kind==='ENTRY'&&o.filled>0).map(o=>o.tradeId))};
     if(seen){
       const open=trades.filter(t=>!t.closedAt).length;
       if(snap.halt&&snap.halt!==seen.halt)send('HALT:'+snap.halt+':'+today,'EDGE sandbox HALTED: '+human(snap.halt)+'. Open trades: '+open+'. New entries are disarmed; check the control page.');
       for(const id of snap.filled)if(!seen.filled.has(id)){
         const t=state.trades[id],e=orders.find(o=>o.tradeId===id&&o.kind==='ENTRY');
-        if(t)send('FILL:'+id,'EDGE sandbox entry filled: '+(t.contractId||t.instrumentKey)+' x'+e.filled+' @ '+e.averagePrice+' (tier '+(t.tier||'A')+', '+human(t.entrySource||'AUTHORITATIVE_A')+'). Stop '+t.stop+', target '+t.target+'.');
+        if(t)send('FILL:'+id,'EDGE sandbox entry filled: '+(t.contractId||t.instrumentKey)+' x'+e.filled+' @ '+e.averagePrice+' (tier '+(t.tier||'A')+', '+human(t.entrySource||'AUTHORITATIVE_A')+'). Stop '+t.stop+', target '+t.target+'.'+
+          (t.limitsWouldBlock?.length?' Loss limits would have blocked this entry ('+t.limitsWouldBlock.map(human).join(', ')+'); record-only mode, so it was taken.':''));
       }
       for(const id of snap.closed)if(!seen.closed.has(id)){
         const t=state.trades[id];
-        if(t&&t.buys>0)send('CLOSE:'+id,'EDGE sandbox trade closed: '+(t.contractId||t.instrumentKey)+', exit '+human(t.exitReason||'closed')+', estimated net Rs '+t.netPnl+' (tier '+(t.tier||'A')+').');
+        if(t&&t.buys>0)send('CLOSE:'+id,'EDGE sandbox trade closed: '+(t.contractId||t.instrumentKey)+', exit '+human(t.exitReason||'closed')+', estimated net Rs '+t.netPnl+' (tier '+(t.tier||'A')+').'+
+          (t.wouldHaveExited?' The daily loss limit would have closed it earlier at about Rs '+t.wouldHaveExited.netPnl+'.':''));
       }
       if(snap.locked&&!seen.locked)send('LOCK:'+today,'EDGE sandbox paused for today: daily loss limit reached.');
+      if(snap.wouldStreak&&!seen.wouldStreak)send('WOULD_STREAK:'+today,'EDGE paper: '+(state.policy.maxConsecutiveLosses||2)+' losing trades in a row would have paused trading today. Record-only mode, so trading continues.');
+      if(snap.wouldLock&&!seen.wouldLock)send('WOULD_LOCK:'+today,'EDGE paper: the daily loss limit would have paused trading today. Record-only mode, so trading continues.');
     }
     seen=snap;
   }
@@ -213,12 +218,13 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
     const groups={byEntryTier:{},bySource:{},byExpiryBucket:{},bySourceAndExpiry:{}};
     const add=(group,key,t)=>{const row=groups[group][key]||={trades:0,wins:0,losses:0,netPnl:0};
       row.trades++;row.netPnl=Math.round((row.netPnl+t.netPnl)*100)/100;if(t.netPnl>0)row.wins++;else if(t.netPnl<0)row.losses++;};
-    for(const t of [...archived.map(a=>a?.trade).filter(Boolean),...Object.values(state.trades)]){
+    const all=[...archived.map(a=>a?.trade).filter(Boolean),...Object.values(state.trades)];
+    for(const t of all){
       if(!t.closedAt||!(t.buys>0))continue;
       const source=t.entrySource||'AUTHORITATIVE_A',bucket=t.expiryBucket||'UNKNOWN';
       add('byEntryTier',t.tier||'A',t);add('bySource',source,t);add('byExpiryBucket',bucket,t);add('bySourceAndExpiry',source+' · '+bucket,t);
     }
-    return {basis:'BROKER_FILLS_MINUS_ESTIMATED_FRICTION',...groups};
+    return {basis:'BROKER_FILLS_MINUS_ESTIMATED_FRICTION',...groups,limits:{mode:state.policy?.limitMode||'ENFORCE',...engine.limitSummary(all)}};
   }
   function start(){if(reason||timer)return;stopped=false;timer=setInterval(()=>{void tick();},2000);timer.unref?.();void tick();
     if(advisor){advisorTimer=setInterval(()=>{void advise();},10000);advisorTimer.unref?.();}}

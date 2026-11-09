@@ -11,8 +11,8 @@
  async function refresh(){
   try{
    const data=await request(),s=data.state,orders=Object.values(s.orders),trades=Object.values(s.trades);
-   el('limits').textContent='Sandbox limits: ₹'+s.policy.capital+' capital · ₹'+s.policy.perTradeRisk+' planned risk/trade · ₹'+s.policy.dailyLoss+' daily loss threshold · '+s.policy.maxTradesPerDay+' entries/day · pause after '+(s.policy.maxConsecutiveLosses||2)+' losses in a row · '+(s.policy.entryMode==='OPENING_RANGE_SHADOW_V1'?'any tier after fixed-level crossing (experimental)':s.policy.entryMode==='CLAUDE_DECIDES_V1'?'Claude decides (experimental)':'Tier A only');
-   if(!policyLoaded){el('daily-goal').value=s.policy.dailyGoal||1000;el('daily-loss').value=s.policy.dailyLoss;el('per-trade-risk').value=s.policy.perTradeRisk;el('entry-mode').value=s.policy.entryMode||'AUTHORITATIVE_A_ONLY';el('max-losses').value=String(s.policy.maxConsecutiveLosses||2);policyLoaded=true;updateRatio();}
+   el('limits').textContent='Sandbox limits: ₹'+s.policy.capital+' capital · ₹'+s.policy.perTradeRisk+' planned risk/trade · ₹'+s.policy.dailyLoss+' daily loss threshold · '+s.policy.maxTradesPerDay+' entries/day · pause after '+(s.policy.maxConsecutiveLosses||2)+' losses in a row · '+(s.policy.limitMode==='RECORD_ONLY'?(data.status?.broker==='PAPER'?'loss limits RECORD ONLY (not stopping trades) · ':'loss limits enforced (record-only works with paper fills only) · '):'')+(s.policy.entryMode==='OPENING_RANGE_SHADOW_V1'?'any tier after fixed-level crossing (experimental)':s.policy.entryMode==='CLAUDE_DECIDES_V1'?'Claude decides (experimental)':'Tier A only');
+   if(!policyLoaded){el('daily-goal').value=s.policy.dailyGoal||1000;el('daily-loss').value=s.policy.dailyLoss;el('per-trade-risk').value=s.policy.perTradeRisk;el('entry-mode').value=s.policy.entryMode||'AUTHORITATIVE_A_ONLY';el('max-losses').value=String(s.policy.maxConsecutiveLosses||2);el('limit-mode').value=s.policy.limitMode||'ENFORCE';el('max-trades').value=String(s.policy.maxTradesPerDay||3);policyLoaded=true;updateRatio();}
    el('save-policy').disabled=!s.killed||s.armed||orders.some(o=>!['COMPLETE','CANCELLED','REJECTED','EXPIRED'].includes(o.state))||trades.some(t=>!t.closedAt);
    el('system').textContent=s.killed?'Stopped':s.armed?'Armed':'Disarmed';
    el('orders').textContent=orders.filter(o=>!['COMPLETE','CANCELLED','REJECTED','EXPIRED'].includes(o.state)).length;
@@ -40,6 +40,13 @@
   const box=el('tier-summary');box.replaceChildren();
   const groups=[['By entry tier',summary?.byEntryTier,k=>'Tier '+k],['By decision source',summary?.bySource,named],['By days to expiry',summary?.byExpiryBucket,named],['Source × expiry',summary?.bySourceAndExpiry,named]];
   if(!Object.keys(summary?.byEntryTier||{}).length){box.textContent='No closed sandbox trades yet.';return;}
+  const l=summary.limits;
+  if(l&&(l.mode==='RECORD_ONLY'||l.wouldHaveBlocked.trades||l.wouldHaveCutShort.trades)){
+   const h=document.createElement('h3');h.textContent='With and without loss limits';box.append(h);
+   for(const [a,b] of [['All trades taken',l.taken.trades+' trades · estimated net ₹'+l.taken.netPnl],['If limits had been enforced',l.withLimits.trades+' trades · estimated net ₹'+l.withLimits.netPnl],
+     ['Trades the limits would have blocked',l.wouldHaveBlocked.trades+' trades · estimated net ₹'+l.wouldHaveBlocked.netPnl],['Trades they would have closed early',l.wouldHaveCutShort.trades+' trades · actual ₹'+l.wouldHaveCutShort.actualNetPnl+' vs about ₹'+l.wouldHaveCutShort.atLimitNetPnl+' at the limit']]){
+    const row=document.createElement('div');row.className='order';const x=document.createElement('strong'),y=document.createElement('span');x.textContent=a;y.textContent=b;row.append(x,y);box.append(row);}
+  }
   for(const [title,group,name] of groups){
    const h=document.createElement('h3');h.textContent=title;box.append(h);
    for(const [key,r] of Object.entries(group||{}).sort()){const row=document.createElement('div');row.className='order';const a=document.createElement('strong'),b=document.createElement('span');
@@ -64,7 +71,7 @@
  }
  function updateRatio(){const goal=Number(el('daily-goal').value),loss=Number(el('daily-loss').value);el('goal-ratio').textContent=goal>0&&loss>0?'Loss threshold: '+(loss/goal*100).toFixed(1)+'% of daily goal.':'';}
  for(const id of ['daily-goal','daily-loss'])el(id).addEventListener('input',updateRatio);
- el('save-policy').addEventListener('click',async()=>{el('save-policy').disabled=true;try{await request('/policy',{requestId:crypto.randomUUID(),confirmSandbox:true,dailyGoal:Number(el('daily-goal').value),dailyLoss:Number(el('daily-loss').value),perTradeRisk:Number(el('per-trade-risk').value),entryMode:el('entry-mode').value,maxConsecutiveLosses:Number(el('max-losses').value)});policyLoaded=false;await refresh();message('Sandbox limits saved.');}catch(e){message(e.message);}});
+ el('save-policy').addEventListener('click',async()=>{el('save-policy').disabled=true;try{await request('/policy',{requestId:crypto.randomUUID(),confirmSandbox:true,dailyGoal:Number(el('daily-goal').value),dailyLoss:Number(el('daily-loss').value),perTradeRisk:Number(el('per-trade-risk').value),entryMode:el('entry-mode').value,maxConsecutiveLosses:Number(el('max-losses').value),limitMode:el('limit-mode').value,maxTradesPerDay:Number(el('max-trades').value)});policyLoaded=false;await refresh();message('Sandbox limits saved.');}catch(e){message(e.message);}});
  el('connect').addEventListener('click',async()=>{owner=el('owner').value.trim();el('owner').value='';if(!owner){message('Enter your owner code.');return;}await refresh();if(timer)clearInterval(timer);timer=setInterval(refresh,5000);});
  for(const name of ['arm','stop'])el(name).addEventListener('click',async()=>{el(name).disabled=true;try{await request('/'+name,{requestId:crypto.randomUUID(),confirmSandbox:true});await refresh();}catch(e){message(e.message);}});
  request('/status').then(s=>message(s.configured?'Ready to connect.':'Sandbox connection needs setup: '+human(s.reason))).catch(()=>message('Connection unavailable.'));
