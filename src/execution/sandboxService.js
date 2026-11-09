@@ -72,7 +72,7 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
       for(const id of snap.closed)if(!seen.closed.has(id)){
         const t=state.trades[id];
         if(t&&t.buys>0)send('CLOSE:'+id,'EDGE sandbox trade closed: '+(t.contractId||t.instrumentKey)+', exit '+human(t.exitReason||'closed')+', estimated net Rs '+t.netPnl+' (tier '+(t.tier||'A')+').'+
-          (t.wouldHaveExited?' The daily loss limit would have closed it earlier at about Rs '+t.wouldHaveExited.netPnl+'.':''));
+          (t.wouldHaveExited?' The daily loss limit would have closed it earlier at an estimated Rs '+t.wouldHaveExited.netPnl+'.':''));
       }
       if(snap.locked&&!seen.locked)send('LOCK:'+today,'EDGE sandbox paused for today: daily loss limit reached.');
       if(snap.wouldStreak&&!seen.wouldStreak)send('WOULD_STREAK:'+today,'EDGE paper: '+(state.policy.maxConsecutiveLosses||2)+' losing trades in a row would have paused trading today. Record-only mode, so trading continues.');

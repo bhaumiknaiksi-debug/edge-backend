@@ -111,6 +111,32 @@ const lastTrade=s=>Object.values(s.trades).sort((a,b)=>a.createdAt-b.createdAt).
   t.policy.limitMode='ENFORCE';assert.equal(E.losingStreak(t,BASE),0,'enforce mode counts what actually happened');
 }
 
+// --- regression: a real lock set while enforcing survives a switch to record-only ---
+{
+  const s=account('ENFORCE');
+  const t={...closed('open',null,null),id:'open',day:'2026-11-09',closedAt:null,instrumentKey:KEY,entryExpiresAt:BASE,stop:90,target:120,tickSize:0.05,quantity:65,costReserve:100,exitReason:null,buys:0};
+  s.trades.open=t;s.orders.e={id:'e',tradeId:'open',kind:'ENTRY',side:'BUY',state:'COMPLETE',quantity:65,filled:65,averagePrice:100};
+  E.manage(s,{[KEY]:{bid:91,ask:91.05,receivedAt:BASE}},BASE); // open loss -685 crosses the ₹500 daily limit
+  assert.ok(s.lockedDays.includes('2026-11-09'));
+  // the trade recovers before it closes: the day's realized P&L ends positive, but the enforced lock already happened
+  delete s.trades.open;for(const id of Object.keys(s.orders))delete s.orders[id];s.trades.won=closed('won',150,BASE+60000);
+  E.control(s,'STOP',rid(),BASE+60000);
+  E.configurePolicy(s,{requestId:rid(),dailyGoal:1000,dailyLoss:500,limitMode:'RECORD_ONLY'},BASE+60000);
+  E.reconcile(s,[],[],BASE+70000);E.control(s,'ARM',rid(),BASE+70000);
+  assert.equal(E.planEntry(s,readyResult(BASE+70000),quote(BASE+70000),meta,BASE+70000),'QUEUED');
+  assert.deepEqual(lastTrade(s).limitsWouldBlock,['DAILY_LOSS_LOCK'],'the earlier enforced lock still counts in the estimate');
+}
+// --- saving into record-only never creates a real lock from simulated P&L ---
+{
+  const s=account('RECORD_ONLY');
+  s.trades.a=closed('a',-600,BASE-60000,{limitsWouldBlock:['LOSING_STREAK_LOCK']}); // a loss the limits would have avoided
+  E.control(s,'STOP',rid(),BASE);E.configurePolicy(s,{requestId:rid(),dailyGoal:1000,dailyLoss:500},BASE);
+  assert.ok(!s.lockedDays.includes('2026-11-09'));assert.ok(!(s.wouldLockDays||[]).includes('2026-11-09'));
+  s.trades.b=closed('b',-600,BASE-30000);
+  E.configurePolicy(s,{requestId:rid(),dailyGoal:1000,dailyLoss:500},BASE);
+  assert.ok(s.wouldLockDays.includes('2026-11-09'));assert.ok(!s.lockedDays.includes('2026-11-09'),'simulated loss locks only the simulation');
+}
+
 // --- open trade: record-only notes the daily-loss exit instead of taking it ---
 {
   const run=mode=>{
@@ -153,7 +179,7 @@ const lastTrade=s=>Object.values(s.trades).sort((a,b)=>a.createdAt-b.createdAt).
   s.trades.q=closed('q',800,prior+60000,{limitsWouldBlock:['DAILY_LOSS_LOCK']});
   s.trades.r=closed('r',-700,prior+120000,{limitsWouldBlock:[],wouldHaveExited:{reason:'DAILY_LOSS',at:prior+100000,netPnl:-400}});
   const summary=E.limitSummary(Object.values(s.trades));
-  assert.deepEqual(summary,{taken:{trades:3,netPnl:-400},withLimits:{trades:2,netPnl:-900},wouldHaveBlocked:{trades:1,netPnl:800},
+  assert.deepEqual(summary,{basis:'ESTIMATE_ON_OBSERVED_TRADES',taken:{trades:3,netPnl:-400},estimatedWithLimits:{trades:2,netPnl:-900},wouldHaveBlocked:{trades:1,netPnl:800},
     wouldHaveCutShort:{trades:1,actualNetPnl:-700,atLimitNetPnl:-400}});
   E.archiveClosed(s,BASE);
   assert.equal(s.archivedPnl,-600);assert.equal(s.archivedLimitPnl,-1100,'-200 carried over, -500, blocked +800 skipped, -400 at the limit');

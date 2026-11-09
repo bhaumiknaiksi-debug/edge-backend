@@ -53,8 +53,10 @@ function configurePolicy(s,input,now=Date.now()){
   s.policy={...s.policy,dailyGoal,dailyLoss,perTradeRisk:perTradeRisk??Math.min(s.policy.perTradeRisk,dailyLoss),
     entryMode:entryMode??s.policy.entryMode??DEFAULT_MODE,maxConsecutiveLosses:maxConsecutiveLosses??s.policy.maxConsecutiveLosses??2,
     limitMode:limitMode??s.policy.limitMode??'ENFORCE',maxTradesPerDay:maxTradesPerDay??s.policy.maxTradesPerDay};
-  const realized=Object.values(s.trades).filter(t=>t.closedAt&&day(t.closedAt)===day(now)).reduce((a,t)=>a+t.netPnl,0);
-  if(realized<=-dailyLoss&&!s.lockedDays.includes(day(now)))s.lockedDays.push(day(now));
+  // Saving into RECORD_ONLY only ever adds to the simulated locks; a real lock is never created from simulated P&L.
+  const simulated=recordOnly(s),todays=Object.values(s.trades).filter(t=>t.closedAt&&day(t.closedAt)===day(now));
+  const realized=todays.reduce((a,t)=>a+(simulated?limitPnl(t)??0:t.netPnl),0),locks=simulated?(s.wouldLockDays||=[]):s.lockedDays;
+  if(realized<=-dailyLoss&&!locks.includes(day(now)))locks.push(day(now));
   s.commands[requestId]=command;assertState(s);
 }
 // Owner command for a trade left open on a PRIOR day (broker books roll and intraday positions are squared off).
@@ -112,15 +114,18 @@ function archiveClosed(s,now,max=20){
   return moved;
 }
 // Realized results with and without the loss limits, over every closed trade (archived and hot).
+// "Estimated with limits" is an estimate on the observed trades only: a cut-short trade is valued at the bid when the
+// limit was crossed (not a real exit fill), and trades that might have happened after that earlier exit, while the
+// actual trade was still open, are not known.
 function limitSummary(trades){
   const row=()=>({trades:0,netPnl:0}),add=(r,p)=>{r.trades++;r.netPnl=money(r.netPnl+p);};
-  const out={taken:row(),withLimits:row(),wouldHaveBlocked:row(),wouldHaveCutShort:{trades:0,actualNetPnl:0,atLimitNetPnl:0}};
+  const out={basis:'ESTIMATE_ON_OBSERVED_TRADES',taken:row(),estimatedWithLimits:row(),wouldHaveBlocked:row(),wouldHaveCutShort:{trades:0,actualNetPnl:0,atLimitNetPnl:0}};
   for(const t of trades){
     if(!t?.closedAt||!(t.buys>0))continue;
     add(out.taken,t.netPnl);
     const p=limitPnl(t);
     if(p===null){add(out.wouldHaveBlocked,t.netPnl);continue;}
-    add(out.withLimits,p);
+    add(out.estimatedWithLimits,p);
     if(t.wouldHaveExited){const c=out.wouldHaveCutShort;c.trades++;c.actualNetPnl=money(c.actualNetPnl+t.netPnl);c.atLimitNetPnl=money(c.atLimitNetPnl+p);}
   }
   return out;
@@ -192,7 +197,8 @@ function planEntry(s,result,quote,meta,now){
   // A loss limit refuses the entry; in RECORD_ONLY mode it only notes, on the trade, that it would have.
   const wouldBlock=[];
   const limited=(label)=>{if(!record)return true;if(!wouldBlock.includes(label))wouldBlock.push(label);return false;};
-  const locked=record?(s.wouldLockDays||[]).includes(day(now)):s.lockedDays.includes(day(now));
+  // A real lock set while enforcing (e.g. an open loss that later recovered) still binds the simulation after a switch.
+  const locked=s.lockedDays.includes(day(now))||(record&&(s.wouldLockDays||[]).includes(day(now)));
   if((locked||pnlToday<=-policy.dailyLoss)&&limited('DAILY_LOSS_LOCK'))return 'DAILY_LOSS_LOCK';
   if(losingStreak(s,now)>=(policy.maxConsecutiveLosses||2)&&limited('LOSING_STREAK_LOCK'))return 'LOSING_STREAK_LOCK';
   // Always enforced, in every mode: one position at a time, state capacity, entries per day (the runaway guard).

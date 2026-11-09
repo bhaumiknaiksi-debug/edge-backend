@@ -42,10 +42,13 @@
   if(!Object.keys(summary?.byEntryTier||{}).length){box.textContent='No closed sandbox trades yet.';return;}
   const l=summary.limits;
   if(l&&(l.mode==='RECORD_ONLY'||l.wouldHaveBlocked.trades||l.wouldHaveCutShort.trades)){
-   const h=document.createElement('h3');h.textContent='With and without loss limits';box.append(h);
-   for(const [a,b] of [['All trades taken',l.taken.trades+' trades · estimated net ₹'+l.taken.netPnl],['If limits had been enforced',l.withLimits.trades+' trades · estimated net ₹'+l.withLimits.netPnl],
+   const h=document.createElement('h3');h.textContent='Estimated effect of limits on observed trades';box.append(h);
+   for(const [a,b] of [['All trades taken',l.taken.trades+' trades · estimated net ₹'+l.taken.netPnl],['Estimated result with limits enforced',l.estimatedWithLimits.trades+' trades · estimated net ₹'+l.estimatedWithLimits.netPnl],
      ['Trades the limits would have blocked',l.wouldHaveBlocked.trades+' trades · estimated net ₹'+l.wouldHaveBlocked.netPnl],['Trades they would have closed early',l.wouldHaveCutShort.trades+' trades · actual ₹'+l.wouldHaveCutShort.actualNetPnl+' vs about ₹'+l.wouldHaveCutShort.atLimitNetPnl+' at the limit']]){
     const row=document.createElement('div');row.className='order';const x=document.createElement('strong'),y=document.createElement('span');x.textContent=a;y.textContent=b;row.append(x,y);box.append(row);}
+   const note=document.createElement('p');note.className='muted';
+   note.textContent='Estimate only. A trade the limit would have closed early is valued at the bid price when the limit was crossed, not at a real exit fill. Trades that could have happened after that earlier exit, while the actual trade was still open, cannot be known and are not included.';
+   box.append(note);
   }
   for(const [title,group,name] of groups){
    const h=document.createElement('h3');h.textContent=title;box.append(h);
