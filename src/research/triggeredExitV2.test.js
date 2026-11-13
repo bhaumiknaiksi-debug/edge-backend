@@ -77,7 +77,7 @@ const obs=(at,ready,ask)=>({id:iso(at)+'|OPPORTUNITY',recordType:'OPPORTUNITY_OB
  const records=[obs(T,false,96),obs(T+25000,true,100)],writes=[],fetched=[];
  const service=createOpportunityResearch({pool:{},token:'research-read-only',ownerToken:'owner-secret',
   store:{async append(r){writes.push(r);records.push(r);return true;}},
-  dependencies:{now:()=>T+45*M,load:async()=>({records:structuredClone(records),ledger:{brokerFills:[]},snapshots:[]}),
+  dependencies:{env:{EDGE_TRIGGERED_EXIT_V2_ENABLED:'true'},now:()=>T+45*M,load:async()=>({records:structuredClone(records),ledger:{brokerFills:[]},snapshots:[]}),
     fetchCandles:async leg=>{fetched.push(leg.instrumentKey);return bars;}}});
  await service.runTriggeredExitV2();
  assert.equal(writes.length,1);assert.equal(writes[0].recordType,'OPPORTUNITY_TRIGGER_EXIT_V2');
