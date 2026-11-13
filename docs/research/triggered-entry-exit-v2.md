@@ -10,7 +10,7 @@ V2 records the **first contemporaneous V3-confirmed readiness poll** for each ex
 
 ## Collecting & report
 
-The existing `EDGE_OPPORTUNITY_REPORTS_ENABLED=true` census adds `triggerObservation` to each observed A/B/C candidate when shadow timing exists. The opportunity service harvests a separate `OPPORTUNITY_TRIGGER_EXIT_V2` outcome from the same Upstox expired-option/active-option 1-minute candle reader. The work remains bounded to 10 contract/day downloads and 60 writes per pass and is skipped when disabled, with no broker orders or trading decision changes.
+The existing `EDGE_OPPORTUNITY_REPORTS_ENABLED=true` census adds `triggerObservation` to each observed A/B/C candidate when shadow timing exists. **V2 harvesting is OFF by default:** it requires the additional `EDGE_TRIGGERED_EXIT_V2_ENABLED=true` flag. This lets the existing V1 census and quick-exit collection continue normally while V2 is disabled. When enabled, the opportunity service harvests a separate `OPPORTUNITY_TRIGGER_EXIT_V2` outcome from the same Upstox expired-option/active-option 1-minute candle reader. The work remains bounded to 10 contract/day downloads and 60 writes per pass and is skipped when disabled, with no broker orders or trading decision changes.
 
 Read the owner-only `/api/v1/opportunities` report (`triggeredExitV2` key); the existing quick-exit panel now displays V2 coverage and paired results. The collection status has a `triggeredExitV2` entry.
 
@@ -31,4 +31,4 @@ Only a poll whose V3 plan is `CONFIRMED`, `shadowEntryReady=true`, whose quote w
 
 Run `npm run test:triggered-exit`, `npm run test:opportunities`, `npm run test:all` and `npm run test:syntax`. Verify no changes to PAPER/Upstox sandbox code, strike selection or V3 entry logic.
 
-To disable collection before promotion, set `EDGE_OPPORTUNITY_REPORTS_ENABLED=false` and restart (this also turns off existing opportunity census and quick-exit features). For an isolated V2-only rollback, revert this PR; V1 persisted records remain intact. A restart disarms paper execution, requiring the owner to review/arm separately. No old records are rewritten.
+For an isolated V2 rollback, set `EDGE_TRIGGERED_EXIT_V2_ENABLED=false` and restart; the existing opportunity census and V1 quick-exit continue. To disable all opportunity collection, set `EDGE_OPPORTUNITY_REPORTS_ENABLED=false` and restart. Alternatively revert this PR; V1 persisted records remain intact. A restart disarms paper execution, requiring the owner to review/arm separately. No old records are rewritten.
