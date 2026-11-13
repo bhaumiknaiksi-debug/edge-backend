@@ -5,6 +5,7 @@ const {contractFromKite,candidateLegs}=require('../trading/tradeSnapshots');
 const {summarizeBroker}=require('../trading/kiteTradebook');
 const {buildQuickExitReport,PRIMARY:QUICK_PRIMARY}=require('./quickExit');
 const {buildTriggeredExitReport}=require('./triggeredExitV2');
+const {buildTimingLabReport}=require('./timingLab');
 const VERSION='OPPORTUNITY_REPORT_V1', GAP_MS=90000, HORIZON=60;
 const hash=x=>createHash('sha256').update(JSON.stringify(x)).digest('hex');
 const ms=x=>typeof x==='string'?Date.parse(x):NaN;
@@ -207,6 +208,15 @@ function buildOpportunityReport({records=[],ledger={},snapshots=[],now=Date.now(
   blockingConditions:[...([...g.versions].some(v=>['UNKNOWN','UNVERSIONED'].includes(v))?['HISTORICAL_RULE_VERSION_REQUIRED']:[]),'COMPLETE_CANDIDATE_EXPECTANCY_REQUIRED','GATE_SPECIFIC_REPLAY_REQUIRED'],
   status:['RECORDING_GAP','CAPTURED_AFTER_TRADE','CONTRACT_IDENTITY_UNRESOLVED','STRUCTURE_ATTRIBUTION_UNRESOLVED','CANDIDATE_RECORD_UNAVAILABLE'].includes(gate)?'REPAIR_COVERAGE_FIRST':'EVIDENCE_REVIEW_REQUIRED',
   gateChangeAuthorized:false,ruleVersion:null})).sort((a,b)=>b.missedEntryOrders-a.missedEntryOrders||b.missedEntryFills-a.missedEntryFills||a.gate.localeCompare(b.gate));
+ const labEvents=records.filter(r=>r.recordType==='OPPORTUNITY_TIMING_LAB'&&ms(r.timestamp)<=now);
+ const labOutcomes=records.filter(r=>r.recordType==='OPPORTUNITY_TIMING_LAB_OUTCOME'&&ms(r.timestamp)<=now);
+ const v3ForLab=results.filter(e=>e.firstConfirmed).map(e=>{
+  const q=e.candidate.legs?.buyLeg;return {session:day(ms(e.at)),tier:e.tier,
+   instrumentKey:q?.instrumentKey,contractId:q?.contractId,
+   direction:e.candidate.strategy==='LONG_CALL'?'UP':'DOWN',
+   crossedAt:e.firstConfirmed.crossedAt,confirmedAt:e.firstConfirmed.at,
+   ruleVersion:e.ruleVersion,outcome:triggerFor(e)};
+ });
  const triggeredRows=results.filter(e=>e.marketPhase==='OPEN'&&['LONG_CALL','LONG_PUT'].includes(e.candidate.strategy)&&!e.candidate.legs?.sellLeg).map(e=>({
   tier:e.tier,session:day(ms(e.at)),at:e.at,confirmedAt:e.firstConfirmed?.at||null,
   firstFlag:quickFor(e),triggered:triggerFor(e)
@@ -228,6 +238,7 @@ function buildOpportunityReport({records=[],ledger={},snapshots=[],now=Date.now(
   candidateEpisodes:results.map(({candidate,...e})=>{const q=quickFor(e),p=q.results?.[QUICK_PRIMARY];return {...e,strategy:candidate.strategy,expiry:candidate.expiry,legs:candidateLegs(candidate),rejectedBy:rejection(candidate),gateScope:candidate.gateScope,
    quickExit:p?{rule:QUICK_PRIMARY,exit:p.exit,minutes:p.minutes,estimatedNetRupees:p.estimatedNetRupees}:{status:q.status,reason:q.reason||p?.reason||null}};}),
   triggeredExitV2:buildTriggeredExitReport(triggeredRows),
+  timingLab:buildTimingLabReport(labEvents,labOutcomes,v3ForLab),
   quickExit:buildQuickExitReport(results.filter(e=>e.marketPhase==='OPEN'&&['LONG_CALL','LONG_PUT'].includes(e.candidate.strategy)&&!e.candidate.legs?.sellLeg).map(e=>{const q=quickFor(e);
    return {tier:e.tier,strategy:e.candidate.strategy,expiry:e.candidate.expiry,session:day(ms(e.at)),at:e.at,status:q.status,reason:q.reason,results:q.results};})),
   gateChangeQueue:gateChanges,reportFingerprint:hash([VERSION,records.map(r=>r.id),fills.map(f=>f.key),snapshots.map(s=>s.id)])};

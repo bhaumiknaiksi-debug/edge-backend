@@ -9,16 +9,22 @@ const {buildOpportunityReport,normalizeObservations,candidateEpisodes,indexOutco
 const {harvestOutcome,fetchLegCandles}=require('../evidence/outcomeHarvester');
 const {measureCard}=require('./quickExit');
 const {measureTriggered,VERSION:TRIGGERED_VERSION}=require('./triggeredExitV2');
+const {createTimingLab,candidateQuotes,measureEvent,VERSION:LAB_VERSION}=require('./timingLab');
+const {fetchIndex1mResearch}=require('../data/marketContext');
 // Quick-exit backfill budget per pass: distinct contract-day candle fetches and records written.
 const QUICK_FETCHES=10,QUICK_WRITES=60,QUICK_WAIT_MS=32*60000;
 function createOpportunityResearch({pool,store,ownerToken,token,enabled=true,dependencies={}}){
  const now=dependencies.now||Date.now,load=dependencies.load||((previous,options)=>loadOpportunitySource(pool,previous,options)),harvest=dependencies.harvest||harvestOutcome;
  const triggeredEnabled=(dependencies.env||process.env).EDGE_TRIGGERED_EXIT_V2_ENABLED==='true';
+ const timingLabEnabled=(dependencies.env||process.env).EDGE_TIMING_LAB_ENABLED==='true';
+ const lab=createTimingLab(),fetchOneMinute=dependencies.fetchIndex1m||fetchIndex1mResearch;
  const fetchCandles=dependencies.fetchCandles||((leg,snapshot)=>fetchLegCandles(snapshot,leg,token));
- let timer=null,running=false,quickRunning=false,v2Running=false,recording=false,stopped=false,cache=null,cacheAt=0,pending=null;
+ let timer=null,running=false,quickRunning=false,v2Running=false,labRunning=false,labHarvestRunning=false,recording=false,stopped=false,cache=null,cacheAt=0,pending=null;
  const status={enabled:!!enabled,lastRecordedAt:null,recordingError:null,lastHarvestAt:null,harvestError:null,lastProcessed:0,
   quickExit:{lastRunAt:null,error:null,lastWritten:0,lastFetches:0},
   triggeredExitV2:{enabled:triggeredEnabled,lastRunAt:null,error:null,lastWritten:0,lastFetches:0},
+  timingLab:{enabled:timingLabEnabled,lastObservedAt:null,lastStatus:null,lastEvents:0,error:null,
+   outcomes:{lastRunAt:null,lastWritten:0,lastFetches:0,error:null}},
   // Archive reads as they happen (background or report), so full re-downloads are visible without forcing a load.
   // full / payloadRowsFetched / payloadBytesFetched count completed downloads, including loads that later failed.
   sourceReads:{total:0,failed:0,full:0,gapRecoveries:0,payloadRowsFetched:0,payloadBytesFetched:0,lastReadAt:null,lastReadMode:null,lastRecordsFetched:0,lastFullReadAt:null,lastError:null}};
@@ -34,6 +40,39 @@ function createOpportunityResearch({pool,store,ownerToken,token,enabled=true,dep
   if(!enabled||!pool||recording||stopped)return;recording=true;
   try{const row=buildObservation(analysis,options);if(!row)return;if(await store.append(row)===false)throw Error();status.lastRecordedAt=row.observedAt;status.recordingError=null;invalidate();}
   catch(_){status.recordingError='CANDIDATE_RECORDING_UNAVAILABLE';}finally{recording=false;}
+ }
+ // Independent best-effort observer. Runs AFTER the main decision and never edits it.
+ async function observeTiming(analysis,{marketContext,lotSize,observedAt=now()}={}){
+  if(!enabled||!timingLabEnabled||!pool||labRunning||stopped||analysis?.market?.phase!=='OPEN')return;
+  labRunning=true;
+  try{
+   const raw=await fetchOneMinute();
+   const at=now();
+   const result=lab.observe({now:at,index1m:raw?.rows||[],
+    index1mFetchedAt:raw?.fetchedAt||at,index5m:marketContext?.researchCandles?.index5m||[],
+    future5m:marketContext?.researchCandles?.future5m||[]});
+   status.timingLab.lastStatus=result.status;
+   status.timingLab.lastObservedAt=new Date(at).toISOString();
+   status.timingLab.lastEvents=result.events.length;
+   status.timingLab.error=null;
+   for(const event of result.events){
+    const quotes=candidateQuotes(analysis,event.direction,at,lotSize);
+    const v3=Object.fromEntries(['A','B','C'].map(tier=>{
+     const x=analysis?.decision?.shadowTiming?.plans?.[tier];
+     return [tier,x?{status:x.status||null,shadowEntryReady:x.shadowEntryReady===true,
+      breakoutId:x.breakoutId||null,entryBlocker:x.entryBlocker||null}:null];
+    }));
+    const record={id:'TIMING_LAB|'+event.id,recordType:'OPPORTUNITY_TIMING_LAB',
+     timestamp:new Date(at).toISOString(),observedAt:event.confirmedAt,version:LAB_VERSION,
+     eventId:event.id,session:event.session,family:event.family,direction:event.direction,
+     confirmedAt:event.confirmedAt,firstSeenAt:event.firstSeenAt,candleClosedAt:event.candleClosedAt,
+     level:event.level,close:event.close,sourceRuleVersion:analysis?.decision?.ruleSpec?.implementationHash||'UNKNOWN',
+     v3,candidateQuotes:quotes,liveDecisionImpact:false,executionAllowed:false};
+    if(await store.append(record)===false)throw Error('TIMING_LAB_APPEND_FAILED');
+    lab.ack([event]);invalidate();
+   }
+  }catch(_){status.timingLab.error='TIMING_LAB_OBSERVATION_UNAVAILABLE';}
+  finally{labRunning=false;}
  }
  async function run(){
   if(!enabled||!pool||!token||running||stopped)return {running};running=true;status.lastHarvestAt=new Date(now()).toISOString();status.harvestError=null;
@@ -140,7 +179,54 @@ function createOpportunityResearch({pool,store,ownerToken,token,enabled=true,dep
   }catch(_){status.triggeredExitV2.error='TRIGGERED_EXIT_COLLECTION_UNAVAILABLE';}finally{v2Running=false;}
   return {...status.triggeredExitV2,running:false};
  }
- const cycle=async()=>{await run();await runQuickExit();await runTriggeredExitV2();};
+ async function runTimingLabOutcomes(){
+  if(!enabled||!timingLabEnabled||!pool||!token||labHarvestRunning||stopped)
+   return {...status.timingLab.outcomes,running:labHarvestRunning};
+  labHarvestRunning=true;
+  const statusOut=status.timingLab.outcomes;
+  Object.assign(statusOut,{lastRunAt:new Date(now()).toISOString(),lastWritten:0,lastFetches:0,error:null});
+  try{
+   const input=await source(),events=input.records.filter(r=>r.recordType==='OPPORTUNITY_TIMING_LAB');
+   const done=new Map();
+   for(const r of input.records)if(r.recordType==='OPPORTUNITY_TIMING_LAB_OUTCOME'){
+    const key=[r.eventId,r.entryTier,r.instrumentKey].join('|'),items=done.get(key)||[];
+    items.push(r);done.set(key,items);
+   }
+   const candles=new Map();let written=0,fetches=0;
+   for(const event of events){
+    if(stopped||written>=QUICK_WRITES)break;
+    const at=Date.parse(event.confirmedAt),close=Date.parse(event.session+'T15:30:00+05:30');
+    if(!Number.isFinite(at)||Math.min(at+QUICK_WAIT_MS,close)+2*60000>now())continue;
+    for(const q of event.candidateQuotes||[]){
+     if(stopped||written>=QUICK_WRITES)break;
+     const key=[event.eventId,q.tier,q.instrumentKey].join('|'),prior=done.get(key)||[];
+     if(prior.some(r=>r.terminal)||prior.at(-1)?.nextRetryAt&&Date.parse(prior.at(-1).nextRetryAt)>now())continue;
+     const contractDay=q.instrumentKey+'|'+event.session;
+     if(!candles.has(contractDay)){
+      if(fetches>=QUICK_FETCHES)continue;
+      fetches++;
+      candles.set(contractDay,await fetchCandles(q,{timestamp:event.confirmedAt,expiry:q.expiry}).catch(()=>null));
+     }
+     const rows=candles.get(contractDay),outcome=rows?measureEvent({entry:q,candles:rows}):
+      {status:'UNAVAILABLE',version:LAB_VERSION,reason:'CANDLE_FETCH_UNAVAILABLE'};
+     const attempt=prior.length+1,terminal=outcome.status==='MEASURED'||
+      ['EXECUTABLE_ENTRY_QUOTE_MISSING','ENTRY_TIME_MISSING'].includes(outcome.reason)||attempt>=3;
+     const record={id:event.eventId+'|'+q.tier+'|'+q.instrumentKey+'|LAB_OUTCOME|'+attempt,
+      recordType:'OPPORTUNITY_TIMING_LAB_OUTCOME',timestamp:new Date(now()).toISOString(),
+      eventId:event.eventId,session:event.session,family:event.family,direction:event.direction,
+      entryTier:q.tier,instrumentKey:q.instrumentKey,measurementRule:LAB_VERSION,
+      attempt,terminal,nextRetryAt:terminal?null:new Date(now()+attempt*300000).toISOString(),outcome};
+     if(await store.append(record)===false)throw Error('TIMING_LAB_OUTCOME_APPEND_FAILED');
+     written++;done.set(key,[...prior,record]);
+    }
+   }
+   if(written)invalidate();
+   Object.assign(statusOut,{lastWritten:written,lastFetches:fetches});
+  }catch(_){statusOut.error='TIMING_LAB_OUTCOME_COLLECTION_UNAVAILABLE';}
+  finally{labHarvestRunning=false;}
+  return {...statusOut,running:false};
+ }
+ const cycle=async()=>{await run();await runQuickExit();await runTriggeredExitV2();await runTimingLabOutcomes();};
  function start(){if(!enabled||timer)return;stopped=false;timer=setInterval(()=>{void cycle();},60000);timer.unref?.();void cycle();}
  function stop(){stopped=true;if(timer)clearInterval(timer);timer=null;}
  function routes(app){
@@ -160,6 +246,6 @@ function createOpportunityResearch({pool,store,ownerToken,token,enabled=true,dep
   app.get(base,guard(async(_req,res)=>res.json({...buildOpportunityReport({...await source(true),now:now()}),collection:{...status,running}})));
   app.post(base+'/measure',guard(async(_req,res)=>{void cycle();res.status(202).json({accepted:true,running,ordersPlaced:0});}));
  }
- return {observe,start,stop,routes,run,runQuickExit,runTriggeredExitV2,status:()=>({...status,running}),invalidate};
+ return {observe,observeTiming,start,stop,routes,run,runQuickExit,runTriggeredExitV2,runTimingLabOutcomes,status:()=>({...status,running}),invalidate};
 }
 module.exports={createOpportunityResearch};
