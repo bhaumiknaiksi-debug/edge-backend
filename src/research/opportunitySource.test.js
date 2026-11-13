@@ -4,6 +4,16 @@ const {loadOpportunitySource,projectRecord}=require('./opportunitySource');
 (async()=>{
  const compact=projectRecord({id:'out',recordType:'OPPORTUNITY_OUTCOME',timestamp:'2026-10-28T04:30:00Z',snapshot:{irrelevant:'x'.repeat(100000)},outcome:{status:'UNAVAILABLE',reason:'MISSING_CANDLES',error:'private details'}});
  assert.equal(compact.snapshot,undefined);assert.equal(compact.outcome.error,undefined);assert.equal(compact.outcome.reason,'MISSING_CANDLES');
+ const observed=projectRecord({id:'census-v2',recordType:'OPPORTUNITY_OBSERVATION',timestamp:'2026-10-28T04:30:00Z',
+  candidates:[{tier:'C',strategy:'LONG_CALL',lotSize:65,legs:{buyLeg:{contractId:'same',instrumentKey:'NSE_FO|1',ask:100}},
+   triggerObservation:{timingRule:'OPENING_RANGE_SHADOW_V3',status:'CONFIRMED',shadowEntryReady:true,
+    breakoutId:'break-1',crossedAt:'2026-10-28T04:29:00Z',entryWindowEndsAt:'2026-10-28T04:39:00Z',private:'never persist'}}]});
+ assert.equal(observed.candidates[0].triggerObservation.breakoutId,'break-1');
+ assert.equal(observed.candidates[0].triggerObservation.private,undefined,'whitelist only known trigger fields');
+ const measured=projectRecord({id:'v2',recordType:'OPPORTUNITY_TRIGGER_EXIT_V2',timestamp:'2026-10-28T05:00:00Z',
+  outcome:{status:'MEASURED',version:'TRIGGERED_EXIT_V2',entry:{ask:100},results:{T8_S8_30M:{exit:'TARGET'}},secret:'never persist'}});
+ assert.equal(measured.outcome.entry.ask,100);assert.equal(measured.outcome.results.T8_S8_30M.exit,'TARGET');
+ assert.equal(measured.outcome.secret,undefined,'strip unapproved outcome metadata');
  let rollback=false,released=false,seq=0;
  const row=(id,at,committed=true)=>({record_key:id,recorded_at:at,seq:String(++seq),committed,payload_gzip:gzipSync(JSON.stringify({id,timestamp:at}))});
  const dataset=[row('r1','2026-10-28T04:30:00Z')],calls=[],visible=()=>dataset.filter(r=>r.committed),bytes=rows=>rows.reduce((a,r)=>a+(r.payload_gzip?.length||0),0);
