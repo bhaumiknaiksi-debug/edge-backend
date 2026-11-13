@@ -4,6 +4,7 @@ const {createHash}=require('node:crypto');
 const {contractFromKite,candidateLegs}=require('../trading/tradeSnapshots');
 const {summarizeBroker}=require('../trading/kiteTradebook');
 const {buildQuickExitReport,PRIMARY:QUICK_PRIMARY}=require('./quickExit');
+const {buildTriggeredExitReport}=require('./triggeredExitV2');
 const VERSION='OPPORTUNITY_REPORT_V1', GAP_MS=90000, HORIZON=60;
 const hash=x=>createHash('sha256').update(JSON.stringify(x)).digest('hex');
 const ms=x=>typeof x==='string'?Date.parse(x):NaN;
@@ -96,6 +97,23 @@ function candidateEpisodes(observations,{axis='CANDIDATE_CARD'}={}){
     ep={id:hash([VERSION,key,o.at]),axis,cardTier:c.tier,firstObservationId:o.id,at:o.at,lastAt:o.at,ruleVersion:o.ruleVersion,tier,signalTier:o.signalTier,marketPhase:o.marketPhase,
      candidate:c,observations:0,startsAfterGap:!!previous&&ms(o.at)-ms(previous.at)>GAP_MS};episodes.push(ep);active.set(key,ep);
    }
+   // Only a contemporaneous V3-ready observation can serve as a confirmed entry.
+   // First flag remains unchanged for QUICK_EXIT_V1 and the coverage report.
+   const t=c.triggerObservation;
+   if(t)ep.triggerTelemetryObserved=true;
+   if(!ep.firstConfirmed&&t?.timingRule==='OPENING_RANGE_SHADOW_V3'&&
+     t.status==='CONFIRMED'&&t.shadowEntryReady===true&&t.breakoutId&&
+     Number.isFinite(o.knownAtMs)&&o.knownAtMs>=o.atMs&&o.knownAtMs-o.atMs<=15000){
+     const crossed=ms(t.crossedAt),deadline=ms(t.entryWindowEndsAt),leg=c.legs?.buyLeg;
+     if(Number.isFinite(crossed)&&Number.isFinite(deadline)&&crossed<=o.atMs&&o.knownAtMs<=deadline&&
+        ['LONG_CALL','LONG_PUT'].includes(c.strategy)&&!c.legs?.sellLeg&&
+        typeof leg?.ask==='number'&&leg.ask>0&&typeof leg?.bid==='number'&&leg.bid>0&&
+        Number.isSafeInteger(c.lotSize)&&c.lotSize>0&&leg.instrumentKey&&leg.contractId){
+       ep.firstConfirmed={at:o.knownAt,analysisAt:o.at,ask:leg.ask,bid:leg.bid,lotSize:c.lotSize,
+        instrumentKey:leg.instrumentKey,contractId:leg.contractId,breakoutId:t.breakoutId,
+        crossedAt:t.crossedAt,entryWindowEndsAt:t.entryWindowEndsAt,timingRule:t.timingRule};
+     }
+   }
    ep.lastAt=o.at;ep.observations++;
   }
   for(const key of active.keys())if(!current.has(key))active.delete(key);
@@ -168,10 +186,18 @@ function buildOpportunityReport({records=[],ledger={},snapshots=[],now=Date.now(
   selectedLegs:p.selectedLegs||candidateLegs(p.selectedCandidate),authorization:p.authorization||null,
   importedFillKeys:[...new Map(candidateLegs(p.selectedCandidate).flatMap(l=>fillsByContract.get([p.expiry,l.strike,l.type].join('|'))||[]).filter(r=>Math.abs(r.timeMs-ms(p.capturedAt))<=20*60000).map(r=>[r.fill.key,r])).values()].sort((a,b)=>a.index-b.index).map(r=>r.fill.key),
   pnlAttribution:'NOT_INFERRED_FROM_A_CLICK'};});
- const outcomeIndex=indexOutcomes(records,now),quickByEpisode=new Map();
+ const outcomeIndex=indexOutcomes(records,now),quickByEpisode=new Map(),triggerByEpisode=new Map();
  for(const r of records)if(r.recordType==='OPPORTUNITY_QUICK_EXIT'&&r.episodeId&&ms(r.timestamp)<=now){const list=quickByEpisode.get(r.episodeId)||[];list.push(r);quickByEpisode.set(r.episodeId,list);}
+ for(const r of records)if(r.recordType==='OPPORTUNITY_TRIGGER_EXIT_V2'&&r.episodeId&&ms(r.timestamp)<=now){const list=triggerByEpisode.get(r.episodeId)||[];list.push(r);triggerByEpisode.set(r.episodeId,list);}
  const quickFor=ep=>{const list=(quickByEpisode.get(ep.id)||[]).sort((a,b)=>ms(a.timestamp)-ms(b.timestamp));
   const hit=list.filter(r=>r.outcome?.status==='MEASURED').at(-1);return hit?hit.outcome:{status:'UNMEASURED',reason:list.at(-1)?.outcome?.reason||'NOT_YET_MEASURED'};};
+ const triggerFor=ep=>{
+  if(!ep.firstConfirmed)return {status:'UNMEASURED',reason:ep.triggerTelemetryObserved?'NO_CONFIRMED_V3_ENTRY':'TRIGGER_TELEMETRY_UNAVAILABLE'};
+  if(ms(ep.firstConfirmed.at)>now)return {status:'UNMEASURED',reason:'CONFIRMED_ENTRY_AFTER_REPORT_TIME'};
+  const list=(triggerByEpisode.get(ep.id)||[]).sort((a,b)=>ms(a.timestamp)-ms(b.timestamp));
+  const hit=list.find(r=>r.outcome?.status==='MEASURED');
+  return hit?hit.outcome:{status:'UNMEASURED',reason:list.at(-1)?.outcome?.reason||'CONFIRMED_OUTCOME_NOT_YET_MEASURED'};
+ };
  const results=episodes.map(e=>({...e,result:outcomeFor(e,outcomeIndex,now)})),readinessResults=candidateEpisodes(observations,{axis:'READINESS_TIER'}).map(e=>({...e,result:outcomeFor(e,outcomeIndex,now)})),groups={};
  for(const e of [...results,...readinessResults]){const key=e.axis+'|'+e.ruleVersion+'|'+e.tier;(groups[key]||={axis:e.axis,ruleVersion:e.ruleVersion,tier:e.tier,rows:[]}).rows.push(e);}
  const missCounts={};for(const f of fills.filter(f=>f.side==='BUY'))for(const gate of new Set(f.coverage.rejectedBy?.length?f.coverage.rejectedBy:f.coverage.primaryMiss?[f.coverage.primaryMiss]:[])){
@@ -181,6 +207,10 @@ function buildOpportunityReport({records=[],ledger={},snapshots=[],now=Date.now(
   blockingConditions:[...([...g.versions].some(v=>['UNKNOWN','UNVERSIONED'].includes(v))?['HISTORICAL_RULE_VERSION_REQUIRED']:[]),'COMPLETE_CANDIDATE_EXPECTANCY_REQUIRED','GATE_SPECIFIC_REPLAY_REQUIRED'],
   status:['RECORDING_GAP','CAPTURED_AFTER_TRADE','CONTRACT_IDENTITY_UNRESOLVED','STRUCTURE_ATTRIBUTION_UNRESOLVED','CANDIDATE_RECORD_UNAVAILABLE'].includes(gate)?'REPAIR_COVERAGE_FIRST':'EVIDENCE_REVIEW_REQUIRED',
   gateChangeAuthorized:false,ruleVersion:null})).sort((a,b)=>b.missedEntryOrders-a.missedEntryOrders||b.missedEntryFills-a.missedEntryFills||a.gate.localeCompare(b.gate));
+ const triggeredRows=results.filter(e=>e.marketPhase==='OPEN'&&['LONG_CALL','LONG_PUT'].includes(e.candidate.strategy)&&!e.candidate.legs?.sellLeg).map(e=>({
+  tier:e.tier,session:day(ms(e.at)),at:e.at,confirmedAt:e.firstConfirmed?.at||null,
+  firstFlag:quickFor(e),triggered:triggerFor(e)
+ }));
  return {version:VERSION,generatedAt:new Date(now).toISOString(),liveDecisionImpact:false,gateChangesApplied:[],liveTradingInScope:false,
   source:{...source,firstObservationAt:observations[0]?.at||null,lastObservationAt:observations.at(-1)?.at||null,observations:observations.length},
   methodology:{measurementRuleVersion:'OPPORTUNITY_FIXED_60M_V1',gateChangePolicyVersion:'COVERAGE_AND_EXPECTANCY_REQUIRED_V1',coverageLookbackSeconds:GAP_MS/1000,matching:'EXACT_EXPIRY_STRIKE_TYPE; NO_FUTURE_OBSERVATIONS',
@@ -197,6 +227,7 @@ function buildOpportunityReport({records=[],ledger={},snapshots=[],now=Date.now(
   readinessEpisodes:readinessResults.map(({candidate,...e})=>({...e,strategy:candidate.strategy,legs:candidateLegs(candidate)})),
   candidateEpisodes:results.map(({candidate,...e})=>{const q=quickFor(e),p=q.results?.[QUICK_PRIMARY];return {...e,strategy:candidate.strategy,expiry:candidate.expiry,legs:candidateLegs(candidate),rejectedBy:rejection(candidate),gateScope:candidate.gateScope,
    quickExit:p?{rule:QUICK_PRIMARY,exit:p.exit,minutes:p.minutes,estimatedNetRupees:p.estimatedNetRupees}:{status:q.status,reason:q.reason||p?.reason||null}};}),
+  triggeredExitV2:buildTriggeredExitReport(triggeredRows),
   quickExit:buildQuickExitReport(results.filter(e=>e.marketPhase==='OPEN'&&['LONG_CALL','LONG_PUT'].includes(e.candidate.strategy)&&!e.candidate.legs?.sellLeg).map(e=>{const q=quickFor(e);
    return {tier:e.tier,strategy:e.candidate.strategy,expiry:e.candidate.expiry,session:day(ms(e.at)),at:e.at,status:q.status,reason:q.reason,results:q.results};})),
   gateChangeQueue:gateChanges,reportFingerprint:hash([VERSION,records.map(r=>r.id),fills.map(f=>f.key),snapshots.map(s=>s.id)])};
