@@ -42,7 +42,7 @@ const runData=(now,one=read1,ix=opening5)=>({now,index1m:one,index5m:ix,
  assert.ok(families.includes('ORB_1M'),'1m crossing recorded after two distinct stable reads');
  assert.ok(families.includes('ORB_3M'),'3m bars assembled from closed 1m bars');
  assert.ok(second.events.every(e=>e.executionAllowed===false));
- assert.equal(lab.observe(runData(at2,read2,market5)).events.length,0,'duplicate same fetch cannot re-confirm');
+ assert.equal(lab.observe(runData(at2,read2,market5)).events.length,second.events.length,'unacknowledged events replay until persisted; not silently dropped after an append failure');
  lab.ack(second.events);
  assert.equal(lab.observe({...runData(at2+65000,read2,market5),index1mFetchedAt:at2+65000}).events.length,0,'acked events never repeat');
  const changed=opening5.map(x=>x.slice());changed[0][2]=110;
