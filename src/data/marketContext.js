@@ -147,7 +147,7 @@ async function fetchIndex1mResearch({now=Date.now()}={}){
  if(timing1mPending)return timing1mPending;
  timing1mPending=requestJson('/v3/historical-candle/intraday/'+encodeURIComponent(INDEX_KEY)+'/minutes/1')
   .then(r=>{const rows=r?.data?.candles;if(!Array.isArray(rows))throw Error('RESEARCH_1M_MISSING');
-    timing1mCache=rows;timing1mAt=Date.now();return rows;})
+    timing1mAt=Date.now();timing1mCache={rows,fetchedAt:timing1mAt};return timing1mCache;})
   .finally(()=>{timing1mPending=null;});
  return timing1mPending;
 }
