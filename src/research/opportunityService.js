@@ -13,11 +13,12 @@ const {measureTriggered,VERSION:TRIGGERED_VERSION}=require('./triggeredExitV2');
 const QUICK_FETCHES=10,QUICK_WRITES=60,QUICK_WAIT_MS=32*60000;
 function createOpportunityResearch({pool,store,ownerToken,token,enabled=true,dependencies={}}){
  const now=dependencies.now||Date.now,load=dependencies.load||((previous,options)=>loadOpportunitySource(pool,previous,options)),harvest=dependencies.harvest||harvestOutcome;
+ const triggeredEnabled=(dependencies.env||process.env).EDGE_TRIGGERED_EXIT_V2_ENABLED==='true';
  const fetchCandles=dependencies.fetchCandles||((leg,snapshot)=>fetchLegCandles(snapshot,leg,token));
  let timer=null,running=false,quickRunning=false,v2Running=false,recording=false,stopped=false,cache=null,cacheAt=0,pending=null;
  const status={enabled:!!enabled,lastRecordedAt:null,recordingError:null,lastHarvestAt:null,harvestError:null,lastProcessed:0,
   quickExit:{lastRunAt:null,error:null,lastWritten:0,lastFetches:0},
-  triggeredExitV2:{lastRunAt:null,error:null,lastWritten:0,lastFetches:0},
+  triggeredExitV2:{enabled:triggeredEnabled,lastRunAt:null,error:null,lastWritten:0,lastFetches:0},
   // Archive reads as they happen (background or report), so full re-downloads are visible without forcing a load.
   // full / payloadRowsFetched / payloadBytesFetched count completed downloads, including loads that later failed.
   sourceReads:{total:0,failed:0,full:0,gapRecoveries:0,payloadRowsFetched:0,payloadBytesFetched:0,lastReadAt:null,lastReadMode:null,lastRecordsFetched:0,lastFullReadAt:null,lastError:null}};
@@ -99,7 +100,7 @@ function createOpportunityResearch({pool,store,ownerToken,token,enabled=true,dep
  // V2: confirmed-entry research is independent of V1 first-flag backfill and paper execution.
  // A missing confirmed quote is NOT reconstructed from later candles or from the original flag.
  async function runTriggeredExitV2(){
-  if(!enabled||!pool||!token||v2Running||stopped)return {...status.triggeredExitV2,running:v2Running};
+  if(!enabled||!triggeredEnabled||!pool||!token||v2Running||stopped)return {...status.triggeredExitV2,running:v2Running};
   v2Running=true;Object.assign(status.triggeredExitV2,{lastRunAt:new Date(now()).toISOString(),error:null,lastWritten:0,lastFetches:0});
   try{
    const input=await source(),observations=normalizeObservations(input.records,[]);
