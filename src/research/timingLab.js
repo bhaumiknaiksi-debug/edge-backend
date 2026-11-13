@@ -171,7 +171,7 @@ function buildTimingLabReport(events,outcomes,v3Episodes=[]){
   const key=e.eventId+'|'+q.tier+'|'+q.instrumentKey,records=byKey.get(key)||[];
   const result=records.find(x=>x.outcome?.status==='MEASURED')?.outcome||
    {status:'UNMEASURED',reason:records.at(-1)?.outcome?.reason||'AWAITING_CANDLE_OUTCOME'};
-  return {family:e.family,tier:q.tier,session:e.session,at:e.confirmedAt,outcome:result};
+  return {eventId:e.eventId,instrumentKey:q.instrumentKey,family:e.family,tier:q.tier,session:e.session,at:e.confirmedAt,outcome:result};
  })||[]);
  const eventCount=Object.fromEntries(FAMILIES.map(k=>[k,events.filter(e=>e.family===k).length]));
  // Match only contemporaneous, identical contract/tier/side and implementation, within 10 min
@@ -186,7 +186,7 @@ function buildTimingLabReport(events,outcomes,v3Episodes=[]){
     .sort((a,b)=>Math.abs(Date.parse(a.crossedAt)-Date.parse(e.candleClosedAt))-
                   Math.abs(Date.parse(b.crossedAt)-Date.parse(e.candleClosedAt)))[0];
    if(!v3)continue;
-   const observed=mapped.find(x=>x.family===e.family&&x.tier===q.tier&&x.at===e.confirmedAt);
+   const observed=mapped.find(x=>x.eventId===e.eventId&&x.instrumentKey===q.instrumentKey&&x.tier===q.tier);
    const fastNet=observed?.outcome?.results?.[PRIMARY]?.scenarios?.BASE_1PT?.estimatedNetRupees;
    const v3Net=v3.outcome?.results?.[PRIMARY]?.scenarios?.BASE_1PT?.estimatedNetRupees;
    pairings.push({family:e.family,tier:q.tier,leadMinutes:round((Date.parse(v3.confirmedAt)-Date.parse(e.confirmedAt))/MIN),
