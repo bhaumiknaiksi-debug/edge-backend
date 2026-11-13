@@ -163,7 +163,7 @@ function stats(rows){
   wins:nets.filter(x=>x>0).length,losses:nets.filter(x=>x<=0).length,
   meanNetRupees:nets.length?round(nets.reduce((a,b)=>a+b,0)/nets.length):null};
 }
-function buildTimingLabReport(events,outcomes){
+function buildTimingLabReport(events,outcomes,v3Episodes=[]){
  const byKey=new Map();
  for(const r of outcomes){const key=r.eventId+'|'+r.entryTier+'|'+r.instrumentKey;
   const arr=byKey.get(key)||[];arr.push(r);byKey.set(key,arr);}
@@ -174,10 +174,35 @@ function buildTimingLabReport(events,outcomes){
   return {family:e.family,tier:q.tier,session:e.session,at:e.confirmedAt,outcome:result};
  })||[]);
  const eventCount=Object.fromEntries(FAMILIES.map(k=>[k,events.filter(e=>e.family===k).length]));
+ // Match only contemporaneous, identical contract/tier/side and implementation, within 10 min
+ // of V3's actual crossing. These are contextual pairings, not proof of interchangeable setups.
+ const pairings=[];
+ for(const e of events.filter(x=>x.family==='ORB_1M'||x.family==='ORB_3M'))
+  for(const q of e.candidateQuotes||[]){
+   const v3=v3Episodes.filter(x=>x.session===e.session&&x.tier===q.tier&&
+    x.instrumentKey===q.instrumentKey&&x.contractId===q.contractId&&
+    x.direction===e.direction&&x.ruleVersion===e.sourceRuleVersion&&
+    Math.abs(Date.parse(x.crossedAt)-Date.parse(e.candleClosedAt))<=10*MIN)
+    .sort((a,b)=>Math.abs(Date.parse(a.crossedAt)-Date.parse(e.candleClosedAt))-
+                  Math.abs(Date.parse(b.crossedAt)-Date.parse(e.candleClosedAt)))[0];
+   if(!v3)continue;
+   const observed=mapped.find(x=>x.family===e.family&&x.tier===q.tier&&x.at===e.confirmedAt);
+   const fastNet=observed?.outcome?.results?.[PRIMARY]?.scenarios?.BASE_1PT?.estimatedNetRupees;
+   const v3Net=v3.outcome?.results?.[PRIMARY]?.scenarios?.BASE_1PT?.estimatedNetRupees;
+   pairings.push({family:e.family,tier:q.tier,leadMinutes:round((Date.parse(v3.confirmedAt)-Date.parse(e.confirmedAt))/MIN),
+    netDifferenceRupees:valid(fastNet)&&valid(v3Net)?round(fastNet-v3Net):null});
+  }
+ const pairStats=family=>{
+  const rs=pairings.filter(x=>x.family===family),net=rs.map(x=>x.netDifferenceRupees).filter(valid);
+  return {pairs:rs.length,pairedMeasured:net.length,
+   meanLeadMinutes:rs.length?round(rs.reduce((a,b)=>a+b.leadMinutes,0)/rs.length):null,
+   pairedMeanNetDifferenceRupees:net.length?round(net.reduce((a,b)=>a+b,0)/net.length):null};
+ };
  return {version:VERSION,liveDecisionImpact:false,promotionEligible:false,
   events:events.length,eventCount,entriesWithFreshQuotes:mapped.length,overall:stats(mapped),
   byFamily:FAMILIES.map(f=>({family:f,...stats(mapped.filter(x=>x.family===f))})),
   byTier:['A','B','C'].map(tier=>({tier,...stats(mapped.filter(x=>x.tier===tier))})),
+  comparisonVsV3:{ORB_1M:pairStats('ORB_1M'),ORB_3M:pairStats('ORB_3M'),pairing:'SAME_CONTRACT_TIER_RULE_DAY_DIRECTION; CROSSING_WITHIN_10M; MODEL_ONLY'},
   basis:'Research-only V3 comparison candidates: ORB_1M, ORB_3M and futures VWAP pullback. Net after 1-point modeled sell haircut, brokerage and taxes. Same initial +8/-8/30-minute exit policy as V2.',
   limitations:['Signals require two unchanged data reads; skipped polls and provider revisions produce missed or unknown opportunities.',
    'No contemporaneous option ask means no measurable entry; candle closes are not executable bid fills.',
