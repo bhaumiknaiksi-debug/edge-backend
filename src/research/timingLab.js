@@ -87,7 +87,7 @@ function futuresVwapCrossings(rows,now){
 }
 function createTimingLab(){
  let activeDay=null,frozenAnchor=null;const pending=new Map(),emitted=new Set();
- function observe({now=Date.now(),index1m=[],index5m=[],future5m=[]}={}){
+ function observe({now=Date.now(),index1m=[],index5m=[],future5m=[],index1mFetchedAt=now}={}){
   const session=day(now);
   if(activeDay!==session){activeDay=session;frozenAnchor=null;pending.clear();emitted.clear();}
   const anchor=openingAnchor(index5m,now,session);
@@ -107,13 +107,12 @@ function createTimingLab(){
    const signature=sha([session,c.family,c.direction,c.closedAt,c.level]);
    if(emitted.has(signature))continue;
    const prior=pending.get(signature);
-   if(!prior||prior.close!==c.close||now-prior.seenAt<CONFIRM_MS){
-    if(!prior||prior.close!==c.close)pending.set(signature,{seenAt:now,close:c.close});
+   if(!prior||prior.close!==c.close||index1mFetchedAt<=prior.readAt||index1mFetchedAt-prior.readAt<CONFIRM_MS){
+    if(!prior||prior.close!==c.close)pending.set(signature,{seenAt:now,close:c.close,readAt:index1mFetchedAt});
     continue;
    }
    const closed=Date.parse(c.closedAt);
    if(closed>now-SETTLE_MS||now-closed>RECENT_MS)continue;
-   emitted.add(signature);
    events.push({id:signature,session,family:c.family,direction:c.direction,
     level:c.level,close:c.close,candleClosedAt:c.closedAt,firstSeenAt:time(prior.seenAt),
     confirmedAt:time(now),source:c.source,confirmation:'TWO_MATCHING_READS_60S_APART',
@@ -125,7 +124,7 @@ function createTimingLab(){
    events,session,openingRange:{...frozenAnchor},index1mReady:minute.ok,futures5mReady:future.ok,
    liveDecisionImpact:false,executionAllowed:false};
  }
- return {observe};
+ return {observe,ack(events){for(const e of events||[])if(e?.id)emitted.add(e.id);}};
 }
 function candidateQuotes(analysis,direction,observedAt,lotSize){
  const plans=analysis?.decision?.researchCandidatePlans?.plans||{};
