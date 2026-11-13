@@ -148,7 +148,7 @@ function measureEvent({entry,candles}){
  const t=Date.parse(entry.observedAt||'');
  if(!Number.isFinite(t))return {status:'UNAVAILABLE',reason:'ENTRY_TIME_MISSING'};
  const firstCandleMs=(Math.floor(t/MIN)+1)*MIN;
- const rows=normalize(candles).map(c=>({t:c.t,o:c.open,h:c.high,l:c.low,c:c.close}));
+ const rows=normalize(candles); // Exact V2 exit evaluator expects {open,high,low,close}
  const results=Object.fromEntries(RULES.map(rule=>[rule.id,evaluateRule({
   entry:entry.ask,quantity:entry.lotSize,firstCandleMs,rows,rule
  })]));
