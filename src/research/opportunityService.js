@@ -17,13 +17,14 @@ function createOpportunityResearch({pool,store,ownerToken,token,enabled=true,dep
  const now=dependencies.now||Date.now,load=dependencies.load||((previous,options)=>loadOpportunitySource(pool,previous,options)),harvest=dependencies.harvest||harvestOutcome;
  const triggeredEnabled=(dependencies.env||process.env).EDGE_TRIGGERED_EXIT_V2_ENABLED==='true';
  const timingLabEnabled=(dependencies.env||process.env).EDGE_TIMING_LAB_ENABLED==='true';
- const lab=createTimingLab(),fetchOneMinute=dependencies.fetchIndex1m||fetchIndex1mResearch;
+ const independentEnabled=(dependencies.env||process.env).EDGE_IMPULSE_REAPER_ENABLED==='true';
+ const lab=createTimingLab({independentEnabled}),fetchOneMinute=dependencies.fetchIndex1m||fetchIndex1mResearch;
  const fetchCandles=dependencies.fetchCandles||((leg,snapshot)=>fetchLegCandles(snapshot,leg,token));
  let timer=null,running=false,quickRunning=false,v2Running=false,labRunning=false,labHarvestRunning=false,recording=false,stopped=false,cache=null,cacheAt=0,pending=null;
  const status={enabled:!!enabled,lastRecordedAt:null,recordingError:null,lastHarvestAt:null,harvestError:null,lastProcessed:0,
   quickExit:{lastRunAt:null,error:null,lastWritten:0,lastFetches:0},
   triggeredExitV2:{enabled:triggeredEnabled,lastRunAt:null,error:null,lastWritten:0,lastFetches:0},
-  timingLab:{enabled:timingLabEnabled,lastObservedAt:null,lastStatus:null,lastEvents:0,error:null,
+  timingLab:{enabled:timingLabEnabled,independentEnabled:timingLabEnabled&&independentEnabled,independentStatus:null,lastObservedAt:null,lastStatus:null,lastEvents:0,error:null,
    outcomes:{lastRunAt:null,lastWritten:0,lastFetches:0,error:null}},
   // Archive reads as they happen (background or report), so full re-downloads are visible without forcing a load.
   // full / payloadRowsFetched / payloadBytesFetched count completed downloads, including loads that later failed.
@@ -49,9 +50,10 @@ function createOpportunityResearch({pool,store,ownerToken,token,enabled=true,dep
    const raw=await fetchOneMinute();
    const at=now();
    const result=lab.observe({now:at,index1m:raw?.rows||[],
-    index1mFetchedAt:raw?.fetchedAt||at,index5m:marketContext?.researchCandles?.index5m||[],
+    index1mFetchedAt:raw?.fetchedAt??NaN,index5m:marketContext?.researchCandles?.index5m||[],
     future5m:marketContext?.researchCandles?.future5m||[]});
    status.timingLab.lastStatus=result.status;
+   status.timingLab.independentStatus=result.independentStatus??null;
    status.timingLab.lastObservedAt=new Date(at).toISOString();
    status.timingLab.lastEvents=result.events.length;
    status.timingLab.error=null;
@@ -66,7 +68,9 @@ function createOpportunityResearch({pool,store,ownerToken,token,enabled=true,dep
      timestamp:new Date(at).toISOString(),observedAt:event.confirmedAt,version:LAB_VERSION,
      eventId:event.id,session:event.session,family:event.family,direction:event.direction,
      confirmedAt:event.confirmedAt,firstSeenAt:event.firstSeenAt,candleClosedAt:event.candleClosedAt,
-     level:event.level,close:event.close,sourceRuleVersion:analysis?.decision?.ruleSpec?.implementationHash||'UNKNOWN',
+     level:event.level,close:event.close,source:event.source,confirmation:event.confirmation,
+     ...(event.strategyVersion?{strategyVersion:event.strategyVersion,evidence:event.evidence}:{}),
+     sourceRuleVersion:analysis?.decision?.ruleSpec?.implementationHash?(analysis.decision.ruleSpec.implementationHash+(event.strategyVersion?'|'+event.strategyVersion:'')):'UNKNOWN',
      v3,candidateQuotes:quotes,liveDecisionImpact:false,executionAllowed:false};
     if(await store.append(record)===false)throw Error('TIMING_LAB_APPEND_FAILED');
     lab.ack([event]);invalidate();

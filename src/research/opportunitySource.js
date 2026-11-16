@@ -11,7 +11,7 @@ function compactPlan(p){return {...pick(p,['available','strategy','executionAllo
 function projectRecord(r){
  const out=pick(r,['id','recordType','timestamp','observedAt','snapshotId','episodeId','tier','cardTier','attempt','terminal','nextRetryAt','expiry','strategy','orchestrationStatus','marketPhase']);
  if(r.recordType==='OPPORTUNITY_TIMING_LAB'){
-  Object.assign(out,pick(r,['eventId','session','family','direction','confirmedAt','firstSeenAt','candleClosedAt','level','close','sourceRuleVersion','v3']));
+  Object.assign(out,pick(r,['eventId','session','family','direction','confirmedAt','firstSeenAt','candleClosedAt','level','close','source','confirmation','strategyVersion','evidence','sourceRuleVersion','v3']));
   out.candidateQuotes=(r.candidateQuotes||[]).slice(0,3).map(q=>pick(q,['tier','strategy','expiry','contractId','instrumentKey','strike','type','lotSize','ask','bid','analysisAt','observedAt']));
  }
  if(r.recordType==='OPPORTUNITY_TIMING_LAB_OUTCOME')

@@ -1,0 +1,78 @@
+'use strict';
+const assert=require('node:assert/strict');
+const {detect,createIndependentStrategies,VERSION,FAMILIES}=require('./impulseReaper');
+const {createTimingLab}=require('./timingLab');
+const {buildBrainReport}=require('./edgeBrain');
+const {buildOpportunityReport}=require('./opportunityReport');
+const {projectRecord}=require('./opportunitySource');
+const {createOpportunityResearch}=require('./opportunityService');
+const MIN=60000,DAY='2026-11-17',START=Date.parse(DAY+'T09:15:00+05:30'),iso=x=>new Date(x).toISOString();
+const bar=(i,o,h,l,c)=>({t:START+i*MIN,o,h,l,c,v:0});
+const baseline=Array.from({length:10},(_,i)=>bar(i,100,101,99,100));
+const impulse=[...baseline,bar(10,100,101.7,99.9,101.5),bar(11,101.5,102.6,101.4,102.4),bar(12,102.4,104,102.3,103.8)];
+const reversal=[...Array.from({length:11},(_,i)=>i%2?bar(i,99,100,98,99):bar(i,101,102,100,101)),bar(11,99,100,97,98.5),bar(12,98.6,100,98.3,99.5)];
+const flip=rows=>rows.map(r=>({...r,o:200-r.o,h:200-r.l,l:200-r.h,c:200-r.c}));
+const first=START+13*MIN+40000,second=first+65000;
+const raw=rows=>rows.map(r=>[iso(r.t),r.o,r.h,r.l,r.c,r.v]);
+const get=(rows,family,direction)=>detect(rows,first,DAY).find(e=>e.family===family&&e.direction===direction);
+assert.ok(get(impulse,FAMILIES[0],'UP'));
+assert.ok(get(flip(impulse),FAMILIES[0],'DOWN'));
+assert.ok(get(reversal,FAMILIES[1],'UP'));
+assert.ok(get(flip(reversal),FAMILIES[1],'DOWN'));
+assert.equal(get([...impulse.slice(0,-1),bar(12,102.4,110,102.3,109.8)],FAMILIES[0],'UP'),undefined,'chased move is excluded');
+assert.equal(get([...reversal.slice(0,-1),bar(12,98.6,100,97,99.5)],FAMILIES[1],'UP'),undefined,'reclaim must hold');
+const lab=createTimingLab({independentEnabled:true});
+const input=(rows,now,fetchedAt=now)=>({now,index1m:raw(rows),index1mFetchedAt:fetchedAt,index5m:[],future5m:[]});
+assert.equal(lab.observe(input(impulse,first)).events.length,0);
+assert.equal(lab.observe(input(impulse,second,first)).events.length,0,'cached read cannot confirm');
+let result=lab.observe(input(impulse,second));
+assert.equal(result.events.length,1);
+assert.equal(result.events[0].family,FAMILIES[0]);
+assert.equal(result.events[0].strategyVersion,VERSION);
+assert.equal(result.events[0].executionAllowed,false);
+assert.equal(result.independentStatus,'OK','independent before OR is available');
+assert.equal(lab.observe(input(impulse,second)).events.length,1,'retry until durable append acknowledged');
+lab.ack(result.events);
+assert.equal(lab.observe(input(impulse,second+1000)).events.length,0);
+const disabled=createTimingLab();
+disabled.observe(input(impulse,first));assert.equal(disabled.observe(input(impulse,second)).events.length,0);
+const broken=createTimingLab({independentEnabled:true});
+broken.observe(input(impulse,first));
+assert.equal(broken.observe(input(impulse.filter((_,i)=>i!==4),second)).events.length,0);
+assert.equal(broken.observe(input(impulse,second+1000)).events.length,0,'gap resets pending');
+const revised=createTimingLab({independentEnabled:true});
+revised.observe(input(impulse,first));
+const changed=impulse.map((r,i)=>i===3?{...r,h:101.1}:r);
+assert.equal(revised.observe(input(changed,second)).events.length,0,'any causal-window revision restarts confirmation');
+const invalidated=createTimingLab({independentEnabled:true});
+invalidated.observe(input(impulse,first));
+assert.equal(invalidated.observe(input([...impulse,bar(13,103.8,104,99.5,100)],second)).events.length,0,'lost range break cannot confirm');
+const stale=createIndependentStrategies();
+assert.equal(stale.observe({now:first,rows:impulse,fetchedAt:first-60000,ready:true}).length,0);
+assert.equal(stale.observe({now:second,rows:impulse,fetchedAt:second,ready:true}).length,0,'previous fetch happened before settlement');
+const reaper=createTimingLab({independentEnabled:true});
+reaper.observe(input(reversal,first));
+assert.equal(reaper.observe(input(reversal,second)).events[0].family,FAMILIES[1]);
+(async()=>{
+ let clock=first,records=[];
+ const service=createOpportunityResearch({pool:{},token:'market-data',ownerToken:'test',store:{append:async r=>{records.push(r);return true;}},
+  dependencies:{env:{EDGE_TIMING_LAB_ENABLED:'true',EDGE_IMPULSE_REAPER_ENABLED:'true'},now:()=>clock,
+   fetchIndex1m:async()=>({rows:raw(impulse),fetchedAt:clock}),
+   load:async()=>({records:structuredClone(records),ledger:{brokerFills:[]},snapshots:[]}),
+   fetchCandles:async()=>Array.from({length:30},(_,i)=>[iso((Math.floor(second/MIN)+1+i)*MIN),100,101,99,100,10])}});
+ const analysis=()=>({timestamp:iso(clock),expiry:'2026-11-17',market:{phase:'OPEN'},decision:{ruleSpec:{implementationHash:'known'},
+  researchCandidatePlans:{plans:{C:{available:true,strategy:'LONG_CALL',legs:{lotSize:65,buyLeg:{instrumentKey:'NSE_FO|777',contractId:'NIFTY-777',strike:23000,type:'CE',ask:100,bid:99.9}}}}}}});
+ await service.observeTiming(analysis(),{});clock=second;await service.observeTiming(analysis(),{});
+ const e=records[0];assert.equal(e.family,FAMILIES[0]);assert.equal(records.length,1);
+ assert.equal(e.sourceRuleVersion,'known|'+VERSION);assert.equal(e.candidateQuotes[0].instrumentKey,'NSE_FO|777');
+ assert.equal(projectRecord(e).strategyVersion,VERSION);assert.ok(projectRecord(e).evidence);
+ const brain=buildBrainReport([e],[],clock);
+ assert.equal(brain.activeProposals[0].family,FAMILIES[0]);assert.equal(brain.action,'NO_ORDER');
+ clock=second+45*MIN;service.invalidate();await service.runTimingLabOutcomes();
+ const m=records.find(r=>r.recordType==='OPPORTUNITY_TIMING_LAB_OUTCOME');
+ assert.equal(m.outcome.exitIq.status,'MEASURED');
+ const report=buildOpportunityReport({records,now:clock});
+ assert.equal(report.exitIq.matchedRows,1);assert.equal(report.timingLab.eventCount[FAMILIES[0]],1);
+ assert.equal(report.timingLab.promotionEligible,false);service.stop();
+ console.log('IMPULSE + REAPER PASS: both directions, independent pre-ORB, fresh settled reads, revisions and invalidation, exact strike, archived evidence, EDGE Brain and EXIT IQ integration; no order authorization');
+})().catch(e=>{console.error(e);process.exitCode=1;});

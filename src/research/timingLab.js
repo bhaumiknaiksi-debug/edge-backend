@@ -6,10 +6,11 @@ const {createHash}=require('node:crypto');
 const {RULES,PRIMARY,normalize}=require('./quickExit');
 const {evaluateRule}=require('./triggeredExitV2');
 const {measureTournament}=require('./exitIq');
+const independent=require('./impulseReaper');
 const VERSION='TIMING_LAB_V1', IST=19800000, MIN=60000, FIVE=5*MIN, THREE=3*MIN;
 const DAYSTART='T09:15:00+05:30';
 const SETTLE_MS=30000, CONFIRM_MS=60000, RECENT_MS=5*MIN;
-const FAMILIES=['ORB_1M','ORB_3M','FUTURES_VWAP_PULLBACK'];
+const FAMILIES=['ORB_1M','ORB_3M','FUTURES_VWAP_PULLBACK',...independent.FAMILIES];
 const sha=x=>createHash('sha256').update(JSON.stringify(x)).digest('hex');
 const day=t=>new Date(t+IST).toISOString().slice(0,10);
 const time=t=>new Date(t).toISOString();
@@ -86,25 +87,30 @@ function futuresVwapCrossings(rows,now){
   close:round(c.c),level:round(current),source:'NEAREST_NIFTY_FUTURE_VOLUME_WEIGHTED_5M'});
  return output;
 }
-function createTimingLab(){
+function createTimingLab({independentEnabled=false}={}){
+ const strategies=independent.createIndependentStrategies();
  let activeDay=null,frozenAnchor=null;const pending=new Map(),emitted=new Set();
  function observe({now=Date.now(),index1m=[],index5m=[],future5m=[],index1mFetchedAt=now}={}){
   const session=day(now);
   if(activeDay!==session){activeDay=session;frozenAnchor=null;pending.clear();emitted.clear();}
+  const minute=parsed(index1m,MIN,now,session);
+  const independentEvents=independentEnabled?strategies.observe({now,rows:minute.rows,fetchedAt:index1mFetchedAt,ready:minute.ok}):[];
+  const independentStatus=independentEnabled?(minute.ok?'OK':minute.reason):'DISABLED';
   const anchor=openingAnchor(index5m,now,session);
-  if(!anchor.ok)return {status:anchor.reason,events:[],session,liveDecisionImpact:false};
+  if(!anchor.ok)return {status:anchor.reason,events:independentEvents,session,independentStatus,liveDecisionImpact:false,executionAllowed:false};
   if(!frozenAnchor)frozenAnchor={high:anchor.high,low:anchor.low};
   if(frozenAnchor.high!==anchor.high||frozenAnchor.low!==anchor.low)
-   return {status:'OPENING_RANGE_REVISED',events:[],session,liveDecisionImpact:false};
-  const minute=parsed(index1m,MIN,now,session),future=parsed(future5m,FIVE,now,session);
+   return {status:'OPENING_RANGE_REVISED',events:independentEvents,session,independentStatus,liveDecisionImpact:false,executionAllowed:false};
+  const future=parsed(future5m,FIVE,now,session);
   const candidates=[];
   if(minute.ok){
    candidates.push(...breakoutCrossings(minute.rows,MIN,anchor,now,session,'ORB_1M'));
    candidates.push(...breakoutCrossings(aggregate3(minute.rows,session),THREE,anchor,now,session,'ORB_3M'));
   }
   if(future.ok)candidates.push(...futuresVwapCrossings(future.rows,now));
-  const events=[];
+  const events=[...independentEvents];
   for(const c of candidates){
+   if(!Number.isFinite(index1mFetchedAt)||index1mFetchedAt>now)continue;
    const signature=sha([session,c.family,c.direction,c.closedAt,c.level]);
    if(emitted.has(signature))continue;
    const prior=pending.get(signature);
@@ -122,10 +128,10 @@ function createTimingLab(){
   // Prevent stale pending entries accumulating all day.
   for(const [key,v] of pending)if(now-v.seenAt>10*MIN)pending.delete(key);
   return {status:minute.ok?(future.ok?'OK':'FUTURES_'+future.reason):'INDEX_1M_'+minute.reason,
-   events,session,openingRange:{...frozenAnchor},index1mReady:minute.ok,futures5mReady:future.ok,
+   events,session,independentStatus,openingRange:{...frozenAnchor},index1mReady:minute.ok,futures5mReady:future.ok,
    liveDecisionImpact:false,executionAllowed:false};
  }
- return {observe,ack(events){for(const e of events||[])if(e?.id)emitted.add(e.id);}};
+ return {observe,ack(events){strategies.ack(events);for(const e of events||[])if(e?.id)emitted.add(e.id);}};
 }
 function candidateQuotes(analysis,direction,observedAt,lotSize){
  const plans=analysis?.decision?.researchCandidatePlans?.plans||{};
@@ -204,10 +210,10 @@ function buildTimingLabReport(events,outcomes,v3Episodes=[]){
   byFamily:FAMILIES.map(f=>({family:f,...stats(mapped.filter(x=>x.family===f))})),
   byTier:['A','B','C'].map(tier=>({tier,...stats(mapped.filter(x=>x.tier===tier))})),
   comparisonVsV3:{ORB_1M:pairStats('ORB_1M'),ORB_3M:pairStats('ORB_3M'),pairing:'SAME_CONTRACT_TIER_RULE_DAY_DIRECTION; CROSSING_WITHIN_10M; MODEL_ONLY'},
-  basis:'Research-only V3 comparison candidates: ORB_1M, ORB_3M and futures VWAP pullback. Net after 1-point modeled sell haircut, brokerage and taxes. Same initial +8/-8/30-minute exit policy as V2.',
+  basis:'Research-only candidates: ORB, futures VWAP pullback, IMPULSE momentum and REAPER range reclaim. Net after 1-point modeled sell haircut, brokerage and taxes. Same initial +8/-8/30-minute exit policy as V2.',
   limitations:['Signals require two unchanged data reads; skipped polls and provider revisions produce missed or unknown opportunities.',
    'No contemporaneous option ask means no measurable entry; candle closes are not executable bid fills.',
-   'The three strategy families and tiers can overlap on the same market move; not independent observations.',
+   'Strategy families and tiers can overlap on the same market move; not independent observations.',
    'No positive expectancy or risk-safe live deployment is established by synthetic tests or early paper outcomes.']};
 }
 module.exports={VERSION,FAMILIES,parsed,aggregate3,openingAnchor,breakoutCrossings,futuresVwapCrossings,

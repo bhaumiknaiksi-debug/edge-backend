@@ -39,7 +39,8 @@
    const fmt=n=>n==null?'unavailable':Number(n).toFixed(2);
    el('quick-progress').textContent+=' · TIMING LAB: '+lab.events+' hypotheses ('+
     lab.eventCount.ORB_1M+' × 1m ORB, '+lab.eventCount.ORB_3M+' × 3m ORB, '+
-    lab.eventCount.FUTURES_VWAP_PULLBACK+' × futures VWAP), '+lab.overall.measured+
+    lab.eventCount.FUTURES_VWAP_PULLBACK+' × futures VWAP, '+(lab.eventCount.IMPULSE_1M??0)+' × IMPULSE, '+
+    (lab.eventCount.REAPER_RANGE_RECLAIM_1M??0)+' × REAPER), '+lab.overall.measured+
     ' modeled option outcomes. Paired with V3: 1m '+one.pairedMeasured+
     ' / 3m '+three.pairedMeasured+'; mean entry lead 1m '+fmt(one.meanLeadMinutes)+
     'm, 3m '+fmt(three.meanLeadMinutes)+'m (positive = earlier).';
