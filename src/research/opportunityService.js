@@ -18,6 +18,7 @@ function createOpportunityResearch({pool,store,ownerToken,token,enabled=true,dep
  const triggeredEnabled=(dependencies.env||process.env).EDGE_TRIGGERED_EXIT_V2_ENABLED==='true';
  const timingLabEnabled=(dependencies.env||process.env).EDGE_TIMING_LAB_ENABLED==='true';
  const independentEnabled=(dependencies.env||process.env).EDGE_IMPULSE_REAPER_ENABLED==='true';
+ const autopilotEnabled=(dependencies.env||process.env).EDGE_AUTOPILOT_PAPER_ENABLED==='true';
  const lab=createTimingLab({independentEnabled}),fetchOneMinute=dependencies.fetchIndex1m||fetchIndex1mResearch;
  const fetchCandles=dependencies.fetchCandles||((leg,snapshot)=>fetchLegCandles(snapshot,leg,token));
  let timer=null,running=false,quickRunning=false,v2Running=false,labRunning=false,labHarvestRunning=false,recording=false,stopped=false,cache=null,cacheAt=0,pending=null;
@@ -79,7 +80,15 @@ function createOpportunityResearch({pool,store,ownerToken,token,enabled=true,dep
     if(await store.append(record)===false)throw Error('TIMING_LAB_APPEND_FAILED');
     lab.ack([event]);invalidate();completed.push(record);
    }
-   if(independentEnabled&&result.independentStatus==='OK'&&completed.length)autopilotBatch={configured:true,publishedAt:new Date(now()).toISOString(),events:completed};
+   if(autopilotEnabled&&independentEnabled&&result.independentStatus==='OK'&&completed.length){
+    // INSERT ON CONFLICT DO NOTHING is not proof of the same record. Exact readback
+    // rejects restart duplicates and changed records before publishing any batch.
+    const eligible=completed.filter(r=>r.strategyVersion);
+    if(eligible.length&&typeof store.verify==='function'){
+     const verified=await Promise.all(eligible.map(r=>store.verify(r)));
+     if(!stopped&&verified.every(v=>v?.ok===true))autopilotBatch={configured:true,publishedAt:new Date(now()).toISOString(),events:eligible};
+    }
+   }
   }catch(_){autopilotBatch=null;status.timingLab.error='TIMING_LAB_OBSERVATION_UNAVAILABLE';}
   finally{labRunning=false;}
  }
