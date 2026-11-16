@@ -39,6 +39,8 @@ function setup(shared){
  const post=(name,requestId,headers={Authorization:'Bearer '+OWNER})=>fetch(url+'/'+name,{method:'POST',headers:{'Content-Type':'application/json',...headers},body:JSON.stringify({requestId,confirmSandbox:true})});
  try{
   assert.equal((await post('arm','arm-request-00001',{})).status,401);
+  assert.equal((await fetch(url+'/guardian')).status,401,'owner authentication required');
+  assert.equal((await fetch(url+'/guardian',{headers:{Authorization:'Bearer '+OWNER}})).status,503,'missing snapshot method must be explicit');
   const panel=await fetch(url+'/control');assert.equal(panel.status,200);assert.ok(panel.headers.get('content-security-policy').includes("script-src 'self'"));assert.ok((await panel.text()).includes('Real-money trading is disabled'));
   const publicBody=await (await fetch(url+'/status')).text();assert.ok(!publicBody.includes(OWNER));assert.ok(publicBody.includes('SANDBOX'));
   const policy=await fetch(url+'/policy',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+OWNER},body:JSON.stringify({requestId:'policy-http-request-1',confirmSandbox:true,dailyGoal:2000,dailyLoss:500})});
