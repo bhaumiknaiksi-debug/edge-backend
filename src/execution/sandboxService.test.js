@@ -103,5 +103,22 @@ function setup(shared){
  const restarted=createSandboxService({ownerToken:OWNER,env:{EDGE_SANDBOX_EXECUTION_ENABLED:'true'},dependencies:{...lost.dependencies,bootId:'restarted'},getContext:()=>({analysis:lost.result})});
  await restarted.tick();assert.equal(lost.rows.length,1);assert.equal(lost.rows[0].status,'cancelled');
  const state=await lost.store.read();assert.equal(state.armed,false);assert.equal(state.killed,true);
+ // Opt-in monthly guard cannot arm after a proved realized breach; an explicitly stopped
+ // healthy worker still reconciles but never places an entry.
+ const lock=setup();
+ const lockedTrade={id:'monthly-loss',closedAt:BASE-60000,buys:65,netPnl:-7000};
+ const history=[{trade:lockedTrade,orders:['BUY','SELL'].map(side=>({tradeId:lockedTrade.id,side,filled:65,broker:'PAPER',orderId:'paper-'+side}))}];
+ await lock.store.mutate(s=>{s.archivedTrades=1;s.archivedPnl=-7000;});
+ const mutate=lock.store.mutate.bind(lock.store);
+ lock.store.mutate=(fn,opts={})=>mutate(s=>fn(s,opts.guardianSnapshot?structuredClone(history):undefined));
+ const guardService=createSandboxService({ownerToken:OWNER,env:{EDGE_SANDBOX_EXECUTION_ENABLED:'true',EDGE_MONTHLY_GUARDIAN_ENABLED:'true'},dependencies:lock.dependencies,getContext:()=>({analysis:lock.result})});
+ await guardService.tick();
+ const locked=await lock.store.read();assert.equal(locked.monthlyGuardian.locked,true);assert.equal(locked.armed,false);assert.equal(locked.killed,true);assert.equal(lock.rows.length,0);
+ const guardedApp=express();guardedApp.use(express.json());guardService.routes(guardedApp);
+ const gs=guardedApp.listen(0,'127.0.0.1');await new Promise(r=>gs.once('listening',r));
+ try{
+  const arm=await fetch('http://127.0.0.1:'+gs.address().port+'/api/v1/execution/sandbox/arm',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+OWNER},body:JSON.stringify({confirmSandbox:true,requestId:'monthly-lock-guard-01'})});
+  assert.equal(arm.status,409);assert.equal((await arm.json()).error,'MONTHLY_LOSS_LOCK');
+ }finally{gs.closeAllConnections();await new Promise(r=>gs.close(r));}
  console.log('Sandbox service/HTTP PASS: auth, startup disarm, partial-fill-to-stop-to-exit, worker lease, kill command replay, failed ACK persistence and restart without duplicate orders');
 })().catch(e=>{console.error(e);process.exitCode=1;});
