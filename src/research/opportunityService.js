@@ -8,14 +8,17 @@ const {buildObservation}=require('./opportunityCensus');
 const {buildOpportunityReport,normalizeObservations,candidateEpisodes,indexOutcomes,outcomeFor,validateOutcome,HORIZON}=require('./opportunityReport');
 const {harvestOutcome,fetchLegCandles}=require('../evidence/outcomeHarvester');
 const {measureCard}=require('./quickExit');
+const {measureTriggered,VERSION:TRIGGERED_VERSION}=require('./triggeredExitV2');
 // Quick-exit backfill budget per pass: distinct contract-day candle fetches and records written.
 const QUICK_FETCHES=10,QUICK_WRITES=60,QUICK_WAIT_MS=32*60000;
 function createOpportunityResearch({pool,store,ownerToken,token,enabled=true,dependencies={}}){
  const now=dependencies.now||Date.now,load=dependencies.load||((previous,options)=>loadOpportunitySource(pool,previous,options)),harvest=dependencies.harvest||harvestOutcome;
+ const triggeredEnabled=(dependencies.env||process.env).EDGE_TRIGGERED_EXIT_V2_ENABLED==='true';
  const fetchCandles=dependencies.fetchCandles||((leg,snapshot)=>fetchLegCandles(snapshot,leg,token));
- let timer=null,running=false,quickRunning=false,recording=false,stopped=false,cache=null,cacheAt=0,pending=null;
+ let timer=null,running=false,quickRunning=false,v2Running=false,recording=false,stopped=false,cache=null,cacheAt=0,pending=null;
  const status={enabled:!!enabled,lastRecordedAt:null,recordingError:null,lastHarvestAt:null,harvestError:null,lastProcessed:0,
   quickExit:{lastRunAt:null,error:null,lastWritten:0,lastFetches:0},
+  triggeredExitV2:{enabled:triggeredEnabled,lastRunAt:null,error:null,lastWritten:0,lastFetches:0},
   // Archive reads as they happen (background or report), so full re-downloads are visible without forcing a load.
   // full / payloadRowsFetched / payloadBytesFetched count completed downloads, including loads that later failed.
   sourceReads:{total:0,failed:0,full:0,gapRecoveries:0,payloadRowsFetched:0,payloadBytesFetched:0,lastReadAt:null,lastReadMode:null,lastRecordsFetched:0,lastFullReadAt:null,lastError:null}};
@@ -93,7 +96,51 @@ function createOpportunityResearch({pool,store,ownerToken,token,enabled=true,dep
   }catch(_){status.quickExit.error='QUICK_EXIT_COLLECTION_UNAVAILABLE';}finally{quickRunning=false;}
   return {...status.quickExit,running:false};
  }
- const cycle=async()=>{await run();await runQuickExit();};
+
+ // V2: confirmed-entry research is independent of V1 first-flag backfill and paper execution.
+ // A missing confirmed quote is NOT reconstructed from later candles or from the original flag.
+ async function runTriggeredExitV2(){
+  if(!enabled||!triggeredEnabled||!pool||!token||v2Running||stopped)return {...status.triggeredExitV2,running:v2Running};
+  v2Running=true;Object.assign(status.triggeredExitV2,{lastRunAt:new Date(now()).toISOString(),error:null,lastWritten:0,lastFetches:0});
+  try{
+   const input=await source(),observations=normalizeObservations(input.records,[]);
+   const done=new Map();
+   for(const r of input.records){if(r.recordType!=='OPPORTUNITY_TRIGGER_EXIT_V2'||!r.episodeId)continue;
+    const list=done.get(r.episodeId)||[];list.push(r);done.set(r.episodeId,list);}
+   const candles=new Map();let fetches=0,written=0;
+   for(const ep of candidateEpisodes(observations)){
+    if(stopped||written>=QUICK_WRITES)break;
+    const c=ep.candidate,leg=c?.legs?.buyLeg,trigger=ep.firstConfirmed;
+    if(ep.marketPhase!=='OPEN'||!['LONG_CALL','LONG_PUT'].includes(c?.strategy)||
+       !leg?.instrumentKey||c.legs.sellLeg||!trigger)continue;
+    const at=Date.parse(trigger.at),session=new Date(at+19800000).toISOString().slice(0,10);
+    const close=Date.parse(session+'T15:30:00+05:30');
+    if(!Number.isFinite(at)||Math.min(at+QUICK_WAIT_MS,close)+120000>now())continue;
+    const prior=done.get(ep.id)||[];
+    if(prior.some(r=>r.terminal)||prior.at(-1)?.nextRetryAt&&Date.parse(prior.at(-1).nextRetryAt)>now())continue;
+    const key=leg.instrumentKey+'|'+session;
+    if(!candles.has(key)){
+     if(fetches>=QUICK_FETCHES)continue;
+     fetches++;candles.set(key,await fetchCandles(leg,{timestamp:trigger.at,expiry:c.expiry}).catch(()=>null));
+    }
+    const rows=candles.get(key);
+    const outcome=rows?measureTriggered({candidate:c,trigger,candles:rows}):{status:'UNAVAILABLE',reason:'CANDLE_FETCH_UNAVAILABLE',version:TRIGGERED_VERSION};
+    const attempt=prior.length+1,terminal=outcome.status==='MEASURED'||
+     ['NOT_SINGLE_LEG_LONG','NO_CONFIRMED_EXECUTABLE_ASK','LOT_SIZE_UNAVAILABLE','TRIGGER_CONTRACT_MISMATCH',
+      'V3_CONFIRMATION_NOT_VERIFIED','UNTRUSTED_TRIGGER_TIMING_OR_STALE_ASK'].includes(outcome.reason)||attempt>=3;
+    const record={id:ep.id+'|OPPORTUNITY_TRIGGER_EXIT_V2|'+attempt,recordType:'OPPORTUNITY_TRIGGER_EXIT_V2',
+     timestamp:new Date(now()).toISOString(),episodeId:ep.id,tier:ep.tier,cardTier:ep.cardTier,
+     snapshotId:ep.firstObservationId,ruleVersion:ep.ruleVersion,measurementRule:TRIGGERED_VERSION,attempt,terminal,
+     nextRetryAt:terminal?null:new Date(now()+attempt*300000).toISOString(),outcome};
+    if(await store.append(record)===false)throw Error();
+    done.set(ep.id,[...prior,record]);written++;
+   }
+   if(written)invalidate();
+   Object.assign(status.triggeredExitV2,{lastWritten:written,lastFetches:fetches});
+  }catch(_){status.triggeredExitV2.error='TRIGGERED_EXIT_COLLECTION_UNAVAILABLE';}finally{v2Running=false;}
+  return {...status.triggeredExitV2,running:false};
+ }
+ const cycle=async()=>{await run();await runQuickExit();await runTriggeredExitV2();};
  function start(){if(!enabled||timer)return;stopped=false;timer=setInterval(()=>{void cycle();},60000);timer.unref?.();void cycle();}
  function stop(){stopped=true;if(timer)clearInterval(timer);timer=null;}
  function routes(app){
@@ -113,6 +160,6 @@ function createOpportunityResearch({pool,store,ownerToken,token,enabled=true,dep
   app.get(base,guard(async(_req,res)=>res.json({...buildOpportunityReport({...await source(true),now:now()}),collection:{...status,running}})));
   app.post(base+'/measure',guard(async(_req,res)=>{void cycle();res.status(202).json({accepted:true,running,ordersPlaced:0});}));
  }
- return {observe,start,stop,routes,run,runQuickExit,status:()=>({...status,running}),invalidate};
+ return {observe,start,stop,routes,run,runQuickExit,runTriggeredExitV2,status:()=>({...status,running}),invalidate};
 }
 module.exports={createOpportunityResearch};

@@ -24,6 +24,15 @@
    table('quick-split',[...q.byDirection[P],...q.byExpiry[P].map(r=>({...r,key:human(r.key)})),...q.byTimeOfDay[P]],r=>[r.key,...line(r),r.medianMinutes??'–',r.days]);
    table('quick-rules',q.rules.map(r=>({...q.overall[r.id],key:'+'+r.target+' / −'+r.stop+' / '+r.maxMinutes+'m'+(r.primary?' (primary)':'')})),r=>[r.key,...line(r)]);
    el('quick-limits').textContent=q.limits.join(' ');}
+  // The V2 comparison is research-only; it shares the existing quick-exit panel without adding controls.
+  const v2=report.triggeredExitV2;
+  if(v2){
+   const m=v2.overall,delta=m.pairedMeanDifferenceRupees==null?'not available':'₹'+money(m.pairedMeanDifferenceRupees);
+   el('quick-progress').textContent+=' · V3-confirmed V2: '+m.measured+'/'+m.episodes+
+    ' measured; '+m.confirmed+' confirmed; '+m.distinctMeasuredDays+' days; '+m.pairedWithFirstFlag+
+    ' paired vs first flag; paired mean difference '+delta+' (model only).';
+   el('quick-limits').textContent+=' V2: '+v2.basis+' '+v2.limits.join(' ');
+  }
   shown=50;renderEpisodes();el('gates').replaceChildren();for(const g of report.gateChangeQueue){const p=document.createElement('p');p.textContent=human(g.gate)+' · '+g.missedEntryOrders+' buy orders / '+g.missedEntryFills+' fills · '+human(g.status);el('gates').append(p);}if(!report.gateChangeQueue.length)el('gates').textContent='No classified missed entry fills.';
   el('fingerprint').textContent='Report '+report.reportFingerprint+' · '+when(report.generatedAt);el('status').textContent='Report loaded. No trading rules changed.';
  }catch(e){el('status').textContent=e.message;}}

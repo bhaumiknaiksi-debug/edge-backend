@@ -23,7 +23,13 @@ function buildObservation(analysis,{lotSize,budget,observedAt=Date.now()}={}){
   const gates={market:true,regime:!!d.regime?.direction&&(plan.strategy==='IRON_CONDOR'||d.regime.direction!=='NEUTRAL'),strategy:plan.strategy!=='WAIT',
    setup:setup.qualified,trigger:entry?.triggerReady===true,price:entry?.priceReady===true,liquidity:entry?.liquidityReady===true,
    risk:risk?.status==='READY',position:position?.status==='READY'};
-  candidates.push({tier,strategy:plan.strategy,expiry:analysis.expiry,legs,lotSize:legs.lotSize,gateScope:'CANDIDATE_REPLAY_OF_CURRENT_RULES',gates,
+  // Preserve the exact V3-confirmed moment and contemporaneous card quote for independent outcome research.
+  // Never grants execution permission and never edits candidate selection or current entry rules.
+  const shadow=d.shadowTiming?.plans?.[tier],timingVersion=d.shadowTiming?.version||null;
+  const triggerObservation=shadow?{timingRule:timingVersion,status:shadow.status||null,shadowEntryReady:shadow.shadowEntryReady===true,
+   breakoutId:shadow.breakoutId||null,crossedAt:shadow.crossedAt||null,entryWindowEndsAt:shadow.entryWindowEndsAt||null,
+   entryBlocker:shadow.entryBlocker||null}:null;
+  candidates.push({tier,strategy:plan.strategy,expiry:analysis.expiry,legs,lotSize:legs.lotSize,triggerObservation,gateScope:'CANDIDATE_REPLAY_OF_CURRENT_RULES',gates,
    blockers:[...setup.blockers,...Object.entries(gates).filter(([,v])=>!v).map(([k])=>k.toUpperCase())],
    positionReason:position?.reason||null,riskReason:risk?.reason||null,executionAllowed:tier==='A'&&d.orchestration?.executionAllowed===true});
  }
