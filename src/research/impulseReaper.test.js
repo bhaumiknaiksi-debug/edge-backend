@@ -55,15 +55,15 @@ reaper.observe(input(reversal,first));
 assert.equal(reaper.observe(input(reversal,second)).events[0].family,FAMILIES[1]);
 (async()=>{
  let clock=first,records=[];
- const service=createOpportunityResearch({pool:{},token:'market-data',ownerToken:'test',store:{append:async r=>{records.push(r);return true;}},
-  dependencies:{env:{EDGE_TIMING_LAB_ENABLED:'true',EDGE_IMPULSE_REAPER_ENABLED:'true'},now:()=>clock,
+ const service=createOpportunityResearch({pool:{},token:'market-data',ownerToken:'test',store:{append:async r=>{records.push(r);return true;},verify:async r=>({ok:records.some(x=>JSON.stringify(x)===JSON.stringify(r))})},
+  dependencies:{env:{EDGE_TIMING_LAB_ENABLED:'true',EDGE_IMPULSE_REAPER_ENABLED:'true',EDGE_AUTOPILOT_PAPER_ENABLED:'true'},now:()=>clock,
    fetchIndex1m:async()=>({rows:raw(impulse),fetchedAt:clock}),
    load:async()=>({records:structuredClone(records),ledger:{brokerFills:[]},snapshots:[]}),
    fetchCandles:async()=>Array.from({length:30},(_,i)=>[iso((Math.floor(second/MIN)+1+i)*MIN),100,101,99,100,10])}});
  const analysis=()=>({timestamp:iso(clock),expiry:'2026-11-17',market:{phase:'OPEN'},decision:{ruleSpec:{implementationHash:'known'},
   researchCandidatePlans:{plans:{C:{available:true,strategy:'LONG_CALL',legs:{lotSize:65,buyLeg:{instrumentKey:'NSE_FO|777',contractId:'NIFTY-777',strike:23000,type:'CE',ask:100,bid:99.9}}}}}}});
  await service.observeTiming(analysis(),{});clock=second;await service.observeTiming(analysis(),{});
- const e=records[0];assert.equal(e.family,FAMILIES[0]);assert.equal(records.length,1);
+ const e=records[0];assert.equal(service.autopilotSnapshot().events[0].eventId,e.eventId,'exact durable readback is published');assert.equal(e.family,FAMILIES[0]);assert.equal(records.length,1);
  assert.equal(e.sourceRuleVersion,'known|'+VERSION);assert.equal(e.candidateQuotes[0].instrumentKey,'NSE_FO|777');
  assert.equal(projectRecord(e).strategyVersion,VERSION);assert.ok(projectRecord(e).evidence);
  const brain=buildBrainReport([e],[],clock);
