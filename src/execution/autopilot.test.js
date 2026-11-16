@@ -55,6 +55,29 @@ assert.equal(pick(changed).reason,'AUTOPILOT_NO_MATCHING_FRESH_CARD');
  assert.equal(trade.anchor.eventId,e.eventId);assert.equal(trade.anchor.family,FAMILIES[0]);assert.equal(trade.netPnl,433);
  assert.equal(state.monthlyGuardian.realizedPaise,43300);
  assert.equal(book.peek().orders.filter(o=>o.transaction_type==='BUY').length,1,'event cannot be consumed twice');
+ // Run the same guarded paper broker lifecycle with the bid-based step-lock policy.
+ const dynamicState=initialState();Object.assign(dynamicState.policy,{entryMode:MODE,perTradeRisk:1000,dailyLoss:1000,limitMode:'RECORD_ONLY'});
+ const dynamicStore=memoryStore(dynamicState),dynamicMutate=dynamicStore.mutate.bind(dynamicStore);
+ dynamicStore.mutate=(fn,opts={})=>dynamicMutate(state=>fn(state,opts.guardianSnapshot?[]:undefined));
+ now=BASE;price=100;
+ const dynamicBook=memoryBook(),dynamicBroker=createPaperBroker({quotes,book:dynamicBook,now:()=>now});
+ const dynamicService=createSandboxService({ownerToken:'owner-test',env:{...env,EDGE_AUTOPILOT_EXIT_POLICY:'STEP_LOCK'},getContext:()=>({analysis:analysis(now),autopilotBatch:batch}),dependencies:{store:dynamicStore,broker:dynamicBroker,quotes,catalog,now:()=>now,bootId:'dynamic-test',idleTickMs:0}});
+ await dynamicService.tick();assert.equal(dynamicService.status().autopilotConfigured,true);
+ await dynamicStore.mutate(state=>control(state,'ARM','dynamic-test-arm-01',now));
+ await dynamicService.tick();now+=1000;await dynamicService.tick();now+=1000;await dynamicService.tick();
+ assert.equal(dynamicBook.peek().orders[1].order_type,'SL');
+ price=112.05;now+=1000;await dynamicService.tick();
+ let freshTrade=Object.values((await dynamicStore.read()).trades)[0];
+ assert.equal(freshTrade.exitIqState.floor,108);assert.equal(freshTrade.target,116);
+ assert.equal(dynamicBook.peek().orders[1].trigger_price,92,'original protective stop never loosened or replaced');
+ price=107.05;for(let i=0;i<5;i++){now+=1000;await dynamicService.tick();}
+ const closed=await dynamicStore.read();freshTrade=Object.values(closed.trades)[0];
+ assert.ok(freshTrade.closedAt);assert.equal(freshTrade.exitReason,'EXIT_IQ_RATCHET');
+ assert.equal(freshTrade.netPnl,355);assert.equal(closed.monthlyGuardian.realizedPaise,35500);
+ assert.equal(dynamicBook.peek().orders[1].status,'cancelled');
+ assert.equal(dynamicBook.peek().orders[2].status,'complete');
+ assert.equal(dynamicBook.peek().orders.filter(o=>o.transaction_type==='SELL'&&o.status==='complete').length,1,'no duplicate exit');
+ console.log('AUTOPILOT dynamic EXIT IQ lifecycle PASS: observed peak, protective stop retained, confirmed cancel, bid exit, reconciled monthly P&L');
  // Broker expiry remains effective even when quote acquisition/write finishes late.
  const expiredBook=memoryBook(),expiredBroker=createPaperBroker({quotes,book:expiredBook,now:()=>now});
  const deadline=now+1000;
