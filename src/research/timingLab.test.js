@@ -83,6 +83,18 @@ const analysis=at=>({timestamp:iso(at),expiry:'2026-11-17',market:{phase:'OPEN'}
  const measured=L.measureEvent({entry,candles:option});
  assert.equal(measured.status,'MEASURED');assert.equal(measured.results.T8_S8_30M.exit,'TARGET');
  assert.equal(measured.entry.firstCandleAt,iso(t('10:01:00')));
+ const fullEntry={...entry,analysisAt:iso(t('10:00:19'))};
+ const fullPath=Array.from({length:30},(_,i)=>candle(t('10:01:00')+i*MIN,100,101,99,100));
+ const fullMeasure=L.measureEvent({entry:fullEntry,candles:fullPath,now:t('10:32:00')});
+ assert.equal(fullMeasure.exitIq.status,'MEASURED','complete path feeds EXIT IQ');
+ const event={eventId:'exit-iq-test',timestamp:fullEntry.observedAt,session:DAY,family:'ORB_1M',direction:'UP',candidateQuotes:[fullEntry]};
+ const result={eventId:event.eventId,recordType:'OPPORTUNITY_TIMING_LAB_OUTCOME',session:DAY,family:event.family,direction:event.direction,
+  entryTier:fullEntry.tier,instrumentKey:fullEntry.instrumentKey,timestamp:iso(t('10:32:00')),outcome:fullMeasure};
+ const {projectRecord}=require('./opportunitySource');
+ assert.equal(projectRecord(result).outcome.exitIq.status,'MEASURED','EXIT IQ survives archive projection');
+ const exitReport=buildOpportunityReport({records:[{...event,recordType:'OPPORTUNITY_TIMING_LAB'},result],now:t('10:33:00')});
+ assert.equal(exitReport.exitIq.matchedRows,1,'EXIT IQ available in research report');
+
  assert.ok(measured.results.T8_S8_30M.scenarios.BASE_1PT.estimatedNetRupees>250);
  assert.equal(L.measureEvent({entry,candles:[option[1]]}).reason,'INCOMPLETE_EXIT_CANDLE_PATH');
  const paired=L.buildTimingLabReport([{eventId:'e',session:DAY,family:'ORB_1M',direction:'UP',
