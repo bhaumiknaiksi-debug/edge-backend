@@ -57,6 +57,26 @@ function setup(shared){
   assert.equal(f.rows.length,3);assert.equal((await post('stop','stop-request-00001')).status,200);
   assert.equal((await (await post('arm','arm-request-00001')).json()).armed,false,'a retried earlier ARM cannot undo STOP');
  }finally{server.closeAllConnections();await new Promise(r=>server.close(r));}
+ // Unexpected tick errors must retain the halt behavior while exposing only safe diagnostic metadata.
+ const diagnostic=setup();let failContext=false;
+ const service=createSandboxService({ownerToken:OWNER,env:{EDGE_SANDBOX_EXECUTION_ENABLED:'true'},dependencies:diagnostic.dependencies,getContext:()=>{
+  if(failContext){const e=new TypeError('private-token do-not-log');e.code='ETIMEDOUT';throw e;}
+  return {analysis:diagnostic.result};
+ }});
+ await service.tick();await diagnostic.store.mutate(s=>control(s,'ARM','diagnostic-arm-0001',diagnostic.time()));
+ const warnings=[],originalWarn=console.warn;console.warn=(...args)=>warnings.push(args.join(' '));
+ try{
+  failContext=true;await service.tick();diagnostic.advance();await service.tick();
+  const status=service.status(),state=await diagnostic.store.read();
+  assert.equal(status.reason,'SANDBOX_SERVICE_UNAVAILABLE');assert.equal(state.armed,false);assert.equal(state.killed,true);
+  assert.deepEqual(status.lastFailureDiagnostic,{at:new Date(diagnostic.time()).toISOString(),stage:'SELECT_CANDIDATE',errorType:'TypeError',errorCode:'ETIMEDOUT'});
+  assert.equal(warnings.filter(x=>x.includes('[sandbox tick failure]')).length,1,'identical recurring errors do not flood logs');
+  assert.ok(!JSON.stringify(status).includes('private-token'));assert.ok(!warnings.join(' ').includes('private-token'));
+  failContext=false;diagnostic.advance();await service.tick();
+  assert.equal(service.status().reason,null);assert.equal(service.status().lastFailureDiagnostic.stage,'SELECT_CANDIDATE','last failure survives a healthy tick');
+  assert.equal((await diagnostic.store.read()).armed,false,'recovery must not auto-arm the trader');
+  assert.equal(diagnostic.rows.length,0);
+ }finally{console.warn=originalWarn;}
  const quoteFailure=setup();await quoteFailure.service.tick();await quoteFailure.store.mutate(s=>control(s,'ARM','quote-failure-arm-01',quoteFailure.time()));await quoteFailure.service.tick();
  quoteFailure.dependencies.quotes.get=async()=>{throw Error('quote error');};await quoteFailure.store.mutate(s=>control(s,'STOP','quote-failure-stop-1',quoteFailure.time()));quoteFailure.advance();await quoteFailure.service.tick();assert.equal(quoteFailure.rows[0].status,'cancelled','quote outage cannot prevent cancelling an unfilled entry');
  const bookFailure=setup();await bookFailure.service.tick();await bookFailure.store.mutate(s=>control(s,'ARM','book-failure-arm-01',bookFailure.time()));await bookFailure.service.tick();
