@@ -32,4 +32,4 @@ function observeGuardian({state,archived,now,readLimit=20000}={}){
     'No implied capital replenishment or change to actual buying power.']};
  }catch(_){return unavailable('MONTHLY_RISK_EVIDENCE_INVALID');}
 }
-module.exports={observeGuardian};
+module.exports={observeGuardian,paperProvenance};

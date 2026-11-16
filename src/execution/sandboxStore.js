@@ -12,13 +12,18 @@ function createSandboxStore({pool}){
     if(!initialized)initialized=(async()=>{await pool.query(SCHEMA);await pool.query(ARCHIVE_SCHEMA);await pool.query("INSERT INTO edge_sandbox_execution_v1(id,payload) VALUES('owner',$1::jsonb) ON CONFLICT DO NOTHING",[JSON.stringify(initialState())]);})().catch(e=>{initialized=null;throw e;});
     await initialized;
   }
-  async function mutate(fn){
+  async function mutate(fn,{guardianSnapshot=false}={}){
     await init();const client=await pool.connect();
     try{
       await client.query('BEGIN');
       const row=await client.query("SELECT payload FROM edge_sandbox_execution_v1 WHERE id='owner' FOR UPDATE");
       const state=JSON.parse(JSON.stringify(row.rows[0].payload));assertState(state);
-      const result=fn(state);
+      let archive;
+      if(guardianSnapshot){
+        const rows=await client.query("SELECT payload FROM edge_sandbox_archive_v1 WHERE kind='TRADE' ORDER BY id LIMIT $1",[20000]);
+        archive=rows.rows.map(r=>r.payload);
+      }
+      const result=fn(state,archive);
       if(result&&typeof result.then==='function'){Promise.resolve(result).catch(()=>{});throw Error('ASYNC_REDUCER_NOT_ALLOWED');}
       // Archive rows written by the reducer are inserted in the SAME transaction as the state that dropped them.
       const queue=Array.isArray(state.archiveQueue)?state.archiveQueue:[];delete state.archiveQueue;assertState(state);

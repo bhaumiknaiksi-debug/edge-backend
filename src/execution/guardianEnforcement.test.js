@@ -1,0 +1,59 @@
+'use strict';
+const assert=require('node:assert/strict');
+const {evaluateGuardian,applyGuardian,checkGuardianEntry,freshGuardian}=require('./guardianEnforcement');
+const engine=require('./sandboxEngine');
+const now=Date.parse('2026-11-16T11:00:00+05:30');
+function record(id,netPnl,closedAt=now-60000){
+ const trade={id,netPnl,closedAt,buys:65};
+ return {trade,orders:['BUY','SELL'].map(side=>({tradeId:id,side,filled:65,broker:'PAPER',orderId:'paper-'+id+'-'+side}))};
+}
+function setup(netPnl=-6500){
+ const s=engine.initialState();Object.assign(s,{broker:'PAPER',armed:true,killed:false,archivedTrades:1,archivedPnl:netPnl});
+ s.policy.capital=10000;
+ return {s,archived:[record('previous',netPnl)]};
+}
+const evaluate=(s,archived,at=now,quotes={})=>evaluateGuardian({state:s,archived,quotes,now:at,quantities:engine.quantities});
+let {s,archived}=setup();
+let g=applyGuardian(s,evaluate(s,archived));
+assert.equal(g.ok,true);assert.equal(g.remainingRealizedBudgetRupees,500);
+assert.equal(checkGuardianEntry(s,g,{now,plannedLoss:501,entryOutlay:2000}),'MONTHLY_RISK_BUDGET');
+assert.equal(checkGuardianEntry(s,g,{now,plannedLoss:400,entryOutlay:3501}),'CAPITAL_LIMIT');
+assert.equal(checkGuardianEntry(s,g,{now,plannedLoss:400,entryOutlay:2000}),null);
+assert.equal(freshGuardian(s,now),true);
+assert.equal(freshGuardian(s,now+10001),false);
+assert.equal(freshGuardian(s,now-1),false);
+const t={id:'open',instrumentKey:'NFO|1',closedAt:null,costReserve:100};
+s.trades[t.id]=t;
+s.orders.buy={tradeId:t.id,side:'BUY',filled:65,averagePrice:100,broker:'PAPER',orderId:'paper-buy'};
+const quote=(bid,at)=>({[t.instrumentKey]:{instrumentKey:t.instrumentKey,bid,ask:bid+.05,receivedAt:at,exchangeAt:at}});
+g=applyGuardian(s,evaluate(s,archived,now+1000,quote(93,now+1000)));
+assert.equal(g.reason,'MONTHLY_LOSS_LOCK');
+assert.equal(g.current.lockBasis,'MARKED');assert.equal(s.killed,true);assert.equal(s.armed,false);
+assert.equal(t.exitReason,'MONTHLY_LOSS_LOCK');assert.equal(freshGuardian(s,now+1000),false);
+const serialized=JSON.parse(JSON.stringify(s));
+g=applyGuardian(serialized,evaluate(serialized,archived,now+2000,quote(120,now+2000)));
+assert.equal(g.reason,'MONTHLY_LOSS_LOCK','price recovery and restart must not clear lock');
+assert.equal(g.current.lockedAt,now+1000);
+let x=setup();x.s.trades[t.id]={...t,exitReason:null};x.s.orders.buy={...s.orders.buy};
+g=applyGuardian(x.s,evaluate(x.s,x.archived,now,quote(93,now-10001)));
+assert.equal(g.reason,'MONTHLY_MARK_UNAVAILABLE');assert.equal(x.s.armed,false);
+assert.equal(x.s.killed,false,'missing quote does not force an unpriced exit');
+ // A recent receipt is not proof that the underlying exchange quote is recent.
+ const stale=quote(93,now);stale[t.instrumentKey].exchangeAt=now-10001;
+ assert.equal(evaluate(x.s,x.archived,now,stale).reason,'MONTHLY_MARK_UNAVAILABLE');
+ const pending={kind:'ENTRY',state:'OPEN'},queued={kind:'ENTRY',state:'QUEUED'},stop={kind:'STOP',state:'OPEN'};
+ Object.assign(x.s.orders,{pending,queued,stop});
+ applyGuardian(x.s,{ok:false,reason:'MONTHLY_EVIDENCE_UNAVAILABLE'});
+ assert.equal(pending.wantCancel,true);assert.equal(queued.state,'EXPIRED');
+ assert.equal(stop.wantCancel,undefined,'keep existing protective stop on evidence failure');
+assert.equal(evaluate(x.s,[]).reason,'MONTHLY_RISK_EVIDENCE_INVALID');
+assert.equal(evaluate({...x.s,broker:'UPSTOX_SANDBOX'},x.archived).reason,'MONTHLY_PAPER_ONLY');
+x=setup(-7000);g=applyGuardian(x.s,evaluate(x.s,x.archived));assert.equal(g.reason,'MONTHLY_LOSS_LOCK');
+assert.equal(g.current.lockBasis,'REALIZED');
+const next=Date.parse('2026-12-01T09:30:00+05:30');
+g=evaluate(x.s,x.archived,next);
+assert.equal(g.ok,true);assert.equal(g.current.month,'2026-12');
+assert.equal(g.actualCapitalCeilingRupees,3000,'no imaginary replenishment at rollover');
+assert.equal(checkGuardianEntry(x.s,g,{now:next,plannedLoss:100,entryOutlay:3001}),'CAPITAL_AFTER_ACTUAL_LOSSES');
+assert.equal(x.s.armed,false,'rollover does not arm');
+console.log('Guardian enforcement PASS: actual affordability, marked and realized locks, restart/recovery, stale evidence, rollover, paper-only boundaries');

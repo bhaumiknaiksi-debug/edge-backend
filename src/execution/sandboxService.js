@@ -4,6 +4,7 @@ const {readFileSync}=require('node:fs');
 const path=require('node:path');
 const engine=require('./sandboxEngine');
 const {observeGuardian}=require('./guardianObservation');
+const {evaluateGuardian,applyGuardian,freshGuardian}=require('./guardianEnforcement');
 const {createSandboxStore}=require('./sandboxStore');
 const {createSandbox}=require('./upstoxSandbox');
 const {createPaperBroker,FILL_MODEL}=require('./paperBroker');
@@ -14,6 +15,7 @@ const {createClaudeAdvisor,buildSnapshot}=require('./claudeAdvisor');
 const {rejectOwner}=require('../health/authThrottle');
 function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.env,dependencies={},notify=()=>{}}){
   const enabled=env.EDGE_SANDBOX_EXECUTION_ENABLED==='true';
+  const monthlyEnabled=env.EDGE_MONTHLY_GUARDIAN_ENABLED==='true';
   const tokenValid=t=>typeof t==='string'&&!!t.trim()&&!/[\r\n]/.test(t);
   // PAPER (default): EDGE fills its own orders against live quotes. UPSTOX_SANDBOX only simulates order responses
   // and never fills, so it is kept only as an explicit opt-in for testing the order API itself.
@@ -65,7 +67,7 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
   const flat=s=>!Object.values(s.orders||{}).some(o=>!engine.terminal(o))&&!Object.values(s.trades||{}).some(t=>!t.closedAt);
   const publicStatus=()=>({version:'EDGE_SANDBOX_EXECUTION_V1',enabled,mode:'SANDBOX',broker:brokerKind,fillModel:brokerKind==='PAPER'?FILL_MODEL:'UPSTOX_SANDBOX_SIMULATED_RESPONSES',liveOrdersSupported:false,
     liveDecisionImpact:false,configured:!reason,reason:lastError,lastTickAt,lastEntryResult,brokerReads,positionBasis,tickCount,lastTickStartedAt,lastErrorAt,
-    readFailingSince:iso(readFailingSince),lastReadFailure,lastFailureDiagnostic,readGraceSeconds:readGraceMs/1000,advisorConfigured:!!advisor});
+    readFailingSince:iso(readFailingSince),lastReadFailure,lastFailureDiagnostic,readGraceSeconds:readGraceMs/1000,advisorConfigured:!!advisor,monthlyGuardianEnabled:monthlyEnabled});
   const clean=e=>/^[A-Z_]{3,80}$/.test(e?.message||'')?e.message:'SANDBOX_SERVICE_UNAVAILABLE';
   const human=x=>String(x||'').toLowerCase().replaceAll('_',' ');
   const send=(key,text)=>{try{notify(key,text);}catch(_){}};
@@ -152,19 +154,20 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
       lastQuotes=quotes||{};
       stage='RECONCILE_AND_PLAN';
       const view={...context(),quotes};
-      const prepared=await store.mutate(s=>{
+      const prepared=await store.mutate((s,archived)=>{
         if(s.lease?.owner!==bootId||s.lease.until<=now())return null;
         engine.reconcile(s,book,positions,readAt,{positionBasis:positions===null?'SANDBOX_ORDER_BOOK_DERIVED':'BROKER_POSITIONS'});
+        const guardian=monthlyEnabled?applyGuardian(s,evaluateGuardian({state:s,archived,quotes:view.quotes||{},now:now(),quantities:engine.quantities})):null;
         engine.archiveClosed(s,now());
         if(advice?.action==='EXIT'&&advice.tradeId&&adviceFresh(now()))engine.requestModelExit(s,advice.tradeId,now());
         engine.manage(s,view.quotes||{},now());
         const planKey=engine.selectCandidate(s.policy,view.analysis,now()).leg?.instrumentKey||view.analysis?.decision?.tradeLegs?.buyLeg?.instrumentKey;
         const previousEntryResult=lastEntryResult;
-        lastEntryResult=engine.planEntry(s,view.analysis,view.quotes?.[planKey],meta,now());
+        lastEntryResult=engine.planEntry(s,view.analysis,view.quotes?.[planKey],meta,now(),guardian);
         if(lastEntryResult==='LOSING_STREAK_LOCK'&&previousEntryResult!=='LOSING_STREAK_LOCK')send('STREAK:'+engine.day(now()),'EDGE sandbox paused for today: '+(s.policy.maxConsecutiveLosses||2)+' losing trades in a row.');
         const pending=Object.values(s.orders).find(o=>o.kind==='ENTRY'&&o.state==='QUEUED');
-        return engine.claim(s,now(),!pending||currentAllowed(pending,{...context(),quotes},now(),s.policy));
-      });
+        return engine.claim(s,now(),(!monthlyEnabled||guardian?.ok&&freshGuardian(s,now()))&&(!pending||currentAllowed(pending,{...context(),quotes},now(),s.policy)));
+      },{guardianSnapshot:monthlyEnabled});
       stage='STATE_NOTIFICATION';
       positionBasis=prepared.state.positionBasis;watch(prepared.state);
       const action=prepared.result;
@@ -172,7 +175,7 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
         if(action.action==='PLACE'&&action.order.kind==='ENTRY'){
           stage='REVALIDATE_ENTRY';
           const allowed=await store.mutate(s=>{
-            if(s.killed||!s.armed||stopped||s.lease?.owner!==bootId||!currentAllowed(action.order,{...context(),quotes},now(),s.policy)){
+            if(s.killed||!s.armed||stopped||s.lease?.owner!==bootId||s.lease.until<=now()||(monthlyEnabled&&!freshGuardian(s,now()))||!currentAllowed(action.order,{...context(),quotes},now(),s.policy)){
               s.orders[action.order.id].state='EXPIRED';return false;
             }return true;
           });
@@ -273,7 +276,12 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
     app.get(base+'/guardian',guard(async(_req,res)=>{
       if(!store.readGuardianSnapshot)return res.status(503).json({error:'GUARDIAN_SNAPSHOT_UNAVAILABLE'});
       const snapshot=await store.readGuardianSnapshot();
-      res.json(observeGuardian({...snapshot,now:now()}));
+      res.json({...observeGuardian({...snapshot,now:now()}),
+        enforcementConfigured:monthlyEnabled,
+        persistedRiskState:snapshot.state.monthlyGuardian??null,
+        riskStateFresh:monthlyEnabled&&freshGuardian(snapshot.state,now()),
+        // Realized-only observation is not itself proof of current mark or enforcement health.
+        enforced:false});
     }));
     app.get(base+'/decisions',guard(async(req,res)=>{
       const limit=Math.min(5000,Math.max(1,parseInt(req.query.limit,10)||500));
@@ -293,7 +301,14 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
     }));
     for(const [path,operation] of [['arm','ARM'],['stop','STOP']])app.post(base+'/'+path,guard(async(req,res)=>{
       if(req.body?.confirmSandbox!==true)return res.status(400).json({error:'SANDBOX_CONFIRMATION_REQUIRED'});
-      const updated=await store.mutate(s=>engine.control(s,operation,req.body.requestId,now()));
+      const updated=await store.mutate((s,archived)=>{
+        if(monthlyEnabled&&operation==='ARM'){
+          const guardian=evaluateGuardian({state:s,archived,quotes:{},now:now(),quantities:engine.quantities});
+          if(!guardian.ok)throw Error(guardian.reason);
+          applyGuardian(s,guardian);
+        }
+        return engine.control(s,operation,req.body.requestId,now());
+      },{guardianSnapshot:monthlyEnabled&&operation==='ARM'});
       res.json({mode:'SANDBOX',armed:updated.state.armed,killed:updated.state.killed,liveOrdersSupported:false});
     }));
   }

@@ -169,7 +169,7 @@ function recover(s,bootId){
   }
   for(const t of Object.values(s.trades))if(!t.closedAt)t.exitReason='RESTART';
 }
-function planEntry(s,result,quote,meta,now){
+function planEntry(s,result,quote,meta,now,guardian=null){
   assertState(s);
   if(!s.armed||s.killed||s.haltReason||s.armedDay!==day(now))return 'DISARMED';
   if(!s.reconciledAt||now-s.reconciledAt>10000||s.reconciledAt>now)return 'RECONCILIATION_STALE';
@@ -211,6 +211,11 @@ function planEntry(s,result,quote,meta,now){
   const outlay=price*meta.lotSize+policy.costReserve;
   if(outlay>policy.capital)return 'CAPITAL_LIMIT'; // the account cannot pay for it: always enforced
   if(outlay>Math.max(0,policy.capital+Math.min(0,totalPnl))&&limited('CAPITAL_AFTER_LOSSES'))return 'CAPITAL_LIMIT';
+  // Additional paper-only constraint; the existing gates remain intact.
+  if(guardian){
+    const monthlyReason=require('./guardianEnforcement').checkGuardianEntry(s,guardian,{now,plannedLoss:risk,entryOutlay:outlay});
+    if(monthlyReason)return monthlyReason;
+  }
   // One entry per original contract/session. Poll timestamps never manufacture new entry identities.
   const base=[day(now),pick.strategy,result.expiry,leg.instrumentKey,leg.contractId];
   const id=hash(pick.identity?[...base,pick.identity]:base); // a model decision is its own identity; other modes are unchanged

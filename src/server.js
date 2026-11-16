@@ -1431,6 +1431,7 @@ server.listen(PORT, async () => {
     timingLab:researchStartup.timingLab?.enabled===true,
     sandboxEnabled:sandboxStartup.enabled===true,
     sandboxConfigured:sandboxStartup.configured===true,
+    monthlyGuardian:sandboxStartup.monthlyGuardianEnabled===true,
     broker:sandboxStartup.broker,
     liveOrdersSupported:false
   }));
