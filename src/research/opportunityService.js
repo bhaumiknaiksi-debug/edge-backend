@@ -18,9 +18,12 @@ function createOpportunityResearch({pool,store,ownerToken,token,enabled=true,dep
  const triggeredEnabled=(dependencies.env||process.env).EDGE_TRIGGERED_EXIT_V2_ENABLED==='true';
  const timingLabEnabled=(dependencies.env||process.env).EDGE_TIMING_LAB_ENABLED==='true';
  const independentEnabled=(dependencies.env||process.env).EDGE_IMPULSE_REAPER_ENABLED==='true';
+ const autopilotEnabled=(dependencies.env||process.env).EDGE_AUTOPILOT_PAPER_ENABLED==='true';
  const lab=createTimingLab({independentEnabled}),fetchOneMinute=dependencies.fetchIndex1m||fetchIndex1mResearch;
  const fetchCandles=dependencies.fetchCandles||((leg,snapshot)=>fetchLegCandles(snapshot,leg,token));
  let timer=null,running=false,quickRunning=false,v2Running=false,labRunning=false,labHarvestRunning=false,recording=false,stopped=false,cache=null,cacheAt=0,pending=null;
+ let autopilotBatch=null;
+ const autopilotSnapshot=()=>autopilotBatch?structuredClone(autopilotBatch):null;
  const status={enabled:!!enabled,lastRecordedAt:null,recordingError:null,lastHarvestAt:null,harvestError:null,lastProcessed:0,
   quickExit:{lastRunAt:null,error:null,lastWritten:0,lastFetches:0},
   triggeredExitV2:{enabled:triggeredEnabled,lastRunAt:null,error:null,lastWritten:0,lastFetches:0},
@@ -46,6 +49,7 @@ function createOpportunityResearch({pool,store,ownerToken,token,enabled=true,dep
  async function observeTiming(analysis,{marketContext,lotSize,observedAt=now()}={}){
   if(!enabled||!timingLabEnabled||!pool||labRunning||stopped||analysis?.market?.phase!=='OPEN')return;
   labRunning=true;
+  autopilotBatch=null; // invalidate previous evidence before an attempted new observation
   try{
    const raw=await fetchOneMinute();
    const at=now();
@@ -57,6 +61,7 @@ function createOpportunityResearch({pool,store,ownerToken,token,enabled=true,dep
    status.timingLab.lastObservedAt=new Date(at).toISOString();
    status.timingLab.lastEvents=result.events.length;
    status.timingLab.error=null;
+   const completed=[];
    for(const event of result.events){
     const quotes=candidateQuotes(analysis,event.direction,at,lotSize);
     const v3=Object.fromEntries(['A','B','C'].map(tier=>{
@@ -73,9 +78,18 @@ function createOpportunityResearch({pool,store,ownerToken,token,enabled=true,dep
      sourceRuleVersion:analysis?.decision?.ruleSpec?.implementationHash?(analysis.decision.ruleSpec.implementationHash+(event.strategyVersion?'|'+event.strategyVersion:'')):'UNKNOWN',
      v3,candidateQuotes:quotes,liveDecisionImpact:false,executionAllowed:false};
     if(await store.append(record)===false)throw Error('TIMING_LAB_APPEND_FAILED');
-    lab.ack([event]);invalidate();
+    lab.ack([event]);invalidate();completed.push(record);
    }
-  }catch(_){status.timingLab.error='TIMING_LAB_OBSERVATION_UNAVAILABLE';}
+   if(autopilotEnabled&&independentEnabled&&result.independentStatus==='OK'&&completed.length){
+    // INSERT ON CONFLICT DO NOTHING is not proof of the same record. Exact readback
+    // rejects restart duplicates and changed records before publishing any batch.
+    const eligible=completed.filter(r=>r.strategyVersion);
+    if(eligible.length&&typeof store.verify==='function'){
+     const verified=await Promise.all(eligible.map(r=>store.verify(r)));
+     if(!stopped&&verified.every(v=>v?.ok===true))autopilotBatch={configured:true,publishedAt:new Date(now()).toISOString(),events:eligible};
+    }
+   }
+  }catch(_){autopilotBatch=null;status.timingLab.error='TIMING_LAB_OBSERVATION_UNAVAILABLE';}
   finally{labRunning=false;}
  }
  async function run(){
@@ -232,7 +246,7 @@ function createOpportunityResearch({pool,store,ownerToken,token,enabled=true,dep
  }
  const cycle=async()=>{await run();await runQuickExit();await runTriggeredExitV2();await runTimingLabOutcomes();};
  function start(){if(!enabled||timer)return;stopped=false;timer=setInterval(()=>{void cycle();},60000);timer.unref?.();void cycle();}
- function stop(){stopped=true;if(timer)clearInterval(timer);timer=null;}
+ function stop(){autopilotBatch=null;stopped=true;if(timer)clearInterval(timer);timer=null;}
  function routes(app){
   const base='/api/v1/opportunities';
   app.get(base+'/status',(_req,res)=>{res.set('Cache-Control','no-store');res.json({...status,running,liveDecisionImpact:false,liveTradingInScope:false});});
@@ -250,6 +264,6 @@ function createOpportunityResearch({pool,store,ownerToken,token,enabled=true,dep
   app.get(base,guard(async(_req,res)=>res.json({...buildOpportunityReport({...await source(true),now:now()}),collection:{...status,running}})));
   app.post(base+'/measure',guard(async(_req,res)=>{void cycle();res.status(202).json({accepted:true,running,ordersPlaced:0});}));
  }
- return {observe,observeTiming,start,stop,routes,run,runQuickExit,runTriggeredExitV2,runTimingLabOutcomes,status:()=>({...status,running}),invalidate};
+ return {observe,observeTiming,autopilotSnapshot,start,stop,routes,run,runQuickExit,runTriggeredExitV2,runTimingLabOutcomes,status:()=>({...status,running}),invalidate};
 }
 module.exports={createOpportunityResearch};

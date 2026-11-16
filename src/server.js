@@ -57,7 +57,7 @@ app.use(express.json());
 const edgeWebPush = buildWebPush();
 const dataPool = createDatabase();
 const edgeTelegram = buildTelegram({pool:dataPool,getMarketPhase,getCurrentResult:()=>lastResult});
-const sandboxExecution = createSandboxService({pool:dataPool,ownerToken:process.env.EDGE_PUSH_OWNER_TOKEN,getContext:()=>({analysis:lastResult}),
+const sandboxExecution = createSandboxService({pool:dataPool,ownerToken:process.env.EDGE_PUSH_OWNER_TOKEN,getContext:()=>({analysis:lastResult,autopilotBatch:opportunityResearch.autopilotSnapshot()}),
   notify:(key,text)=>edgeTelegram.alert(key,text)}); // edgeTelegram is defined below; only called after startup
 const shadowEvents = createShadowEvents({pool:dataPool,enabled:process.env.EDGE_SHADOW_EVENTS_ENABLED === 'true'});
 let ledgerEpoch = 0;
@@ -1433,6 +1433,7 @@ server.listen(PORT, async () => {
     sandboxEnabled:sandboxStartup.enabled===true,
     sandboxConfigured:sandboxStartup.configured===true,
     monthlyGuardian:sandboxStartup.monthlyGuardianEnabled===true,
+    autopilot:sandboxStartup.autopilotConfigured===true,
     broker:sandboxStartup.broker,
     liveOrdersSupported:false
   }));
