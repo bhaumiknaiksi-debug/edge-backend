@@ -1,6 +1,7 @@
 'use strict';
 // Durable SANDBOX-only state machine. Pure functions; never calls a broker or alters EDGE decisions.
 const {createHash}=require('node:crypto');
+const exitIq=require('./exitIqPaper');
 const {selectCandidate,expiryBucket,MODES,DEFAULT_MODE}=require('./candidateSelection');
 const hash=x=>createHash('sha256').update(JSON.stringify(x)).digest('hex');
 const clone=x=>JSON.parse(JSON.stringify(x));
@@ -158,6 +159,12 @@ function control(s,operation,requestId,now){
     if(!s.reconciledAt||now-s.reconciledAt>10000||s.reconciledAt>now)throw Error('FRESH_RECONCILIATION_REQUIRED');
     if(Object.values(s.orders).some(o=>working(o))||Object.values(s.trades).some(t=>!t.closedAt))throw Error('FLAT_ACCOUNT_REQUIRED');
     s.killed=false;s.haltReason=null;s.armed=true;s.armedDay=day(now);
+  } else if(operation==='ACK_HALT'){
+    if(s.broker!=='PAPER'||s.armed||!s.killed||s.haltReason!=='SANDBOX_SERVICE_UNAVAILABLE')throw Error('HALT_ACK_NOT_ALLOWED');
+    if(!s.reconciledAt||now-s.reconciledAt>10000||s.reconciledAt>now)throw Error('FRESH_RECONCILIATION_REQUIRED');
+    if(Object.values(s.orders).some(working)||Object.values(s.trades).some(t=>!t.closedAt))throw Error('FLAT_ACCOUNT_REQUIRED');
+    if(Object.keys(s.commands).length>=1000)throw Error('COMMAND_LIMIT');
+    s.haltReason=null; // acknowledge old generic halt without arming or clearing any risk lock
   } else throw Error('INVALID_CONTROL');
   if(Object.keys(s.commands).length<1000)s.commands[requestId]=operation;
 }
@@ -170,7 +177,7 @@ function recover(s,bootId){
   }
   for(const t of Object.values(s.trades))if(!t.closedAt)t.exitReason='RESTART';
 }
-function planEntry(s,result,quote,meta,now,guardian=null){
+function planEntry(s,result,quote,meta,now,guardian=null,exitPolicy=exitIq.BASELINE){
   assertState(s);
   if(!s.armed||s.killed||s.haltReason||s.armedDay!==day(now))return 'DISARMED';
   if(!s.reconciledAt||now-s.reconciledAt>10000||s.reconciledAt>now)return 'RECONCILIATION_STALE';
@@ -189,9 +196,12 @@ function planEntry(s,result,quote,meta,now,guardian=null){
   if((quote.ask-quote.bid)/quote.ask>0.025)return 'SPREAD_TOO_WIDE';
   if(pick.source==='AUTOPILOT_PAPER'&&(meta.lotSize!==pick.expectedLotSize||quote.ask>pick.maxAsk||!Number.isFinite(quote.exchangeAt)||quote.exchangeAt>now+1000||now-quote.exchangeAt>10000))return 'AUTOPILOT_QUOTE_OR_LOT_CHANGED';
   const tick=meta.tickSizeRupees,up=x=>money(Math.ceil((x-1e-8)/tick)*tick),down=x=>money(Math.floor((x+1e-8)/tick)*tick);
-  const price=up(quote.ask),{stop,target}=pick.exitPlan({price,bid:quote.bid,ask:quote.ask,tick,down});
+  const price=up(quote.ask),planned=pick.exitPlan({price,bid:quote.bid,ask:quote.ask,tick,down}),stop=planned.stop;
+  const auto=pick.source==='AUTOPILOT_PAPER';
+  if(auto&&!exitIq.POLICIES.includes(exitPolicy))return 'EXIT_IQ_POLICY_INVALID';
+  const target=auto&&exitPolicy==='CONVEX_RATCHET'?null:auto&&['STEP_LOCK','STEP_LOCK_STAGNATION'].includes(exitPolicy)?down(price+16):planned.target;
   const stopLimit=down(stop-Math.max(tick,stop*0.005));
-  if(!positive(stop)||!positive(target)||stop>=price||target<=price||!positive(stopLimit))return 'EXECUTABLE_EXIT_PLAN_REQUIRED';
+  if(!positive(stop)||stop>=price||(!(auto&&exitPolicy==='CONVEX_RATCHET'&&target===null)&&(!positive(target)||target<=price))||!positive(stopLimit))return 'EXECUTABLE_EXIT_PLAN_REQUIRED';
   const policy=s.policy,record=recordOnly(s),value=record?limitPnl:t=>t.netPnl;
   const closed=Object.values(s.trades).filter(t=>t.closedAt&&t.buys>0&&value(t)!==null);
   const pnlToday=closed.filter(t=>day(t.closedAt)===day(now)).reduce((a,t)=>a+value(t),0);
@@ -229,7 +239,7 @@ function planEntry(s,result,quote,meta,now,guardian=null){
   const t={id,day:day(now),createdAt:now,entryExpiresAt:Math.min(now+15000,pick.entryDeadline??Infinity),analysisAt:result.timestamp,
     instrumentKey:leg.instrumentKey,contractId:leg.contractId,strategy:pick.strategy,expiry:result.expiry,
     tier:pick.tier,entrySource:pick.source,expiryBucket:expiryBucket(result.expiry,day(now)),ruleVersion:pick.ruleVersion,riskModel:pick.riskModel,anchor:pick.anchor,...(pick.breakoutId?{breakoutId:pick.breakoutId}:{}),
-    tickSize:tick,quantity:meta.lotSize,stop,stopLimit,target,plannedRisk:risk,costReserve:policy.costReserve,
+    tickSize:tick,quantity:meta.lotSize,stop,stopLimit,target,...(auto?{exitIqPolicy:exitPolicy}:{}),plannedRisk:risk,costReserve:policy.costReserve,
     ...(record?{limitMode:'RECORD_ONLY',limitsWouldBlock:wouldBlock}:{}),
     exitReason:null,closedAt:null,netPnl:null,pnlBasis:'BROKER_FILLS_MINUS_ESTIMATED_FRICTION',buys:0};
   s.trades[id]=t;addOrder(s,t,'ENTRY',t.quantity,price);return 'QUEUED';
@@ -326,7 +336,8 @@ function manage(s,quotes,now){
         if(pnlToday+marked<=-s.policy.dailyLoss){t.exitReason ||= 'DAILY_LOSS';if(!s.lockedDays.includes(day(now)))s.lockedDays.push(day(now));}
       }
       if(quote.bid<=t.stop)t.exitReason ||= 'STOP_BREACHED';
-      if(quote.bid>=t.target)t.exitReason ||= 'TARGET';
+      if(positive(t.target)&&quote.bid>=t.target)t.exitReason ||= 'TARGET';
+      if(!t.exitReason&&s.broker==='PAPER'&&terminal(entry))t.exitReason ||= exitIq.evaluate(t,q,quote,now);
     }
     const stop=orders.find(o=>o.kind==='STOP');
     if(stop?.state==='REJECTED')t.exitReason ||= 'PROTECTIVE_STOP_REJECTED';

@@ -20,7 +20,8 @@
    el('position-basis').textContent=data.status?.broker==='PAPER'?'Paper fills: EDGE fills its own orders against live Upstox prices (buys at the ask, sells at the bid). No broker order is sent.':s.positionBasis==='SANDBOX_ORDER_BOOK_DERIVED'?'Exposure is derived from sandbox order fills; it is not independently confirmed by a positions API.':s.positionBasis==='BROKER_POSITIONS'?'Exposure is checked against broker positions.':'';
    const autoReady=data.status?.autopilotConfigured===true;
    el('autopilot-option').disabled=!autoReady;
-   el('autopilot-line').textContent=autoReady?'AUTOPILOT configuration enabled (paper only). Not a validated profitable strategy.':'AUTOPILOT configuration disabled; existing modes unchanged.';
+   el('ack-halt').disabled=!(s.killed&&!s.armed&&s.haltReason==='SANDBOX_SERVICE_UNAVAILABLE'&&!data.status?.reason&&orders.every(o=>['COMPLETE','CANCELLED','REJECTED','EXPIRED'].includes(o.state))&&trades.every(t=>t.closedAt));
+   el('autopilot-line').textContent=autoReady?'AUTOPILOT configuration enabled (paper only). Exit policy: '+data.status.autopilotExitPolicy+'. Not a validated profitable strategy.':'AUTOPILOT configuration disabled; existing modes unchanged.';
    el('arm').disabled=s.armed||(s.policy.entryMode==='AUTOPILOT_PAPER_V1'&&!autoReady);el('stop').disabled=false;
    const live=data.status,fresh=live.lastTickAt&&Date.now()-Date.parse(live.lastTickAt)<30000,at=v=>v?new Date(v).toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata'}):null;
    el('worker-line').textContent=live.lastTickAt?'Last successful check '+at(live.lastTickAt)+' IST'+(fresh?'':' (not recent)')+(live.lastErrorAt?' · last error '+at(live.lastErrorAt)+' IST':''):'No successful check since the server started'+(live.tickCount?' ('+live.tickCount+' attempts, none completed)':' (worker has not started a check)');
@@ -79,6 +80,6 @@
  for(const id of ['daily-goal','daily-loss'])el(id).addEventListener('input',updateRatio);
  el('save-policy').addEventListener('click',async()=>{el('save-policy').disabled=true;try{await request('/policy',{requestId:crypto.randomUUID(),confirmSandbox:true,dailyGoal:Number(el('daily-goal').value),dailyLoss:Number(el('daily-loss').value),perTradeRisk:Number(el('per-trade-risk').value),entryMode:el('entry-mode').value,maxConsecutiveLosses:Number(el('max-losses').value),limitMode:el('limit-mode').value,maxTradesPerDay:Number(el('max-trades').value)});policyLoaded=false;await refresh();message('Sandbox limits saved.');}catch(e){message(e.message);}});
  el('connect').addEventListener('click',async()=>{owner=el('owner').value.trim();el('owner').value='';if(!owner){message('Enter your owner code.');return;}await refresh();if(timer)clearInterval(timer);timer=setInterval(refresh,5000);});
- for(const name of ['arm','stop'])el(name).addEventListener('click',async()=>{el(name).disabled=true;try{await request('/'+name,{requestId:crypto.randomUUID(),confirmSandbox:true});await refresh();}catch(e){message(e.message);}});
+ for(const name of ['arm','stop','ack-halt'])el(name).addEventListener('click',async()=>{el(name).disabled=true;try{await request('/'+name,{requestId:crypto.randomUUID(),confirmSandbox:true});await refresh();}catch(e){message(e.message);}});
  request('/status').then(s=>message(s.configured?'Ready to connect.':'Sandbox connection needs setup: '+human(s.reason))).catch(()=>message('Connection unavailable.'));
 })();

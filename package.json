@@ -41,7 +41,7 @@
     "test:shadow-timing": "node src/engine/shadowTiming.test.js && node src/engine/shadowTimingV3.test.js",
     "test:shadow-events": "node src/evidence/shadowEvents.test.js",
     "test:signal-recording": "node src/evidence/signalRecording.test.js",
-    "test:upstox-sandbox": "node src/execution/upstoxSandbox.test.js && node src/execution/catalogQuotes.test.js && node src/execution/sandboxEngine.test.js && node src/execution/sandboxStore.test.js && node src/execution/sandboxService.test.js && node src/execution/sandboxPolicy.test.js && node src/execution/sandboxShadowEntry.test.js && node src/execution/sandboxShadowV3.test.js && node src/execution/claudeDecides.test.js && node src/execution/sandboxSafety.test.js && node src/execution/sandboxReadTolerance.test.js && node src/execution/sandboxRecordOnly.test.js && node src/execution/paperBroker.test.js && node src/execution/monthlyRiskCore.test.js && node src/execution/guardianObservation.test.js && node src/execution/guardianEnforcement.test.js && node src/execution/autopilot.test.js",
+    "test:upstox-sandbox": "node src/execution/upstoxSandbox.test.js && node src/execution/catalogQuotes.test.js && node src/execution/sandboxEngine.test.js && node src/execution/sandboxStore.test.js && node src/execution/sandboxService.test.js && node src/execution/sandboxPolicy.test.js && node src/execution/sandboxShadowEntry.test.js && node src/execution/sandboxShadowV3.test.js && node src/execution/claudeDecides.test.js && node src/execution/sandboxSafety.test.js && node src/execution/sandboxReadTolerance.test.js && node src/execution/sandboxRecordOnly.test.js && node src/execution/paperBroker.test.js && node src/execution/monthlyRiskCore.test.js && node src/execution/guardianObservation.test.js && node src/execution/guardianEnforcement.test.js && node src/execution/autopilot.test.js && node src/execution/exitIqPaper.test.js",
     "replay:shadow-timing": "node scripts/replay-shadow-timing.js",
     "check:sandbox-connection": "node scripts/check-sandbox-connection.js",
     "test:opportunities": "node src/research/opportunityReport.test.js && node src/research/opportunitySource.test.js && node src/research/opportunityService.test.js && node src/research/quickExit.test.js && node src/engine/singleStrikePolicy.test.js && node src/research/triggeredExitV2.test.js && node src/research/timingLab.test.js && node src/research/edgeBrain.test.js && node src/research/exitIq.test.js && node src/research/impulseReaper.test.js",
@@ -50,11 +50,15 @@
     "test:edge-brain": "node src/research/edgeBrain.test.js",
     "test:exit-iq": "node src/research/exitIq.test.js",
     "test:impulse-reaper": "node src/research/impulseReaper.test.js",
-    "test:autopilot": "node src/execution/autopilot.test.js"
+    "test:autopilot": "node src/execution/autopilot.test.js",
+    "test:exit-iq-paper": "node src/execution/exitIqPaper.test.js"
   },
   "dependencies": {
     "express": "^4.18.0",
     "pg": "^8.13.1",
     "web-push": "^3.6.7"
+  },
+  "overrides": {
+    "qs": "6.16.2"
   }
 }

@@ -3,6 +3,7 @@ const {randomUUID}=require('node:crypto');
 const {readFileSync}=require('node:fs');
 const path=require('node:path');
 const engine=require('./sandboxEngine');
+const exitIq=require('./exitIqPaper');
 const {observeGuardian}=require('./guardianObservation');
 const {evaluateGuardian,applyGuardian,freshGuardian}=require('./guardianEnforcement');
 const {createSandboxStore}=require('./sandboxStore');
@@ -17,11 +18,13 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
   const enabled=env.EDGE_SANDBOX_EXECUTION_ENABLED==='true';
   const monthlyEnabled=env.EDGE_MONTHLY_GUARDIAN_ENABLED==='true';
   const autopilotEnabled=env.EDGE_AUTOPILOT_PAPER_ENABLED==='true';
+  const exitPolicy=env.EDGE_AUTOPILOT_EXIT_POLICY||exitIq.BASELINE;
+  const exitPolicyValid=exitIq.POLICIES.includes(exitPolicy);
   const tokenValid=t=>typeof t==='string'&&!!t.trim()&&!/[\r\n]/.test(t);
   // PAPER (default): EDGE fills its own orders against live quotes. UPSTOX_SANDBOX only simulates order responses
   // and never fills, so it is kept only as an explicit opt-in for testing the order API itself.
   const brokerKind=env.EDGE_SANDBOX_BROKER==='UPSTOX_SANDBOX'?'UPSTOX_SANDBOX':'PAPER';
-  const autopilotConfigured=autopilotEnabled&&monthlyEnabled&&brokerKind==='PAPER'&&env.EDGE_TIMING_LAB_ENABLED==='true'&&env.EDGE_IMPULSE_REAPER_ENABLED==='true';
+  const autopilotConfigured=exitPolicyValid&&autopilotEnabled&&monthlyEnabled&&brokerKind==='PAPER'&&env.EDGE_TIMING_LAB_ENABLED==='true'&&env.EDGE_IMPULSE_REAPER_ENABLED==='true';
   const reason=!enabled?'DISABLED':!ownerToken?'OWNER_AUTH_REQUIRED':!pool&&!dependencies.store?'DATABASE_REQUIRED':
     brokerKind==='UPSTOX_SANDBOX'&&!tokenValid(env.EDGE_UPSTOX_SANDBOX_TOKEN)&&!dependencies.broker?'SANDBOX_TOKEN_REQUIRED':
     !tokenValid(env.UPSTOX_ACCESS_TOKEN)&&!dependencies.quotes?'MARKET_DATA_TOKEN_REQUIRED':null;
@@ -69,7 +72,7 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
   const flat=s=>!Object.values(s.orders||{}).some(o=>!engine.terminal(o))&&!Object.values(s.trades||{}).some(t=>!t.closedAt);
   const publicStatus=()=>({version:'EDGE_SANDBOX_EXECUTION_V1',enabled,mode:'SANDBOX',broker:brokerKind,fillModel:brokerKind==='PAPER'?FILL_MODEL:'UPSTOX_SANDBOX_SIMULATED_RESPONSES',liveOrdersSupported:false,
     liveDecisionImpact:false,configured:!reason,reason:lastError,lastTickAt,lastEntryResult,brokerReads,positionBasis,tickCount,lastTickStartedAt,lastErrorAt,
-    readFailingSince:iso(readFailingSince),lastReadFailure,lastFailureDiagnostic,readGraceSeconds:readGraceMs/1000,advisorConfigured:!!advisor,monthlyGuardianEnabled:monthlyEnabled,autopilotConfigured});
+    readFailingSince:iso(readFailingSince),lastReadFailure,lastFailureDiagnostic,readGraceSeconds:readGraceMs/1000,advisorConfigured:!!advisor,monthlyGuardianEnabled:monthlyEnabled,autopilotConfigured,autopilotExitPolicy:exitPolicyValid?exitPolicy:null});
   const clean=e=>/^[A-Z_]{3,80}$/.test(e?.message||'')?e.message:'SANDBOX_SERVICE_UNAVAILABLE';
   const human=x=>String(x||'').toLowerCase().replaceAll('_',' ');
   const send=(key,text)=>{try{notify(key,text);}catch(_){}};
@@ -166,7 +169,7 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
         engine.manage(s,view.quotes||{},now());
         const planKey=engine.selectCandidate(s.policy,view.analysis,now()).leg?.instrumentKey||view.analysis?.decision?.tradeLegs?.buyLeg?.instrumentKey;
         const previousEntryResult=lastEntryResult;
-        lastEntryResult=engine.planEntry(s,view.analysis,view.quotes?.[planKey],meta,now(),guardian);
+        lastEntryResult=engine.planEntry(s,view.analysis,view.quotes?.[planKey],meta,now(),guardian,exitPolicy);
         if(lastEntryResult==='LOSING_STREAK_LOCK'&&previousEntryResult!=='LOSING_STREAK_LOCK')send('STREAK:'+engine.day(now()),'EDGE sandbox paused for today: '+(s.policy.maxConsecutiveLosses||2)+' losing trades in a row.');
         const pending=Object.values(s.orders).find(o=>o.kind==='ENTRY'&&o.state==='QUEUED');
         return engine.claim(s,now(),(!monthlyEnabled||guardian?.ok&&freshGuardian(s,now()))&&(!pending||currentAllowed(pending,{...context(),quotes},now(),s.policy)));
@@ -302,17 +305,18 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
       const updated=await store.mutate(s=>engine.configurePolicy(s,req.body||{},now()));
       const p=updated.state.policy;res.json({mode:'SANDBOX',policy:p,dailyLossGoalRatio:p.dailyLoss/(p.dailyGoal||1000),liveOrdersSupported:false});
     }));
-    for(const [path,operation] of [['arm','ARM'],['stop','STOP']])app.post(base+'/'+path,guard(async(req,res)=>{
+    for(const [path,operation] of [['arm','ARM'],['stop','STOP'],['ack-halt','ACK_HALT']])app.post(base+'/'+path,guard(async(req,res)=>{
       if(req.body?.confirmSandbox!==true)return res.status(400).json({error:'SANDBOX_CONFIRMATION_REQUIRED'});
       const updated=await store.mutate((s,archived)=>{
         if(operation==='ARM'&&s.policy.entryMode==='AUTOPILOT_PAPER_V1'&&!autopilotConfigured)throw Error('AUTOPILOT_CONFIGURATION_REQUIRED');
-        if(monthlyEnabled&&operation==='ARM'){
+        if(operation==='ACK_HALT'&&(lastError||!lastTickAt||now()-Date.parse(lastTickAt)>10000))throw Error('FRESH_WORKER_CHECK_REQUIRED');
+        if(monthlyEnabled&&['ARM','ACK_HALT'].includes(operation)){
           const guardian=evaluateGuardian({state:s,archived,quotes:{},now:now(),quantities:engine.quantities});
           if(!guardian.ok)throw Error(guardian.reason);
           applyGuardian(s,guardian);
         }
         return engine.control(s,operation,req.body.requestId,now());
-      },{guardianSnapshot:monthlyEnabled&&operation==='ARM'});
+      },{guardianSnapshot:monthlyEnabled&&['ARM','ACK_HALT'].includes(operation)});
       res.json({mode:'SANDBOX',armed:updated.state.armed,killed:updated.state.killed,liveOrdersSupported:false});
     }));
   }
