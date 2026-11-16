@@ -207,7 +207,7 @@ function createOpportunityResearch({pool,store,ownerToken,token,enabled=true,dep
       fetches++;
       candles.set(contractDay,await fetchCandles(q,{timestamp:event.confirmedAt,expiry:q.expiry}).catch(()=>null));
      }
-     const rows=candles.get(contractDay),outcome=rows?measureEvent({entry:q,candles:rows}):
+     const rows=candles.get(contractDay),outcome=rows?measureEvent({entry:q,candles:rows,now:now()}):
       {status:'UNAVAILABLE',version:LAB_VERSION,reason:'CANDLE_FETCH_UNAVAILABLE'};
      const attempt=prior.length+1,terminal=outcome.status==='MEASURED'||
       ['EXECUTABLE_ENTRY_QUOTE_MISSING','ENTRY_TIME_MISSING'].includes(outcome.reason)||attempt>=3;
