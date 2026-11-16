@@ -60,13 +60,17 @@ function createIndependentStrategies(){
   const today=day(now);
   if(session!==today){session=today;pending.clear();emitted.clear();}
   if(!ready||!Number.isFinite(fetchedAt)||fetchedAt>now||now-fetchedAt>90000){pending.clear();return [];}
-  const candidates=detect(rows,now,today),next=new Map(),out=[];
-  const latest=rows.at(-1);
+  // A cached fetch can contain its then-incomplete last candle. Only use bars
+  // already settled at the provider-read timestamp, not at this later poll.
+  const settled=rows.filter(r=>r.t+MIN<=fetchedAt-SETTLE);
+  if(!settled.length||now-(settled.at(-1).t+MIN)>3*MIN){pending.clear();return [];}
+  const candidates=detect(settled,now,today),next=new Map(),out=[];
+  const latest=settled.at(-1);
   for(const c of candidates){
    // A setup does not remain eligible if its price has invalidated or chased beyond the original level.
    const distance=c.direction==='UP'?latest.c-c.level:c.level-latest.c;
    if(!(distance>0&&distance<=2*c.scale))continue;
-   const intervening=rows.filter(r=>r.t>=c.closedAt);
+   const intervening=settled.filter(r=>r.t>=c.closedAt);
    if(intervening.some(r=>c.direction==='UP'?r.c<=c.level:r.c>=c.level))continue;
    // Stable identity across revisions and process restart; exact entire causal window must match.
    const id=hash([VERSION,today,c.family,c.direction,c.closedAt]);
