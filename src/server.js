@@ -1434,6 +1434,7 @@ server.listen(PORT, async () => {
     sandboxConfigured:sandboxStartup.configured===true,
     monthlyGuardian:sandboxStartup.monthlyGuardianEnabled===true,
     autopilot:sandboxStartup.autopilotConfigured===true,
+    autopilotExitPolicy:sandboxStartup.autopilotExitPolicy,
     broker:sandboxStartup.broker,
     liveOrdersSupported:false
   }));
