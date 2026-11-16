@@ -6,6 +6,7 @@ const {summarizeBroker}=require('../trading/kiteTradebook');
 const {buildQuickExitReport,PRIMARY:QUICK_PRIMARY}=require('./quickExit');
 const {buildTriggeredExitReport}=require('./triggeredExitV2');
 const {buildTimingLabReport}=require('./timingLab');
+const {buildBrainReport}=require('./edgeBrain');
 const VERSION='OPPORTUNITY_REPORT_V1', GAP_MS=90000, HORIZON=60;
 const hash=x=>createHash('sha256').update(JSON.stringify(x)).digest('hex');
 const ms=x=>typeof x==='string'?Date.parse(x):NaN;
@@ -239,6 +240,7 @@ function buildOpportunityReport({records=[],ledger={},snapshots=[],now=Date.now(
    quickExit:p?{rule:QUICK_PRIMARY,exit:p.exit,minutes:p.minutes,estimatedNetRupees:p.estimatedNetRupees}:{status:q.status,reason:q.reason||p?.reason||null}};}),
   triggeredExitV2:buildTriggeredExitReport(triggeredRows),
   timingLab:buildTimingLabReport(labEvents,labOutcomes,v3ForLab),
+  edgeBrain:buildBrainReport(labEvents,labOutcomes,now),
   quickExit:buildQuickExitReport(results.filter(e=>e.marketPhase==='OPEN'&&['LONG_CALL','LONG_PUT'].includes(e.candidate.strategy)&&!e.candidate.legs?.sellLeg).map(e=>{const q=quickFor(e);
    return {tier:e.tier,strategy:e.candidate.strategy,expiry:e.candidate.expiry,session:day(ms(e.at)),at:e.at,status:q.status,reason:q.reason,results:q.results};})),
   gateChangeQueue:gateChanges,reportFingerprint:hash([VERSION,records.map(r=>r.id),fills.map(f=>f.key),snapshots.map(s=>s.id)])};
