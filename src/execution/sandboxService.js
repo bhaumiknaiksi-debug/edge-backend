@@ -46,10 +46,25 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
   const positionsRetryMs=Number.isFinite(dependencies.positionsRetryMs)?dependencies.positionsRetryMs:300000;
   let readFailingSince=null,lastReadFailure=null,lastCompletedAt=null,positionsMissingUntil=0;
   const iso=t=>t===null?null:new Date(t).toISOString();
+  // Keep the last failure visible after recovery, without exposing exception messages, tokens or payloads.
+  let lastFailureDiagnostic=null, failureFingerprint=null;
+  const safeErrorTypes=new Set(['Error','TypeError','ReferenceError','RangeError','SyntaxError','AbortError','TimeoutError','AggregateError','DatabaseError']);
+  const safeErrorCodes=new Set(['ECONNRESET','ECONNREFUSED','ETIMEDOUT','EPIPE','ENOTFOUND','EAI_AGAIN','57P01','57P02','57P03','08003','08006','40001','40P01','53300','23505','23514','42P01','42703']);
+  function recordTickFailure(e,stage,at){
+    const diagnostic={at:iso(at),stage,reason:lastError,
+      errorType:safeErrorTypes.has(e?.name)?e.name:'UNKNOWN',
+      errorCode:safeErrorCodes.has(e?.code)?e.code:null};
+    lastFailureDiagnostic=diagnostic;
+    const fingerprint=JSON.stringify([stage,lastError,diagnostic.errorType,diagnostic.errorCode]);
+    if(fingerprint!==failureFingerprint){
+      failureFingerprint=fingerprint;
+      try{console.warn('[sandbox tick failure]',JSON.stringify(diagnostic));}catch(_){}
+    }
+  }
   const flat=s=>!Object.values(s.orders||{}).some(o=>!engine.terminal(o))&&!Object.values(s.trades||{}).some(t=>!t.closedAt);
   const publicStatus=()=>({version:'EDGE_SANDBOX_EXECUTION_V1',enabled,mode:'SANDBOX',broker:brokerKind,fillModel:brokerKind==='PAPER'?FILL_MODEL:'UPSTOX_SANDBOX_SIMULATED_RESPONSES',liveOrdersSupported:false,
     liveDecisionImpact:false,configured:!reason,reason:lastError,lastTickAt,lastEntryResult,brokerReads,positionBasis,tickCount,lastTickStartedAt,lastErrorAt,
-    readFailingSince:iso(readFailingSince),lastReadFailure,readGraceSeconds:readGraceMs/1000,advisorConfigured:!!advisor});
+    readFailingSince:iso(readFailingSince),lastReadFailure,lastFailureDiagnostic,readGraceSeconds:readGraceMs/1000,advisorConfigured:!!advisor});
   const clean=e=>/^[A-Z_]{3,80}$/.test(e?.message||'')?e.message:'SANDBOX_SERVICE_UNAVAILABLE';
   const human=x=>String(x||'').toLowerCase().replaceAll('_',' ');
   const send=(key,text)=>{try{notify(key,text);}catch(_){}};
@@ -91,22 +106,26 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
   }
   async function tick(){
     if(reason||running||stopped)return publicStatus();running=true;tickCount++;lastTickStartedAt=new Date(now()).toISOString();
+    let stage='IDLE_STATE_READ';
     try{
       if(idleTickMs>0&&lastCompletedAt!==null&&now()-lastCompletedAt<idleTickMs){
         const idle=await store.read().catch(()=>null);
         if(idle&&!idle.armed&&flat(idle))return publicStatus();
       }
+      stage='ACQUIRE_LEASE';
       const time=now();
       const lease=await store.mutate(s=>{
         if(s.lease&&s.lease.owner!==bootId&&s.lease.until>time)return false;
         engine.recover(s,bootId);engine.adoptBroker(s,brokerKind,time);s.lease={owner:bootId,until:time+30000};return true;
       });
       if(!lease.result){lastError='ANOTHER_WORKER_ACTIVE';return publicStatus();}
+      stage='SELECT_CANDIDATE';
       const analysis=context().analysis,selected=engine.selectCandidate(lease.state.policy,analysis,time);
       const instrumentKey=selected.leg?.instrumentKey||analysis?.decision?.tradeLegs?.buyLeg?.instrumentKey;
       const keys=Object.values(lease.state.trades).filter(t=>!t.closedAt).map(t=>t.instrumentKey);
       if(instrumentKey)keys.push(instrumentKey);
       let readAt;
+      stage='READ_BROKER_AND_MARKET';
       const [brokerState,quotes,meta]=await Promise.all([
         (()=>{
           const skipPositions=now()<positionsMissingUntil;
@@ -131,6 +150,7 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
       if(stopped)return publicStatus();
       lastQuotes=quotes||{};
       const view={...context(),quotes};
+      stage='RECONCILE_AND_PLAN';
       const prepared=await store.mutate(s=>{
         if(s.lease?.owner!==bootId||s.lease.until<=now())return null;
         engine.reconcile(s,book,positions,readAt,{positionBasis:positions===null?'SANDBOX_ORDER_BOOK_DERIVED':'BROKER_POSITIONS'});
@@ -144,10 +164,12 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
         const pending=Object.values(s.orders).find(o=>o.kind==='ENTRY'&&o.state==='QUEUED');
         return engine.claim(s,now(),!pending||currentAllowed(pending,{...context(),quotes},now(),s.policy));
       });
+      stage='STATE_NOTIFICATION';
       positionBasis=prepared.state.positionBasis;watch(prepared.state);
       const action=prepared.result;
       if(action){
         if(action.action==='PLACE'&&action.order.kind==='ENTRY'){
+          stage='REVALIDATE_ENTRY';
           const allowed=await store.mutate(s=>{
             if(s.killed||!s.armed||stopped||s.lease?.owner!==bootId||!currentAllowed(action.order,{...context(),quotes},now(),s.policy)){
               s.orders[action.order.id].state='EXPIRED';return false;
@@ -156,13 +178,16 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
           if(!allowed.result)return publicStatus();
         }
         // No network request runs inside a DB transaction. Persistent SUBMITTING prevents duplicate claims.
+        stage='BROKER_ACTION';
         const result=action.action==='CANCEL'?await broker.cancel(action.order.orderId):await broker.placeOrder(action.order);
+        stage='PERSIST_BROKER_RESULT';
         await store.mutate(s=>{if(s.lease?.owner===bootId)engine.finish(s,action,result);});
       }
-      lastError=null;lastTickAt=new Date(now()).toISOString();lastCompletedAt=now();
+      lastError=null;failureFingerprint=null;lastTickAt=new Date(now()).toISOString();lastCompletedAt=now();
     }catch(e){
       const failedAt=now();
       lastError=clean(e);lastErrorAt=new Date(failedAt).toISOString();lastCompletedAt=null;
+      recordTickFailure(e,stage,failedAt);
       const transientRead=lastError==='SANDBOX_READ_UNAVAILABLE'&&!e?.auth;
       if(transientRead&&readFailingSince===null)readFailingSince=failedAt;
       const withinGrace=transientRead&&failedAt-readFailingSince<readGraceMs;
