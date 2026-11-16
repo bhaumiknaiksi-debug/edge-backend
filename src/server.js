@@ -1429,6 +1429,7 @@ server.listen(PORT, async () => {
     opportunityReports:researchStartup.enabled===true,
     triggeredExitV2:researchStartup.triggeredExitV2?.enabled===true,
     timingLab:researchStartup.timingLab?.enabled===true,
+    impulseReaper:researchStartup.timingLab?.independentEnabled===true,
     sandboxEnabled:sandboxStartup.enabled===true,
     sandboxConfigured:sandboxStartup.configured===true,
     monthlyGuardian:sandboxStartup.monthlyGuardianEnabled===true,
