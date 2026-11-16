@@ -51,11 +51,11 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
   const safeErrorTypes=new Set(['Error','TypeError','ReferenceError','RangeError','SyntaxError','AbortError','TimeoutError','AggregateError','DatabaseError']);
   const safeErrorCodes=new Set(['ECONNRESET','ECONNREFUSED','ETIMEDOUT','EPIPE','ENOTFOUND','EAI_AGAIN','57P01','57P02','57P03','08003','08006','40001','40P01','53300','23505','23514','42P01','42703']);
   function recordTickFailure(e,stage,at){
-    const diagnostic={at:iso(at),stage,reason:lastError,
+    const diagnostic={at:iso(at),stage,
       errorType:safeErrorTypes.has(e?.name)?e.name:'UNKNOWN',
       errorCode:safeErrorCodes.has(e?.code)?e.code:null};
     lastFailureDiagnostic=diagnostic;
-    const fingerprint=JSON.stringify([stage,lastError,diagnostic.errorType,diagnostic.errorCode]);
+    const fingerprint=JSON.stringify([stage,diagnostic.errorType,diagnostic.errorCode]);
     if(fingerprint!==failureFingerprint){
       failureFingerprint=fingerprint;
       try{console.warn('[sandbox tick failure]',JSON.stringify(diagnostic));}catch(_){}
@@ -149,8 +149,8 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
       const [book,positions]=brokerState;
       if(stopped)return publicStatus();
       lastQuotes=quotes||{};
-      const view={...context(),quotes};
       stage='RECONCILE_AND_PLAN';
+      const view={...context(),quotes};
       const prepared=await store.mutate(s=>{
         if(s.lease?.owner!==bootId||s.lease.until<=now())return null;
         engine.reconcile(s,book,positions,readAt,{positionBasis:positions===null?'SANDBOX_ORDER_BOOK_DERIVED':'BROKER_POSITIONS'});
@@ -187,7 +187,7 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
     }catch(e){
       const failedAt=now();
       lastError=clean(e);lastErrorAt=new Date(failedAt).toISOString();lastCompletedAt=null;
-      recordTickFailure(e,stage,failedAt);
+      try{recordTickFailure(e,stage,failedAt);}catch(_){} // diagnostics must never interrupt the existing halt path
       const transientRead=lastError==='SANDBOX_READ_UNAVAILABLE'&&!e?.auth;
       if(transientRead&&readFailingSince===null)readFailingSince=failedAt;
       const withinGrace=transientRead&&failedAt-readFailingSince<readGraceMs;
