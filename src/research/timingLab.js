@@ -5,6 +5,7 @@
 const {createHash}=require('node:crypto');
 const {RULES,PRIMARY,normalize}=require('./quickExit');
 const {evaluateRule}=require('./triggeredExitV2');
+const {measureTournament}=require('./exitIq');
 const VERSION='TIMING_LAB_V1', IST=19800000, MIN=60000, FIVE=5*MIN, THREE=3*MIN;
 const DAYSTART='T09:15:00+05:30';
 const SETTLE_MS=30000, CONFIRM_MS=60000, RECENT_MS=5*MIN;
@@ -142,7 +143,7 @@ function candidateQuotes(analysis,direction,observedAt,lotSize){
    observedAt:time(observedAt),executionAllowed:false}];
  });
 }
-function measureEvent({entry,candles}){
+function measureEvent({entry,candles,now=Date.now()}){
  if(!entry||!valid(entry.ask)||entry.ask<=0||!Number.isSafeInteger(entry.lotSize)||entry.lotSize<=0)
   return {status:'UNAVAILABLE',reason:'EXECUTABLE_ENTRY_QUOTE_MISSING'};
  const t=Date.parse(entry.observedAt||'');
@@ -154,7 +155,7 @@ function measureEvent({entry,candles}){
  })]));
  const main=results[PRIMARY];
  return main.status==='MEASURED'?{status:'MEASURED',version:VERSION,
-  entry:{...entry,firstCandleAt:time(firstCandleMs)},results}:
+  entry:{...entry,firstCandleAt:time(firstCandleMs)},results,exitIq:measureTournament({entry,candles,now})}:
   {status:'UNAVAILABLE',reason:main.reason,version:VERSION};
 }
 function stats(rows){
