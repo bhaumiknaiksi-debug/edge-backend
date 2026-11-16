@@ -68,7 +68,7 @@ function setup(shared){
  try{
   failContext=true;await service.tick();diagnostic.advance();await service.tick();
   const status=service.status(),state=await diagnostic.store.read();
-  assert.equal(status.reason,'SANDBOX_SERVICE_UNAVAILABLE');assert.equal(state.armed,false);assert.equal(state.killed,true);
+  assert.equal(status.reason,'SANDBOX_SERVICE_UNAVAILABLE');assert.equal(state.armed,false);assert.equal(state.haltReason,'SANDBOX_SERVICE_UNAVAILABLE');
   assert.deepEqual(status.lastFailureDiagnostic,{at:new Date(diagnostic.time()).toISOString(),stage:'SELECT_CANDIDATE',errorType:'TypeError',errorCode:'ETIMEDOUT'});
   assert.equal(warnings.filter(x=>x.includes('[sandbox tick failure]')).length,1,'identical recurring errors do not flood logs');
   assert.ok(!JSON.stringify(status).includes('private-token'));assert.ok(!warnings.join(' ').includes('private-token'));
