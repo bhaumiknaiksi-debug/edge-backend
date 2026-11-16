@@ -16,10 +16,12 @@ const {rejectOwner}=require('../health/authThrottle');
 function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.env,dependencies={},notify=()=>{}}){
   const enabled=env.EDGE_SANDBOX_EXECUTION_ENABLED==='true';
   const monthlyEnabled=env.EDGE_MONTHLY_GUARDIAN_ENABLED==='true';
+  const autopilotEnabled=env.EDGE_AUTOPILOT_PAPER_ENABLED==='true';
   const tokenValid=t=>typeof t==='string'&&!!t.trim()&&!/[\r\n]/.test(t);
   // PAPER (default): EDGE fills its own orders against live quotes. UPSTOX_SANDBOX only simulates order responses
   // and never fills, so it is kept only as an explicit opt-in for testing the order API itself.
   const brokerKind=env.EDGE_SANDBOX_BROKER==='UPSTOX_SANDBOX'?'UPSTOX_SANDBOX':'PAPER';
+  const autopilotConfigured=autopilotEnabled&&monthlyEnabled&&brokerKind==='PAPER'&&env.EDGE_TIMING_LAB_ENABLED==='true'&&env.EDGE_IMPULSE_REAPER_ENABLED==='true';
   const reason=!enabled?'DISABLED':!ownerToken?'OWNER_AUTH_REQUIRED':!pool&&!dependencies.store?'DATABASE_REQUIRED':
     brokerKind==='UPSTOX_SANDBOX'&&!tokenValid(env.EDGE_UPSTOX_SANDBOX_TOKEN)&&!dependencies.broker?'SANDBOX_TOKEN_REQUIRED':
     !tokenValid(env.UPSTOX_ACCESS_TOKEN)&&!dependencies.quotes?'MARKET_DATA_TOKEN_REQUIRED':null;
@@ -36,7 +38,7 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
   const advisorStatus={lastDecisionAt:null,lastAction:null,lastTier:null,lastConfidence:null,lastReason:null,lastError:advisorConfigError,calls:0};
   const adviceFresh=time=>!!advice&&time-Date.parse(advice.decidedAt)<=90000&&time>=Date.parse(advice.decidedAt)-60000;
   // The analysis the executor sees, with the latest model decision attached alongside (never inside) EDGE's decision.
-  const context=()=>{const c=getContext()||{};return advice&&c.analysis?{...c,analysis:{...c.analysis,claudeDecision:advice}}:c;};
+  const context=()=>{const c=getContext()||{};return c.analysis?{...c,analysis:{...c.analysis,claudeDecision:advice,autopilotBatch:autopilotConfigured?c.autopilotBatch:null}}:c;};
   let running=false,stopped=false,timer=null,lastError=reason,lastTickAt=null,lastEntryResult=null,brokerReads=null,positionBasis=null,tickCount=0,lastTickStartedAt=null,lastErrorAt=null;
   // A failed broker read while flat (no open trade, no working order) carries no exposure: entries pause
   // (reconciliation goes stale) and reads are retried for READ_GRACE_MS before halting. Auth failures and any
@@ -67,7 +69,7 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
   const flat=s=>!Object.values(s.orders||{}).some(o=>!engine.terminal(o))&&!Object.values(s.trades||{}).some(t=>!t.closedAt);
   const publicStatus=()=>({version:'EDGE_SANDBOX_EXECUTION_V1',enabled,mode:'SANDBOX',broker:brokerKind,fillModel:brokerKind==='PAPER'?FILL_MODEL:'UPSTOX_SANDBOX_SIMULATED_RESPONSES',liveOrdersSupported:false,
     liveDecisionImpact:false,configured:!reason,reason:lastError,lastTickAt,lastEntryResult,brokerReads,positionBasis,tickCount,lastTickStartedAt,lastErrorAt,
-    readFailingSince:iso(readFailingSince),lastReadFailure,lastFailureDiagnostic,readGraceSeconds:readGraceMs/1000,advisorConfigured:!!advisor,monthlyGuardianEnabled:monthlyEnabled});
+    readFailingSince:iso(readFailingSince),lastReadFailure,lastFailureDiagnostic,readGraceSeconds:readGraceMs/1000,advisorConfigured:!!advisor,monthlyGuardianEnabled:monthlyEnabled,autopilotConfigured});
   const clean=e=>/^[A-Z_]{3,80}$/.test(e?.message||'')?e.message:'SANDBOX_SERVICE_UNAVAILABLE';
   const human=x=>String(x||'').toLowerCase().replaceAll('_',' ');
   const send=(key,text)=>{try{notify(key,text);}catch(_){}};
@@ -103,6 +105,7 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
     const r=context.analysis,t=Date.parse(r?.timestamp),q=context.quotes?.[order.instrumentKey];
     if(!(Number.isFinite(t)&&t<=time&&time-t<=60000&&r?.market?.phase==='OPEN'))return false;
     const pick=engine.selectCandidate(policy,r,time);
+    if(policy?.entryMode==='AUTOPILOT_PAPER_V1'&&(!autopilotConfigured||pick.identity!==order.autopilotEventId||q?.ask>pick.maxAsk||!Number.isFinite(q?.exchangeAt)||q.exchangeAt>time+1000||time-q.exchangeAt>10000||time>=order.entryDeadline))return false;
     return !pick.reason&&pick.strategy===order.strategy&&r.expiry===order.expiry&&
       pick.leg.instrumentKey===order.instrumentKey&&pick.leg.contractId===order.contractId&&
       !!q&&q.bid>0&&q.ask>=q.bid&&(q.ask-q.bid)/q.ask<=0.025&&q.receivedAt<=time&&time-q.receivedAt<=10000;
@@ -159,7 +162,7 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
         engine.reconcile(s,book,positions,readAt,{positionBasis:positions===null?'SANDBOX_ORDER_BOOK_DERIVED':'BROKER_POSITIONS'});
         const guardian=monthlyEnabled?applyGuardian(s,evaluateGuardian({state:s,archived,quotes:view.quotes||{},now:now(),quantities:engine.quantities})):null;
         engine.archiveClosed(s,now());
-        if(advice?.action==='EXIT'&&advice.tradeId&&adviceFresh(now()))engine.requestModelExit(s,advice.tradeId,now());
+        if(s.policy.entryMode==='CLAUDE_DECIDES_V1'&&advice?.action==='EXIT'&&advice.tradeId&&adviceFresh(now()))engine.requestModelExit(s,advice.tradeId,now());
         engine.manage(s,view.quotes||{},now());
         const planKey=engine.selectCandidate(s.policy,view.analysis,now()).leg?.instrumentKey||view.analysis?.decision?.tradeLegs?.buyLeg?.instrumentKey;
         const previousEntryResult=lastEntryResult;
@@ -302,6 +305,7 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
     for(const [path,operation] of [['arm','ARM'],['stop','STOP']])app.post(base+'/'+path,guard(async(req,res)=>{
       if(req.body?.confirmSandbox!==true)return res.status(400).json({error:'SANDBOX_CONFIRMATION_REQUIRED'});
       const updated=await store.mutate((s,archived)=>{
+        if(operation==='ARM'&&s.policy.entryMode==='AUTOPILOT_PAPER_V1'&&!autopilotConfigured)throw Error('AUTOPILOT_CONFIGURATION_REQUIRED');
         if(monthlyEnabled&&operation==='ARM'){
           const guardian=evaluateGuardian({state:s,archived,quotes:{},now:now(),quantities:engine.quantities});
           if(!guardian.ok)throw Error(guardian.reason);
