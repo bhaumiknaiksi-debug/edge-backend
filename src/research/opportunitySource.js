@@ -25,7 +25,7 @@ function projectRecord(r){
  if(r.candidates)out.candidates=r.candidates.map(c=>({...pick(c,['tier','strategy','expiry','lotSize','gateScope','gates','blockers','executionAllowed']),
   ...(c.triggerObservation?{triggerObservation:pick(c.triggerObservation,['timingRule','status','shadowEntryReady','breakoutId','crossedAt','entryWindowEndsAt','entryBlocker'])}:{}),
   legs:compactLegs(c.legs)}));
- if(r.outcome)out.outcome=['OPPORTUNITY_QUICK_EXIT','OPPORTUNITY_TRIGGER_EXIT_V2','OPPORTUNITY_TIMING_LAB_OUTCOME'].includes(r.recordType)?pick(r.outcome,['status','reason','version','entry','lotSize','results'])
+ if(r.outcome)out.outcome=['OPPORTUNITY_QUICK_EXIT','OPPORTUNITY_TRIGGER_EXIT_V2','OPPORTUNITY_TIMING_LAB_OUTCOME'].includes(r.recordType)?pick(r.outcome,['status','reason','version','entry','lotSize','results',...(r.recordType==='OPPORTUNITY_TIMING_LAB_OUTCOME'?['exitIq']:[])])
   :{...pick(r.outcome,['status','reason','entryLegMarks']),horizonLegMarks:r.outcome.horizonLegMarks?.[60]?{60:r.outcome.horizonLegMarks[60]}:{}};
  return out;
 }
