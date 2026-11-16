@@ -62,23 +62,25 @@ function createPaperBroker({pool,quotes,now=Date.now,book}={}){
   const storage=book||pgBook({pool});
   const visible=(o,today)=>o.day===today;
   const row=o=>{const {day:_d,filled_at:_f,fill_bid:_b,fill_ask:_a,...rest}=o;return rest;};
-  async function placeOrder({instrumentKey,quantity,price,side,tag,orderType='LIMIT',trigger=0}){
+  async function placeOrder({instrumentKey,quantity,price,side,tag,orderType='LIMIT',trigger=0,entryDeadline}){
     if(typeof instrumentKey!=='string'||!/^NSE_FO\|[A-Za-z0-9]+$/.test(instrumentKey)||
       !Number.isSafeInteger(quantity)||quantity<=0||quantity>100000||typeof price!=='number'||!Number.isFinite(price)||price<=0||
       !['BUY','SELL'].includes(side)||typeof tag!=='string'||!/^[A-Za-z0-9_-]{1,40}$/.test(tag)||
       !['LIMIT','SL'].includes(orderType)||(orderType==='SL'&&(side!=='SELL'||!Number.isFinite(trigger)||trigger<=price))||
       (orderType==='LIMIT'&&trigger!==0))throw Error('INVALID_SANDBOX_ORDER');
+    if(entryDeadline!==undefined&&(!Number.isSafeInteger(entryDeadline)||side!=='BUY'||now()>=entryDeadline))return {state:'REJECTED',reason:'PAPER_ENTRY_EXPIRED',tag};
     if(!inSession(now()))return {state:'REJECTED',reason:'PAPER_MARKET_CLOSED',tag};
     try{
       return await storage.mutate(b=>{
         // Re-checked inside the write: storage can be slow, and the session may have closed meanwhile.
         const time=now();
+        if(entryDeadline!==undefined&&time>=entryDeadline)return {state:'REJECTED',reason:'PAPER_ENTRY_EXPIRED',tag};
         if(!inSession(time))return {state:'REJECTED',reason:'PAPER_MARKET_CLOSED',tag};
         // A tag is unique per EDGE order; a retried placement returns the existing order instead of a duplicate.
         const existing=b.orders.find(o=>o.tag===tag&&o.day===day(time));
         if(existing)return {state:'ACKNOWLEDGED',orderId:existing.order_id,tag};
         const id=ID_PREFIX+randomUUID();
-        b.orders.push({order_id:id,day:day(time),placed_at:time,tag,instrument_token:instrumentKey,quantity,price,trigger_price:trigger,
+        b.orders.push({order_id:id,day:day(time),placed_at:time,...(entryDeadline!==undefined?{entryDeadline}:{}),tag,instrument_token:instrumentKey,quantity,price,trigger_price:trigger,
           transaction_type:side,product:'I',order_type:orderType,status:orderType==='SL'?'trigger pending':'open',filled_quantity:0,average_price:0});
         // Keep a week of history; older rows are never shown (the book rolls daily like a broker's).
         const cutoff=day(time-7*86400000);b.orders=b.orders.filter(o=>o.day>=cutoff);
@@ -109,11 +111,14 @@ function createPaperBroker({pool,quotes,now=Date.now,book}={}){
     const keys=[...new Set(snapshot)].slice(0,10);
     if(keys.length&&inSession(time))live=await quotes.get(keys).catch(()=>({}));
     try{
-      if(!Object.keys(live).length)return (await storage.read()).orders.filter(o=>visible(o,today)).map(row);
+      if(!Object.keys(live).length&&!keys.length)return (await storage.read()).orders.filter(o=>visible(o,today)).map(row);
       return await storage.mutate(b=>{
         // Re-checked inside the write: a slow quote read must not fill after the close or on another day.
         const at=now();if(day(at)!==today||!inSession(at))return b.orders.filter(o=>visible(o,today)).map(row);
-        for(const o of b.orders)if(visible(o,today)&&WORKING.includes(o.status))fill(o,live[o.instrument_token],at);
+        for(const o of b.orders)if(visible(o,today)&&WORKING.includes(o.status)){
+          if(o.transaction_type==='BUY'&&Number.isSafeInteger(o.entryDeadline)&&at>=o.entryDeadline)o.status='cancelled';
+          else fill(o,live[o.instrument_token],at);
+        }
         return b.orders.filter(o=>visible(o,today)).map(row);
       });
     }catch(_){const e=Error('SANDBOX_READ_UNAVAILABLE');e.httpStatus=null;throw e;}
