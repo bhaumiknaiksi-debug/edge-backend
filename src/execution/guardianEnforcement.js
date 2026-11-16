@@ -26,7 +26,7 @@ function evaluateGuardian({state:s,archived,quotes={},now,readLimit=20000,quanti
    if(!filled.every(o=>o.broker==='PAPER'&&typeof o.orderId==='string'&&o.orderId.startsWith('paper-'))){markAvailable=false;break;}
    const quote=quotes[t.instrumentKey];
    if(q.net>0&&(!quote||quote.instrumentKey!==t.instrumentKey||!Number.isFinite(quote.receivedAt)||
-    quote.receivedAt>now||now-quote.receivedAt>10000||!Number.isFinite(quote.bid)||quote.bid<=0||
+    quote.receivedAt>now||now-quote.receivedAt>10000||!Number.isFinite(quote.exchangeAt)||quote.exchangeAt>now+1000||now-quote.exchangeAt>10000||!Number.isFinite(quote.bid)||quote.bid<=0||
     !Number.isFinite(quote.ask)||quote.ask<quote.bid)){markAvailable=false;break;}
    marked+=q.proceeds-q.cost-t.costReserve+(q.net>0?q.net*quote.bid:0);
   }
@@ -46,6 +46,10 @@ function applyGuardian(s,result){
  if(!result.ok){
   s.armed=false;
   s.haltReason=s.haltReason||result.reason;
+  // Withdraw unfilled risk; never cancel a protective stop only because risk evidence is absent.
+  for(const o of Object.values(s.orders||{}))if(o.kind==='ENTRY'&&!['COMPLETE','CANCELLED','REJECTED','EXPIRED'].includes(o.state)){
+   if(o.state==='QUEUED')o.state='EXPIRED';else o.wantCancel=true;
+  }
   if(result.reason==='MONTHLY_LOSS_LOCK'){
    s.killed=true;
    for(const t of Object.values(s.trades))if(!t.closedAt)t.exitReason ||= 'MONTHLY_LOSS_LOCK';
