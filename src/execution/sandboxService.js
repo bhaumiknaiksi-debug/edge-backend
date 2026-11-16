@@ -279,6 +279,7 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
       res.json({...observeGuardian({...snapshot,now:now()}),
         enforcementConfigured:monthlyEnabled,
         persistedRiskState:snapshot.state.monthlyGuardian??null,
+        riskStateFresh:monthlyEnabled&&freshGuardian(snapshot.state,now()),
         // Realized-only observation is not itself proof of current mark or enforcement health.
         enforced:false});
     }));
