@@ -25,7 +25,7 @@ assert.equal(freshGuardian(s,now-1),false);
 const t={id:'open',instrumentKey:'NFO|1',closedAt:null,costReserve:100};
 s.trades[t.id]=t;
 s.orders.buy={tradeId:t.id,side:'BUY',filled:65,averagePrice:100,broker:'PAPER',orderId:'paper-buy'};
-const quote=(bid,at)=>({[t.instrumentKey]:{instrumentKey:t.instrumentKey,bid,ask:bid+.05,receivedAt:at}});
+const quote=(bid,at)=>({[t.instrumentKey]:{instrumentKey:t.instrumentKey,bid,ask:bid+.05,receivedAt:at,exchangeAt:at}});
 g=applyGuardian(s,evaluate(s,archived,now+1000,quote(93,now+1000)));
 assert.equal(g.reason,'MONTHLY_LOSS_LOCK');
 assert.equal(g.current.lockBasis,'MARKED');assert.equal(s.killed,true);assert.equal(s.armed,false);
@@ -38,6 +38,14 @@ let x=setup();x.s.trades[t.id]={...t,exitReason:null};x.s.orders.buy={...s.order
 g=applyGuardian(x.s,evaluate(x.s,x.archived,now,quote(93,now-10001)));
 assert.equal(g.reason,'MONTHLY_MARK_UNAVAILABLE');assert.equal(x.s.armed,false);
 assert.equal(x.s.killed,false,'missing quote does not force an unpriced exit');
+ // A recent receipt is not proof that the underlying exchange quote is recent.
+ const stale=quote(93,now);stale[t.instrumentKey].exchangeAt=now-10001;
+ assert.equal(evaluate(x.s,x.archived,now,stale).reason,'MONTHLY_MARK_UNAVAILABLE');
+ const pending={kind:'ENTRY',state:'OPEN'},queued={kind:'ENTRY',state:'QUEUED'},stop={kind:'STOP',state:'OPEN'};
+ Object.assign(x.s.orders,{pending,queued,stop});
+ applyGuardian(x.s,{ok:false,reason:'MONTHLY_EVIDENCE_UNAVAILABLE'});
+ assert.equal(pending.wantCancel,true);assert.equal(queued.state,'EXPIRED');
+ assert.equal(stop.wantCancel,undefined,'keep existing protective stop on evidence failure');
 assert.equal(evaluate(x.s,[]).reason,'MONTHLY_RISK_EVIDENCE_INVALID');
 assert.equal(evaluate({...x.s,broker:'UPSTOX_SANDBOX'},x.archived).reason,'MONTHLY_PAPER_ONLY');
 x=setup(-7000);g=applyGuardian(x.s,evaluate(x.s,x.archived));assert.equal(g.reason,'MONTHLY_LOSS_LOCK');
