@@ -145,6 +145,7 @@ function addOrder(s,t,kind,quantity,price,trigger=0){
   const o={id,tradeId:t.id,kind,tag:'edgesb_'+id.slice(0,30),instrumentKey:t.instrumentKey,contractId:t.contractId,strategy:t.strategy,expiry:t.expiry,quantity,
     side:kind==='ENTRY'?'BUY':'SELL',orderType:kind==='STOP'?'SL':'LIMIT',price,trigger,
     state:'QUEUED',orderId:null,filled:0,averagePrice:0,cancelState:null,submittedAt:null};
+  if(kind==='ENTRY'&&t.entrySource==='AUTOPILOT_PAPER')Object.assign(o,{autopilotEventId:t.breakoutId,entryDeadline:t.entryExpiresAt});
   s.orders[id]=o;return o;
 }
 function control(s,operation,requestId,now){
@@ -179,12 +180,14 @@ function planEntry(s,result,quote,meta,now,guardian=null){
   const pick=selectCandidate(s.policy,result,now);
   if(pick.reason)return pick.reason;
   const leg=pick.leg;
+  if(s.policy.entryMode==='AUTOPILOT_PAPER_V1'&&(s.broker!=='PAPER'||!guardian?.ok))return 'AUTOPILOT_GUARDIAN_REQUIRED';
   if(!meta||meta.instrumentKey!==leg.instrumentKey||meta.underlying!=='NIFTY'||meta.expiry!==result.expiry||meta.expiry<day(now)||
     meta.optionType!==leg.type||meta.strike!==leg.strike||meta.session!==day(now)||!Number.isSafeInteger(meta.lotSize)||meta.lotSize<=0||
     !positive(meta.tickSizeRupees)||meta.lotSize>100000)return 'INSTRUMENT_METADATA_REQUIRED';
   if(!quote||quote.instrumentKey!==leg.instrumentKey||!positive(quote.bid)||!positive(quote.ask)||quote.ask<quote.bid||
     !Number.isFinite(quote.receivedAt)||quote.receivedAt>now||now-quote.receivedAt>10000)return 'FRESH_QUOTE_REQUIRED';
   if((quote.ask-quote.bid)/quote.ask>0.025)return 'SPREAD_TOO_WIDE';
+  if(pick.source==='AUTOPILOT_PAPER'&&(meta.lotSize!==pick.expectedLotSize||quote.ask>pick.maxAsk||!Number.isFinite(quote.exchangeAt)||quote.exchangeAt>now+1000||now-quote.exchangeAt>10000))return 'AUTOPILOT_QUOTE_OR_LOT_CHANGED';
   const tick=meta.tickSizeRupees,up=x=>money(Math.ceil((x-1e-8)/tick)*tick),down=x=>money(Math.floor((x+1e-8)/tick)*tick);
   const price=up(quote.ask),{stop,target}=pick.exitPlan({price,bid:quote.bid,ask:quote.ask,tick,down});
   const stopLimit=down(stop-Math.max(tick,stop*0.005));
@@ -303,6 +306,8 @@ function manage(s,quotes,now){
     const orders=Object.values(s.orders).filter(o=>o.tradeId===t.id),entry=orders.find(o=>o.kind==='ENTRY'),q=quantities(s,t);
     const quote=quotes[t.instrumentKey],fresh=quote&&Number.isFinite(quote.receivedAt)&&quote.receivedAt<=now&&now-quote.receivedAt<=10000&&positive(quote.bid)&&positive(quote.ask)&&quote.ask>=quote.bid;
     if(s.killed||t.day!==day(now)||minutes(now)>=915)t.exitReason ||= s.killed?'KILL_SWITCH':'TIME_EXIT';
+    // Fixed research baseline: clock starts at entry creation (conservative vs fill time).
+    if(t.entrySource==='AUTOPILOT_PAPER'&&now-t.createdAt>=30*60000)t.exitReason ||= 'AUTOPILOT_TIME_EXIT';
     if(entry.state==='QUEUED'&&(t.exitReason||now>=t.entryExpiresAt)){entry.state='EXPIRED';continue;}
     if(entry.filled>0&&working(entry))entry.wantCancel=true; // Freeze quantity before sizing its protective exit.
     if(now>=t.entryExpiresAt&&working(entry))entry.wantCancel=true;
