@@ -36,6 +36,19 @@ function createSandboxStore({pool}){
     const rows=await pool.query('SELECT payload FROM edge_sandbox_archive_v1 WHERE kind=$1 ORDER BY recorded_at DESC, id DESC LIMIT $2',[kind,Math.min(20000,Math.max(1,limit|0))]);
     return rows.rows.map(r=>r.payload);
   }
-  return {init,mutate,read,readArchive};
+  // A single SELECT gives state and archive rows from one MVCC snapshot.
+  // Bounded by the reference reducer's archive limit; reaching it is unavailable, not a partial total.
+  async function readGuardianSnapshot(){
+    await init();
+    const readLimit=20000;
+    const row=await pool.query(`SELECT payload AS state,
+      (SELECT COALESCE(jsonb_agg(a.payload),'[]'::jsonb) FROM
+       (SELECT payload FROM edge_sandbox_archive_v1 WHERE kind='TRADE' ORDER BY id LIMIT $1) a) AS archived
+      FROM edge_sandbox_execution_v1 WHERE id='owner'`,[readLimit]);
+    if(row.rows.length!==1)throw Error('MONTHLY_RISK_EVIDENCE_INVALID');
+    const {state,archived}=row.rows[0];assertState(state);
+    return {state,archived,readLimit};
+  }
+  return {init,mutate,read,readArchive,readGuardianSnapshot};
 }
 module.exports={createSandboxStore,SCHEMA,ARCHIVE_SCHEMA};

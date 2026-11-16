@@ -1,0 +1,37 @@
+'use strict';
+const assert=require('node:assert/strict');
+const {observeGuardian}=require('./guardianObservation');
+const at=s=>Date.parse(s+'+05:30');
+const now=at('2026-11-16T18:20:00');
+function row(id,netPnl,when='2026-11-09T12:00:00',buys=65){
+ const trade={id,netPnl,closedAt:at(when),buys};
+ return {trade,orders:buys?['BUY','SELL'].map(side=>({tradeId:id,side,filled:buys,broker:'PAPER',orderId:'paper-'+id+'-'+side})):[]};
+}
+const old=row('old',0,'2026-10-30T12:00:00',0);
+old.orders=[{side:'BUY',filled:0,broker:null,orderId:'sandbox-unfilled'}];
+const a=row('loss',-724),b=row('win',36.5);
+const state={mode:'SANDBOX',broker:'PAPER',trades:{},orders:{},archivedTrades:3,archivedPnl:-687.5};
+const observe=(over={})=>observeGuardian({state,archived:[old,a,b],now,...over});
+let r=observe();
+assert.equal(r.status,'MEASURED_REALIZED_ONLY');
+assert.equal(r.month,'2026-11');assert.equal(r.monthlyRealizedNetRupees,-687.5);
+assert.equal(r.remainingRealizedBudgetRupees,6312.5);
+assert.equal(r.executionAllowed,false);assert.equal(r.enforced,false);
+assert.equal(r.markedPnlAvailable,false);assert.equal(r.markedLockHistoryAvailable,false);
+const freeze=JSON.stringify(state);observe();assert.equal(JSON.stringify(state),freeze);
+const loss=row('threshold',-6312.5,'2026-11-10T12:00:00'),win=row('recovery',500,'2026-11-11T12:00:00');
+r=observe({state:{...state,archivedTrades:5,archivedPnl:-6500},archived:[old,a,b,loss,win]});
+assert.equal(r.realizedThresholdTouched,true);assert.equal(r.remainingRealizedBudgetRupees,0);
+assert.equal(r.monthlyRealizedNetRupees,-6500);
+const next=observe({now:at('2026-12-01T00:00:00')});
+assert.equal(next.monthlyRealizedNetRupees,0);assert.equal(next.cumulativeClosedNetRupees,-687.5);
+assert.equal(observe({state:{...state,broker:'UPSTOX_SANDBOX'}}).reason,'PAPER_BROKER_REQUIRED');
+assert.equal(observe({archived:[old,{...a,orders:a.orders.map(o=>({...o,broker:'UPSTOX_SANDBOX'}))},b]}).reason,'PAPER_HISTORY_PROVENANCE_UNAVAILABLE');
+assert.equal(observe({archived:[old,a]}).reason,'MONTHLY_RISK_EVIDENCE_INVALID');
+assert.equal(observe({readLimit:3}).reason,'MONTHLY_RISK_EVIDENCE_INVALID');
+assert.equal(observe({state:{...state,archivedPnl:0}}).reason,'MONTHLY_RISK_EVIDENCE_INVALID');
+const hot=observe({state:{...state,archivedTrades:2,archivedPnl:-724,trades:{win:b.trade},orders:Object.fromEntries(b.orders.map((o,i)=>[i,o]))},archived:[old,a]});
+assert.equal(hot.monthlyRealizedNetRupees,-687.5);
+const open=observe({state:{...state,trades:{x:{id:'x',closedAt:null}}}});
+assert.equal(open.openTradeCount,1);assert.equal(open.markedPnlAvailable,false);
+console.log('Guardian observation PASS: paper provenance, complete archive, net budget, sticky historical realized breach, calendar boundary, no execution');

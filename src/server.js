@@ -1424,5 +1424,15 @@ server.listen(PORT, async () => {
   keepAlive.start();
   researchCandidateHarvester.start();
   opportunityResearch.start();
+  const researchStartup=opportunityResearch.status(),sandboxStartup=sandboxExecution.status();
+  console.info('[edge startup configuration]',JSON.stringify({
+    opportunityReports:researchStartup.enabled===true,
+    triggeredExitV2:researchStartup.triggeredExitV2?.enabled===true,
+    timingLab:researchStartup.timingLab?.enabled===true,
+    sandboxEnabled:sandboxStartup.enabled===true,
+    sandboxConfigured:sandboxStartup.configured===true,
+    broker:sandboxStartup.broker,
+    liveOrdersSupported:false
+  }));
   poll();
 });

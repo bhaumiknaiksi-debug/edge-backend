@@ -3,6 +3,7 @@ const {randomUUID}=require('node:crypto');
 const {readFileSync}=require('node:fs');
 const path=require('node:path');
 const engine=require('./sandboxEngine');
+const {observeGuardian}=require('./guardianObservation');
 const {createSandboxStore}=require('./sandboxStore');
 const {createSandbox}=require('./upstoxSandbox');
 const {createPaperBroker,FILL_MODEL}=require('./paperBroker');
@@ -268,6 +269,12 @@ function createSandboxService({pool,ownerToken,getContext=()=>({}),env=process.e
       if(reason)return res.status(503).json({error:reason});
       try{await fn(req,res);}catch(e){res.status(409).json({error:clean(e)});}
     };
+    // Owner-only observation; this does not alter the executor or permit entries.
+    app.get(base+'/guardian',guard(async(_req,res)=>{
+      if(!store.readGuardianSnapshot)return res.status(503).json({error:'GUARDIAN_SNAPSHOT_UNAVAILABLE'});
+      const snapshot=await store.readGuardianSnapshot();
+      res.json(observeGuardian({...snapshot,now:now()}));
+    }));
     app.get(base+'/decisions',guard(async(req,res)=>{
       const limit=Math.min(5000,Math.max(1,parseInt(req.query.limit,10)||500));
       res.json({decisions:store.readArchive?await store.readArchive('DECISION',limit):[]});
