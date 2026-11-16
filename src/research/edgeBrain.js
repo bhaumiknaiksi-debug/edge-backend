@@ -59,11 +59,11 @@ function buildBrainReport(events=[],outcomes=[],now=Date.now()){
  const proposals=valid.map(proposalsFor).sort((a,b)=>stamp(a.confirmedAt)-stamp(b.confirmedAt)||a.eventId.localeCompare(b.eventId));
  // One first eligible proposal per strategy/version/session. This deliberately conservative
  // benchmark avoids counting repeated ticks or several tiers on one move as separate samples.
- const firstByDay=new Map(),unfilled=new Map();
+ const firstByDay=new Map();
  for(const p of proposals){
   if(p.session>=session)continue;
   const k=JSON.stringify([p.family,p.sourceRuleVersion,p.session]);
-  if(!p.quote){unfilled.set(k,(unfilled.get(k)||0)+1);continue;}
+  if(!p.quote)continue;
   if(!firstByDay.has(k))firstByDay.set(k,p);
  }
  const outcomeIndex=new Map();
@@ -91,10 +91,10 @@ function buildBrainReport(events=[],outcomes=[],now=Date.now()){
  const history=[...buckets.values()].map(b=>({family:b.family,sourceRuleVersion:b.sourceRuleVersion,days:b.days,measuredDays:b.measured,
   meanNetBase:mean(b.base),meanNetStress:mean(b.stress),
   complete:b.days===b.measured,evidenceStatus:b.measured===0?'NO_MEASURED_OUTCOMES':b.measured!==b.days?'INCOMPLETE':'DESCRIPTIVE_ONLY',...NO_AUTH}));
- const current=proposals.filter(p=>p.session===session&&now-stamp(p.confirmedAt)<=QUOTE_AGE&&now-stamp(p.quote?.observedAt||'')<=QUOTE_AGE)
+ const current=proposals.filter(p=>p.session===session&&now-stamp(p.confirmedAt)<=QUOTE_AGE&&(!p.quote||now-stamp(p.quote.observedAt)<=QUOTE_AGE))
   .map(p=>({...p,history:history.find(b=>b.family===p.family&&b.sourceRuleVersion===p.sourceRuleVersion)||null}));
  // Ranking is descriptive (not a forecast or probability); no rank for incomplete/nonpositive stress evidence.
- const ranked=current.filter(p=>p.quote&&p.history?.complete&&p.history.measuredDays>=20&&p.history.meanNetStress>0)
+ const ranked=current.filter(p=>p.quote&&p.sourceRuleVersion!=='UNKNOWN'&&p.history?.complete&&p.history.measuredDays>=20&&p.history.meanNetStress>0)
   .sort((a,b)=>b.history.meanNetStress-a.history.meanNetStress||a.eventId.localeCompare(b.eventId));
  const conflict=new Set(current.filter(p=>p.quote).map(p=>p.direction)).size>1;
  // A report cannot send a trade or select a broker order. A research lead is not an executable choice.
