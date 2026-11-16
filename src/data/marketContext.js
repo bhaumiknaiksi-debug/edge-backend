@@ -140,6 +140,18 @@ function pct(a, b) {
   return ((a - b) / b) * 100;
 }
 
+// Optional, read-only 1m data for the timing lab. A failure never fails marketContext or a trading decision.
+let timing1mCache=null,timing1mAt=0,timing1mPending=null;
+async function fetchIndex1mResearch({now=Date.now()}={}){
+ if(timing1mCache&&now-timing1mAt>=0&&now-timing1mAt<45000)return timing1mCache;
+ if(timing1mPending)return timing1mPending;
+ timing1mPending=requestJson('/v3/historical-candle/intraday/'+encodeURIComponent(INDEX_KEY)+'/minutes/1')
+  .then(r=>{const rows=r?.data?.candles;if(!Array.isArray(rows))throw Error('RESEARCH_1M_MISSING');
+    timing1mAt=Date.now();timing1mCache={rows,fetchedAt:timing1mAt};return timing1mCache;})
+  .finally(()=>{timing1mPending=null;});
+ return timing1mPending;
+}
+
 async function fetchMarketContext() {
   const future = await findNearestNiftyFuture();
   const keys = [INDEX_KEY, future.instrument_key, VIX_KEY].join(',');
@@ -227,6 +239,8 @@ async function fetchMarketContext() {
     indiaVix: Number.isFinite(indiaVix) ? indiaVix : null,
     setupFeatures,
     timingSource: buildTimingSource(intraday5?.data?.candles || []),
+    // Returned to the local research observer only. Not mapped into the decision payload or strike logic.
+    researchCandles:{index5m:intraday5?.data?.candles||[],future5m:futureIntraday5?.data?.candles||[]},
     cprContext,
     chartIntelligence,
     futures: {
@@ -244,4 +258,4 @@ async function fetchMarketContext() {
   };
 }
 
-module.exports = { fetchMarketContext, findNearestNiftyFuture, selectNearestNiftyFuture, expiryIso, istDateString, shiftIsoDate, fetchHistoricalDailyCached };
+module.exports = { fetchMarketContext, findNearestNiftyFuture, selectNearestNiftyFuture, expiryIso, istDateString, shiftIsoDate, fetchHistoricalDailyCached, fetchIndex1mResearch };
