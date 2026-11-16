@@ -1,0 +1,32 @@
+name: Production Dependency Audit
+on:
+  pull_request:
+    paths:
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/dependency-audit.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Report production advisory details
+        run: |
+          npm audit --omit=dev --json > "$RUNNER_TEMP/edge-audit.json" || true
+          node -e 'const a=require(process.argv[1]); if(!a.vulnerabilities || !a.metadata) throw Error("Audit response unavailable"); for(const [name,v] of Object.entries(a.vulnerabilities)) console.log(JSON.stringify({name,severity:v.severity,range:v.range,nodes:v.nodes,via:v.via,fixAvailable:v.fixAvailable})); console.log(JSON.stringify(a.metadata.vulnerabilities));' "$RUNNER_TEMP/edge-audit.json"
+      - name: Preview compatible lockfile-only remediation
+        run: |
+          npm audit fix --omit=dev --package-lock-only --ignore-scripts --no-fund --json > "$RUNNER_TEMP/edge-fix.json" || true
+          git diff --stat -- package.json package-lock.json
+          git diff -- package.json package-lock.json
+          npm audit --omit=dev --json > "$RUNNER_TEMP/edge-audit-after.json" || true
+          node -e 'const a=require(process.argv[1]); if(!a.vulnerabilities || !a.metadata) throw Error("Audit response unavailable"); console.log(JSON.stringify(a.metadata.vulnerabilities)); for(const [name,v] of Object.entries(a.vulnerabilities)) console.log(JSON.stringify({name,severity:v.severity,range:v.range,fixAvailable:v.fixAvailable})); if(a.metadata.vulnerabilities.total>0) process.exitCode=1;' "$RUNNER_TEMP/edge-audit-after.json"
