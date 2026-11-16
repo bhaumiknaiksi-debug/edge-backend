@@ -118,4 +118,4 @@ function buildTriggeredExitReport(rows){
    'Baseline one-point haircut is a hypothesis, not measured slippage. No parameter promotion from this retrospective comparison.'
   ]};
 }
-module.exports={VERSION,PROFILE,SCENARIOS,modeledNet,measureTriggered,buildTriggeredExitReport};
+module.exports={VERSION,PROFILE,SCENARIOS,modeledNet,evaluateRule,measureTriggered,buildTriggeredExitReport};

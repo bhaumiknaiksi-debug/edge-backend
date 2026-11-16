@@ -1,6 +1,6 @@
 'use strict';
 const {gunzipSync}=require('node:zlib');
-const TYPES=['POLL_SNAPSHOT','OPPORTUNITY_OBSERVATION','OUTCOME','RESEARCH_CANDIDATE_OUTCOME','OPPORTUNITY_OUTCOME','OPPORTUNITY_QUICK_EXIT','OPPORTUNITY_TRIGGER_EXIT_V2'];
+const TYPES=['POLL_SNAPSHOT','OPPORTUNITY_OBSERVATION','OUTCOME','RESEARCH_CANDIDATE_OUTCOME','OPPORTUNITY_OUTCOME','OPPORTUNITY_QUICK_EXIT','OPPORTUNITY_TRIGGER_EXIT_V2','OPPORTUNITY_TIMING_LAB','OPPORTUNITY_TIMING_LAB_OUTCOME'];
 const pick=(x,keys)=>Object.fromEntries(keys.filter(k=>x?.[k]!==undefined).map(k=>[k,x[k]]));
 function compactLegs(legs){
  const result=pick(legs,['lotSize','legDelta']);
@@ -10,6 +10,12 @@ function compactLegs(legs){
 function compactPlan(p){return {...pick(p,['available','strategy','executionAllowed']),legs:compactLegs(p?.legs)};}
 function projectRecord(r){
  const out=pick(r,['id','recordType','timestamp','observedAt','snapshotId','episodeId','tier','cardTier','attempt','terminal','nextRetryAt','expiry','strategy','orchestrationStatus','marketPhase']);
+ if(r.recordType==='OPPORTUNITY_TIMING_LAB'){
+  Object.assign(out,pick(r,['eventId','session','family','direction','confirmedAt','firstSeenAt','candleClosedAt','level','close','sourceRuleVersion','v3']));
+  out.candidateQuotes=(r.candidateQuotes||[]).slice(0,3).map(q=>pick(q,['tier','strategy','expiry','contractId','instrumentKey','strike','type','lotSize','ask','bid','analysisAt','observedAt']));
+ }
+ if(r.recordType==='OPPORTUNITY_TIMING_LAB_OUTCOME')
+  Object.assign(out,pick(r,['eventId','session','family','direction','entryTier','instrumentKey']));
  if(r.ruleSpec)out.ruleSpec=pick(r.ruleSpec,['version','implementationHash']);
  if(r.tradeLegs)out.tradeLegs=compactLegs(r.tradeLegs);
  if(r.signalTier)out.signalTier=typeof r.signalTier==='string'?r.signalTier:pick(r.signalTier,['tier','gates']);
@@ -19,7 +25,7 @@ function projectRecord(r){
  if(r.candidates)out.candidates=r.candidates.map(c=>({...pick(c,['tier','strategy','expiry','lotSize','gateScope','gates','blockers','executionAllowed']),
   ...(c.triggerObservation?{triggerObservation:pick(c.triggerObservation,['timingRule','status','shadowEntryReady','breakoutId','crossedAt','entryWindowEndsAt','entryBlocker'])}:{}),
   legs:compactLegs(c.legs)}));
- if(r.outcome)out.outcome=['OPPORTUNITY_QUICK_EXIT','OPPORTUNITY_TRIGGER_EXIT_V2'].includes(r.recordType)?pick(r.outcome,['status','reason','version','entry','lotSize','results'])
+ if(r.outcome)out.outcome=['OPPORTUNITY_QUICK_EXIT','OPPORTUNITY_TRIGGER_EXIT_V2','OPPORTUNITY_TIMING_LAB_OUTCOME'].includes(r.recordType)?pick(r.outcome,['status','reason','version','entry','lotSize','results'])
   :{...pick(r.outcome,['status','reason','entryLegMarks']),horizonLegMarks:r.outcome.horizonLegMarks?.[60]?{60:r.outcome.horizonLegMarks[60]}:{}};
  return out;
 }

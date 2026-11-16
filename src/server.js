@@ -1203,6 +1203,9 @@ async function poll() {
       // Optional census observes every successful OPEN poll, independent of execution gates.
       // Recording failures are isolated from the live dashboard and never promote a signal.
       void opportunityResearch.observe(result,{lotSize:NIFTY_LOT_SIZE,budget:ledger.snapshot(),observedAt:Date.now()});
+      // Independent, opt-in research. Fetches 1m index candles AFTER the decision is committed;
+      // never blocks signal/strike selection, publishing, ledger or paper execution.
+      void opportunityResearch.observeTiming(result,{marketContext,lotSize:NIFTY_LOT_SIZE,observedAt:Date.now()});
       lastFetchTime = Date.now();
       // Presentation-only alert producer. Never affects signal generation, evidence or trade gates.
       edgeWebPush.onSuccessfulPoll(result);
