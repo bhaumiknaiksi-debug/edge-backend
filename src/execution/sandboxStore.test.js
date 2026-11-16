@@ -8,6 +8,10 @@ function poolModel(){
   async query(sql,args){
    if(sql.startsWith('CREATE TABLE'))return {rows:[]};
    if(sql.startsWith('INSERT INTO')){payload ||= JSON.parse(args[0]);return {rows:[]};}
+   if(sql.includes('SELECT payload AS state')){
+    assert.equal(args[0],20000);assert.ok(sql.includes("kind='TRADE'"));
+    return {rows:[{state:copy(payload),archived:[]}]};
+   }
    if(sql.includes('SELECT payload'))return {rows:[{payload:copy(payload)}]};
    throw Error('UNEXPECTED_POOL_SQL');
   },
@@ -32,5 +36,6 @@ function poolModel(){
  pool.loseCommitAck();await assert.rejects(()=>a.mutate(s=>{s.counter++;}),/COMMIT_ACK_LOST/);assert.equal((await b.read()).counter,21,'lost ACK may still be a committed write');
  await assert.rejects(()=>a.mutate(async()=>1),/ASYNC_REDUCER_NOT_ALLOWED/);
  const restarted=createSandboxStore({pool});assert.equal((await restarted.read()).counter,21);
+ const snapshot=await restarted.readGuardianSnapshot();assert.equal(snapshot.state.counter,21);assert.deepEqual(snapshot.archived,[]);assert.equal(snapshot.readLimit,20000);
  console.log('Sandbox store contract PASS: concurrent serialization, rollback, ambiguous commit ACK, restart and synchronous transaction reducers');
 })().catch(e=>{console.error(e);process.exitCode=1;});
