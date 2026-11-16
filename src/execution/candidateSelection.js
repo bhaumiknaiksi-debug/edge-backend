@@ -3,7 +3,8 @@
 // It never calls a broker, never mutates the decision, and never authorizes anything by itself:
 // the executor still applies its own quote, spread, risk, capital and daily-loss gates afterwards.
 
-const MODES=['AUTHORITATIVE_A_ONLY','OPENING_RANGE_SHADOW_V1','CLAUDE_DECIDES_V1'];
+const {MODE:AUTOPILOT_MODE,selectAutopilot}=require('./autopilot');
+const MODES=['AUTHORITATIVE_A_ONLY','OPENING_RANGE_SHADOW_V1','CLAUDE_DECIDES_V1',AUTOPILOT_MODE];
 const DEFAULT_MODE='AUTHORITATIVE_A_ONLY';
 // The policy keeps the mode name OPENING_RANGE_SHADOW_V1 (saved owner setting); the timing rule it trades is V2.
 const SHADOW_VERSION='OPENING_RANGE_SHADOW_V2';
@@ -91,7 +92,7 @@ function claude(result){
 
 function selectCandidate(policy,result,now){
   const mode=policy?.entryMode||DEFAULT_MODE;
-  return mode==='OPENING_RANGE_SHADOW_V1'?shadow(result,now):mode==='CLAUDE_DECIDES_V1'?claude(result):authoritative(result);
+  return mode===AUTOPILOT_MODE?selectAutopilot(result,now):mode==='OPENING_RANGE_SHADOW_V1'?shadow(result,now):mode==='CLAUDE_DECIDES_V1'?claude(result):authoritative(result);
 }
 
 // Days-to-expiry bucket for results, counted in weekdays (NSE holidays are not modelled).
