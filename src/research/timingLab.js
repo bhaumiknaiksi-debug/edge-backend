@@ -110,6 +110,7 @@ function createTimingLab({independentEnabled=false}={}){
   if(future.ok)candidates.push(...futuresVwapCrossings(future.rows,now));
   const events=[...independentEvents];
   for(const c of candidates){
+   if(!Number.isFinite(index1mFetchedAt)||index1mFetchedAt>now)continue;
    const signature=sha([session,c.family,c.direction,c.closedAt,c.level]);
    if(emitted.has(signature))continue;
    const prior=pending.get(signature);
