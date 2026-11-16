@@ -18,6 +18,7 @@ function poolModel(){
   async connect(){let local=null,release=null;return {async query(sql,args){
    if(sql==='BEGIN')return {rows:[]};
    if(sql.includes('FOR UPDATE')){const before=tail;tail=new Promise(r=>{release=r;});await before;local=copy(payload);return {rows:[{payload:copy(local)}]};}
+   if(sql.includes("kind='TRADE'")){assert.ok(release,'archive must be read under state lock');assert.equal(args[0],20000);return {rows:[]};}
    if(sql.startsWith('UPDATE')){assert.ok(release,'write must hold row lock');if(failUpdate){failUpdate=false;throw Error('WRITE_FAILED');}local=JSON.parse(args[0]);return {rows:[]};}
    if(sql==='COMMIT'){payload=local;release();release=null;if(failCommit){failCommit=false;throw Error('COMMIT_ACK_LOST');}return {rows:[]};}
    if(sql==='ROLLBACK'){if(release){release();release=null;}return {rows:[]};}
@@ -36,6 +37,7 @@ function poolModel(){
  pool.loseCommitAck();await assert.rejects(()=>a.mutate(s=>{s.counter++;}),/COMMIT_ACK_LOST/);assert.equal((await b.read()).counter,21,'lost ACK may still be a committed write');
  await assert.rejects(()=>a.mutate(async()=>1),/ASYNC_REDUCER_NOT_ALLOWED/);
  const restarted=createSandboxStore({pool});assert.equal((await restarted.read()).counter,21);
+ await restarted.mutate((s,archive)=>{assert.deepEqual(archive,[]);assert.equal(s.counter,21);},{guardianSnapshot:true});
  const snapshot=await restarted.readGuardianSnapshot();assert.equal(snapshot.state.counter,21);assert.deepEqual(snapshot.archived,[]);assert.equal(snapshot.readLimit,20000);
  console.log('Sandbox store contract PASS: concurrent serialization, rollback, ambiguous commit ACK, restart and synchronous transaction reducers');
 })().catch(e=>{console.error(e);process.exitCode=1;});
