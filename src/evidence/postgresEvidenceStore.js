@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const zlib = require('zlib');
 function createPostgresEvidenceStore({ pool, limit = 10000 }) {
   let writeError = null, lastPersistedAt = null, restoredRecords = 0, lastVerification = null;
+  let lastAppendFailure = null;   // the underlying error of the last failed append; never put in status()
   function key(r) { return crypto.createHash('sha256').update(String(r.recordType || '') + '|' + (r.id || JSON.stringify(r))).digest('hex'); }
   async function load() {
     try {
@@ -17,7 +18,7 @@ function createPostgresEvidenceStore({ pool, limit = 10000 }) {
       const payload = zlib.gzipSync(Buffer.from(JSON.stringify(record)));
       await pool.query('INSERT INTO edge_evidence_v1(record_key,recorded_at,record_type,payload_gzip) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING', [key(record), record.timestamp, record.recordType || 'UNKNOWN', payload]);
       lastPersistedAt = new Date().toISOString(); writeError = null; return true;
-    } catch (_) { writeError = 'DATABASE_APPEND_FAILED'; return false; }
+    } catch (e) { writeError = 'DATABASE_APPEND_FAILED'; lastAppendFailure = e; return false; }
   }
   // Read back one known persisted record, without INSERT/UPDATE/DELETE or an archive backup.
   // This is a bounded integrity check, not proof of full retention or continuous collection.
@@ -40,6 +41,6 @@ function createPostgresEvidenceStore({ pool, limit = 10000 }) {
     lastVerification = result;
     return { ...result };
   }
-  return { load, append, verify, status: () => ({ provider:'POSTGRES', durable:true, writeError, lastPersistedAt, restoredRecords, lastVerification:lastVerification && {...lastVerification}, memoryLimit:limit, retention:'All persisted records retained; latest records loaded for analysis' }) };
+  return { load, append, verify, lastAppendFailure: () => lastAppendFailure, status: () => ({ provider:'POSTGRES', durable:true, writeError, lastPersistedAt, restoredRecords, lastVerification:lastVerification && {...lastVerification}, memoryLimit:limit, retention:'All persisted records retained; latest records loaded for analysis' }) };
 }
 module.exports = { createPostgresEvidenceStore };

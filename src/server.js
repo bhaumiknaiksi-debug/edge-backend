@@ -27,6 +27,7 @@ const { evidenceKey } = require('./evidence/evidenceEngine');
 const { buildRuleSpec, signalFingerprint } = require('./evidence/signalRecording');
 const { createDatabase } = require('./storage/database');
 const { createShadowEvents, quotesFromChain } = require('./evidence/shadowEvents');
+const { describeRestoreError, formatRestoreError } = require('./evidence/restoreDiagnosis');
 const { createPostgresEvidenceStore } = require('./evidence/postgresEvidenceStore');
 const { createLedger } = require('./trading/ledger');
 const { createTradeSnapshots } = require('./trading/tradeSnapshots');
@@ -1357,9 +1358,15 @@ async function restoreEvidenceArchive() {
     // Avoid decompressing the same archive twice at startup.
     // Import existing local observations without duplicating already persisted IDs.
     for(const row of localEvidenceStore.load()) {
-      if(!await evidenceStore.append(row)) throw new Error('EVIDENCE_MIGRATION_FAILED');
+      if(!await evidenceStore.append(row)) {
+        const failed=new Error('EVIDENCE_MIGRATION_FAILED',{cause:evidenceStore.lastAppendFailure&&evidenceStore.lastAppendFailure()});
+        failed.restoreStage='LOCAL_IMPORT';
+        throw failed;
+      }
     }
-    const merged=await evidenceStore.load();
+    let merged;
+    try { merged=await evidenceStore.load(); }
+    catch(e) { e.restoreStage=e.restoreStage||'DATABASE_LOAD'; throw e; }
     evidenceSnapshots.splice(0,evidenceSnapshots.length,...merged);
     console.log('[evidence postgres] restored',merged.length,'records');
     return;
@@ -1412,7 +1419,8 @@ server.listen(PORT, async () => {
   probeUrl.searchParams.set('instrument_key', 'NSE_INDEX|Nifty 50');
   console.log('[upstox] expiry URL constructed:', probeUrl.toString());
   try { await restoreEvidenceArchive(); }
-  catch (_) {
+  catch (err) {
+    console.error(formatRestoreError(describeRestoreError(err, err && err.restoreStage || 'RESTORE')));
     console.error('[evidence] durable restore failed; startup will retry');
     setTimeout(()=>process.exit(1),1000);
     return;
